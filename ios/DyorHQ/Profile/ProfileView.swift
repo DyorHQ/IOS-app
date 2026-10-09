@@ -516,12 +516,12 @@ struct SendSheet: View {
                     ProgressView().controlSize(.small)
                     Paragraph("Reading your wallet's history. Tokens found there will be added.").font(.footnote).foregroundStyle(.secondary)
                 }
-            } else if !complete, env.history.filling {
-                // The wallet's history is still filling in behind the app (`HistoryModel`): the list is read again once
-                // the transfer history is complete.
+            } else if !complete, env.history.snapshot.filling(since: nil, scans: WalletHistoryScans.holdings) {
+                // The wallet's transfer history, the only scan the list is read from, is still filling in behind the app
+                // (`HistoryModel`): the list is read again once it is complete.
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Reading your history… \(NumberStyle.percent(env.history.snapshot.progress * 100, fractionDigits: 0, signed: false))").font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                    Text("Reading your history… \(NumberStyle.percent(env.history.snapshot.progress(since: nil, scans: WalletHistoryScans.holdings) * 100, fractionDigits: 0, signed: false))").font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                 }
             } else if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }
         }

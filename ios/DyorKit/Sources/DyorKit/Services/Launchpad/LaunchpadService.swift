@@ -9,15 +9,10 @@ public actor LaunchpadService {
     public static let defaultLogsRPC = URL(string: "https://rpc1.monad.xyz")!
     /// `LaunchpadFactory.MAX_EXEMPTIONS`.
     public static let maxExemptions = 32
-    /// The launchpad activity a profile and the recent-activity feed scan (`activity(limit:lookbackBlocks:launches:)`): a
-    /// block budget, 1,512,000 blocks (about 5.3 days at Monad's pace), kept as it was when it was called seven days so
-    /// the scans cost what they did.
-    public static let recentActivityBlocks: UInt64 = 1_512_000
     /// How far back `holderCount` reads a coin's transfers: a block budget, 6,480,000 blocks (about 22.7 days).
     public static let holderScanBlocks: UInt64 = 6_480_000
-    /// The longest a coin's trade history is read for its PnL (`tradeLookback`): 30 days.
-    public static let maxTradeLookback: TimeInterval = 30 * 86_400
-    /// Blocks added to a trade history read from a coin's age (`tradeLookback`), so the launch itself is inside it.
+    /// Blocks added to a coin's age in blocks when the block it launched in is estimated
+    /// (`WalletHistorySnapshot.launchBlock`), so the launch itself is inside the window its fills are read from.
     public static let tradeLookbackMargin: UInt64 = 20_000
 
     public let rpc: RPCClient

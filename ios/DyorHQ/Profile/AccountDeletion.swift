@@ -71,7 +71,10 @@ enum AccountDeletion {
         NotificationHub.shared.clear()
         // Before the erase: a venue list save after it would turn App Lock's default off for the next launch (R4).
         env.venueList.stop()
-        // The wallet's history on disk, what was built from it, and whatever a round under way reads after this.
+        // The wallet's history on disk, what was built from it, and whatever a round under way reads after this. The
+        // history's rounds stop first: none starts after the erase, nor keeps the reference beside the scans, while the
+        // sign-out below waits on Privy.
+        env.history.start(env: env, wallet: nil)
         await env.walletHistory.forget(wallet: account.address)
         await session.eraseLocalData()
         session.deletionNotice = notice
@@ -138,16 +141,18 @@ enum AccountDeletion {
     }
 
     /// This device's copy of an account, gone: the backend session closed, Perpl's token and socket dropped, the
-    /// notification center cleared, the venue list's reading stopped (nothing it saves may follow the erase, R4), then
-    /// `Session.eraseLocalData`. Nothing on the server is deleted and nothing is reported to the passkey provider. A
-    /// passkey account's deletion does both first; "Forget This Device" (`ProfileView`) is only this, so the passkey keeps
-    /// the account and "I already have a passkey" brings it back.
+    /// notification center cleared, the venue list's reading and the history's rounds stopped (nothing they save may
+    /// follow the erase, R4), then `Session.eraseLocalData`. Nothing on the server is deleted and nothing is reported to
+    /// the passkey provider. A passkey account's deletion does both first; "Forget This Device" (`ProfileView`) is only
+    /// this, so the passkey keeps the account and "I already have a passkey" brings it back.
     @MainActor
     static func eraseThisDevice(address: Address, session: Session, social: SocialSession, env: AppEnvironment) async {
         social.signOut()
         env.perplTrading.forget(address: address)
         NotificationHub.shared.clear()
         env.venueList.stop()
+        // The history's rounds stop before its store is erased: none starts after it, nor writes beside the scans.
+        env.history.start(env: env, wallet: nil)
         await env.walletHistory.forget(wallet: address)
         await session.eraseLocalData()
     }

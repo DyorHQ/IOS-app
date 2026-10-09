@@ -30,7 +30,7 @@ struct RecentActivityView: View {
                     HStack(alignment: .firstTextBaseline) {
                         InlineError(message: incomplete)
                         Spacer(minLength: 8)
-                        Button("Retry") { Task { await env.history.refresh(env: env); await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
+                        Button("Retry") { env.history.kick(env: env); Task { await model.load(env: env, address: session.address) } }.font(.footnote.weight(.semibold))
                     }
                 } else {
                     ContentUnavailableView {
@@ -62,8 +62,10 @@ struct RecentActivityView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(tr("Recent Activity"))
         .navigationBarTitleDisplayMode(.inline)
+        // A pull awaits the screen's own reads only: the history reads on behind it (`HistoryModel.kick`), and the
+        // backfill follows it.
         .refreshable {
-            await env.history.refresh(env: env)
+            env.history.kick(env: env)
             await model.load(env: env, address: session.address)
         }
         .task(id: session.address) { await model.load(env: env, address: session.address) }
@@ -127,7 +129,8 @@ final class RecentActivityModel {
     /// Said when the chain history couldn't be read to the head (unreachable, or rounds of reading stopped short):
     /// the rows it gave stay, and the feed says it may be missing some.
     private(set) var historyUnread: String?
-    /// The chain history is still being read, and how far it has got (0 to 1).
+    /// The last week of the chain history, in the scans the feed shows (`WalletHistoryScans.activity`), is still being
+    /// read, and how far it has got (0 to 1): older blocks the feed never shows don't hold it up.
     private(set) var historyFilling = false
     private(set) var historyProgress = 0.0
     /// The wallet the kept launches and launchpad activity were read for: another wallet starts from nothing.
@@ -174,17 +177,17 @@ final class RecentActivityModel {
     }
 
     /// The on-chain backfill from the wallet's history as the history model has it (`HistoryModel`, no scan of its own):
-    /// the launchpad fills, and the swaps, over the last week, and how far the history has got. Called whenever
-    /// `HistoryModel.version` moves, and by `load`.
+    /// the launchpad fills, and the swaps, over the last week, and how far the history has read that week. Called
+    /// whenever `HistoryModel.version` moves, and by `load`.
     func applyHistory(_ snapshot: WalletHistorySnapshot, address: Address?, tokens: [Address: Token]? = nil) {
         guard let address, keptFor == address else { return }
-        historyFilling = snapshot.filling
-        historyProgress = snapshot.progress
+        let since = Date().addingTimeInterval(-SwapHistoryService.Window.week.seconds)
+        historyFilling = snapshot.filling(since: since, scans: WalletHistoryScans.activity)
+        historyProgress = snapshot.progress(since: since, scans: WalletHistoryScans.activity)
         historyUnread = snapshot.unreachable ? tr("Part of your history couldn't be read just now, so some activity may be missing. Pull to refresh.") : nil
         let tokenMap = tokens ?? Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
         let byToken = Dictionary(lastLaunches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
         let byCurve = Dictionary(lastLaunches.map { ($0.curve, $0) }, uniquingKeysWith: { first, _ in first })
-        let since = Date().addingTimeInterval(-SwapHistoryService.Window.week.seconds)
         let fills = snapshot.launch.fills.filter { $0.time >= since }.compactMap { fill -> ActivityItem? in
             guard let launch = byCurve[fill.curve] else { return nil }
             return ActivityItem(id: fill.id, block: fill.block, logIndex: fill.logIndex, time: Int(fill.time.timeIntervalSince1970), transactionHash: fill.hash,

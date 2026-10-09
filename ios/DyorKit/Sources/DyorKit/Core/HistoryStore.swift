@@ -225,14 +225,21 @@ public actor HistoryStore {
 
     // MARK: Disk
 
+    /// One log as kept: `s`, its block's timestamp (`Log.blockTimestamp`), is optional — left out when the endpoint gave
+    /// none, and absent from every log kept before the app read it — so the files kept before it load as they are, still
+    /// version 2, and the next read of their blocks adds it (`HistoryEntry.merge`).
     private struct StoredLog: Codable {
         let a: String, t: [String], d: String, b: UInt64, h: String, i: Int
-        init(_ log: Log) { a = log.address.hex; t = log.topics.map(\.hexString); d = log.data.hexString; b = log.blockNumber; h = log.transactionHash.hexString; i = log.logIndex }
+        let s: Int?
+        init(_ log: Log) {
+            a = log.address.hex; t = log.topics.map(\.hexString); d = log.data.hexString; b = log.blockNumber; h = log.transactionHash.hexString; i = log.logIndex
+            s = log.blockTimestamp
+        }
         var log: Log? {
             guard let address = Address(a), let data = Data(hex: d), let hash = Data(hex: h) else { return nil }
             var topics: [Data] = []
             for topic in t { guard let bytes = Data(hex: topic) else { return nil }; topics.append(bytes) }
-            return Log(address: address, topics: topics, data: data, blockNumber: b, transactionHash: hash, logIndex: i)
+            return Log(address: address, topics: topics, data: data, blockNumber: b, transactionHash: hash, logIndex: i, blockTimestamp: s)
         }
     }
 
@@ -250,7 +257,11 @@ public actor HistoryStore {
     }
 
     private func file(_ scan: HistoryScan, _ wallet: Address) -> URL? {
-        directory?.appendingPathComponent(wallet.hex.lowercased()).appendingPathComponent("\(scan.id).json")
+        file(named: scan.id, wallet)
+    }
+
+    private func file(named name: String, _ wallet: Address) -> URL? {
+        directory?.appendingPathComponent(wallet.hex.lowercased()).appendingPathComponent("\(name).json")
     }
 
     private func load(_ scan: HistoryScan, _ wallet: Address) -> HistoryEntry? {
@@ -271,15 +282,48 @@ public actor HistoryStore {
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: file, options: .atomic)
     }
+
+    // MARK: Beside the scans
+
+    /* What is built from a wallet's scans and costs reads to build again — each transaction's facts (`WalletHistoryService`),
+       the reference its records were last matched with — is kept in the same folder as the scans, under its own name
+       (never a scan's id), so it loads with them, from the device, and `forget` erases it with them. */
+
+    /// Counts the erasures so far (`forget`): what a caller read before one is kept only when none came between
+    /// (`keep(_:named:wallet:since:)`).
+    public var erasureMark: Int { erasures }
+
+    /// What is kept beside `wallet`'s scans under `name`; nil when nothing is, there is no folder (tests), or it can't be
+    /// read as `type`.
+    public func kept<T: Decodable & Sendable>(_ type: T.Type, named name: String, wallet: Address) -> T? {
+        guard let file = file(named: name, wallet), let data = try? Data(contentsOf: file) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    /// Keeps `value` beside `wallet`'s scans under `name` — unless the wallet was forgotten since `mark` (`erasureMark`):
+    /// an erase of this device's data keeps nothing read before it.
+    public func keep<T: Encodable & Sendable>(_ value: T, named name: String, wallet: Address, since mark: Int) {
+        guard erasures == mark, let file = file(named: name, wallet), let data = try? JSONEncoder().encode(value) else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
+    }
 }
 
 extension HistoryEntry {
-    /// Adds what a read covered and found, each log once.
+    /// Adds what a read covered and found, each log once. A log held without its block's timestamp (kept before the app
+    /// read it) takes the one a new read of it carries — the overlap of every refresh, a gap read again.
     mutating func merge(_ read: LogsRead) {
         guard !read.covered.isEmpty else { return }
         covered = LogsRead.merge(covered + read.covered)
-        var seen = Set(logs.map(\.id))
-        for log in read.logs where seen.insert(log.id).inserted { logs.append(log) }
+        var held = Dictionary(logs.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for log in read.logs {
+            if let index = held[log.id] {
+                if logs[index].blockTimestamp == nil, log.blockTimestamp != nil { logs[index] = log }
+            } else {
+                held[log.id] = logs.count
+                logs.append(log)
+            }
+        }
         logs.sort { a, b in a.blockNumber == b.blockNumber ? a.logIndex < b.logIndex : a.blockNumber < b.blockNumber }
     }
 

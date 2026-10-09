@@ -70,6 +70,10 @@ final class AppEnvironment {
     let perplTrading: PerplTrading
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
     let portfolio = PortfolioModel()
+    /// My Launchpad's state for the wallet signed in, kept between openings of the sheet so it shows the last good state
+    /// at once and reads it again behind it; RootView clears it when the wallet changes or signs out
+    /// (`LaunchpadProfileModel.follow`).
+    let launchpadProfile = LaunchpadProfileModel()
     /// The one alert watcher while the app is open: price alerts, Perps margin warnings, fills and closes, on any screen
     /// (`AlertCenter`). RootView binds it to the account signed in.
     let alerts = AlertCenter()
@@ -105,7 +109,9 @@ final class AppEnvironment {
         // it, failing over among them; rpc.monad.xyz (the primary client) and rpc3 refuse old blocks.
         let archiveClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(urls: LogsEndpoints.archive)
         activity = TokenActivityService(rpc: logsClient, clock: clock)
-        swapHistory = SwapHistoryService(rpc: logsClient, clock: clock)
+        // A swap's transaction facts (its record, its receipt, the wallet's balance and nonce at its block) are state at
+        // past blocks too: read on the archive endpoints only.
+        swapHistory = SwapHistoryService(rpc: logsClient, clock: clock, archive: archiveClient)
         // Wallet discovery reads balances/metadata on the primary multicall.
         walletDiscovery = WalletTokenDiscovery(logsRPC: logsClient, multicall: multicall)
         nftDiscovery = WalletNFTDiscovery(logsRPC: logsClient, multicall: multicall)
@@ -129,18 +135,24 @@ final class AppEnvironment {
         launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock)
         moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock)
         retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, logsClient, clock] in RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock) }
+        // The block of a wallet's first transaction, kept on the device once found.
+        let keptFirstBlock: @Sendable (Address) -> UInt64? = { wallet in
+            UserDefaults.standard.string(forKey: "history.v1.firstBlock.\(wallet.hex.lowercased())").flatMap { UInt64($0) }
+        }
         walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock, stacks: { [launchpad] in await launchpad.stacks },
                                              cohorts: [config.moments] + MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory },
                                              firstActivity: { [archiveClient] wallet in
                                                  // The block of the wallet's first transaction, found once (about 27 nonce reads at past blocks)
                                                  // and kept: the transfer scans read back to it, so every swap the wallet ever made counts. A
                                                  // wallet that has sent none is asked again next time, not kept as such.
-                                                 let key = "history.v1.firstBlock.\(wallet.hex.lowercased())"
-                                                 if let kept = UserDefaults.standard.string(forKey: key).flatMap({ UInt64($0) }) { return kept }
+                                                 if let kept = keptFirstBlock(wallet) { return kept }
                                                  let first = try await archiveClient.firstTransactionBlock(of: wallet, head: try await archiveClient.blockNumber())
-                                                 if let first { UserDefaults.standard.set(String(first), forKey: key) }
+                                                 if let first { UserDefaults.standard.set(String(first), forKey: "history.v1.firstBlock.\(wallet.hex.lowercased())") }
                                                  return first
-                                             })
+                                             },
+                                             // What was found before, from the device with no read: a round never starts above a floor
+                                             // already known (it would trim what lies below it), while a lookup runs beside the first.
+                                             knownFirstActivity: keptFirstBlock)
         #if DEBUG
         // A fork rehearsal (Secrets.xcconfig MOMENTS_*, Debug only): v2 links (c4) and names follow the Moments this build
         // shows. Without the override this is nil, and c4 stays MomentsAddresses.monadMainnet.

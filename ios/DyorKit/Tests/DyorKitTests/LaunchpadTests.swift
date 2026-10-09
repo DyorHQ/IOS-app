@@ -721,37 +721,19 @@ final class LaunchpadTests: XCTestCase {
         XCTAssertEqual(LaunchpadService.candles(from: trades, interval: 0), [], "a non-positive interval yields no candles")
     }
 
-    func testActivityParsing() {
-        let anchor = BlockHeader(number: UInt64(f["events"]["anchor"]["number"].number!), timestamp: Int(f["events"]["anchor"]["timestamp"].number!))
-        let curves: [Address: Address] = [curve: token]
-        let items = LaunchpadService.activity(
-            launched: [log(f["events"]["launchedLog"])],
-            graduated: [log(f["events"]["graduatedLog"])],
-            buys: [log(f["events"]["buyLog"])],
-            sells: [log(f["events"]["sellLog"])],
-            anchor: anchor, secondsPerBlock: BlockClockFixture.secondsPerBlock, curves: curves
-        )
-        // Newest first by block: buy 1000, sell 998, graduated 995, launched 990.
-        XCTAssertEqual(items.count, 4)
+    /// The curve fills a wallet's history decodes (`LaunchpadABI.fill`): the trader, the quote a buyer paid in gross and
+    /// the net quote a seller received, and the tokens; the launch and graduation events beside them.
+    func testEventParsing() throws {
+        let buy = try XCTUnwrap(LaunchpadABI.fill(log(f["events"]["buyLog"])))
+        XCTAssertEqual(buy.trader, buyer)
+        XCTAssertEqual(buy.amountIn, e6(1000), "the gross quote a buyer paid")
+        XCTAssertEqual(buy.amountOut, e18(500))
 
-        guard case .trade(let bt, let bc, let btr, let bBuy, let bq, let btok) = items[0].kind else { return XCTFail("expected a buy trade") }
-        XCTAssertTrue(bBuy)
-        XCTAssertEqual(bt, token); XCTAssertEqual(bc, curve); XCTAssertEqual(btr, buyer)
-        XCTAssertEqual(bq, e6(1000), "the feed shows the gross quote a buyer paid")
-        XCTAssertEqual(btok, e18(500))
-
-        guard case .trade(_, _, let str, let sBuy, let sq, let stok) = items[1].kind else { return XCTFail("expected a sell trade") }
-        XCTAssertFalse(sBuy)
-        XCTAssertEqual(str, seller)
-        XCTAssertEqual(sq, e6(490), "the feed shows the net quote a seller received")
-        XCTAssertEqual(stok, e18(250))
-
-        guard case .graduated(let gt, let gpid) = items[2].kind else { return XCTFail("expected a graduation") }
-        XCTAssertEqual(gt, token)
-        XCTAssertEqual(gpid.hexString, poolId.hexString)
-
-        guard case .launch(let lt, let lc, let ld) = items[3].kind else { return XCTFail("expected a launch") }
-        XCTAssertEqual(lt, token); XCTAssertEqual(lc, curve); XCTAssertEqual(ld, deployer)
+        let sell = try XCTUnwrap(LaunchpadABI.fill(log(f["events"]["sellLog"])))
+        XCTAssertEqual(sell.trader, seller)
+        XCTAssertEqual(sell.amountOut, e6(490), "the net quote a seller received")
+        XCTAssertEqual(sell.amountIn, e18(250))
+        XCTAssertNil(LaunchpadABI.fill(log(f["events"]["launchedLog"])), "not a fill")
 
         // Direct event parsers.
         let le = LaunchpadABI.launched(log(f["events"]["launchedLog"]))!
@@ -806,7 +788,7 @@ final class LaunchpadTests: XCTestCase {
 
     func testServiceConstants() {
         XCTAssertEqual(LaunchpadService.maxExemptions, 32)
-        XCTAssertEqual(LaunchpadService.recentActivityBlocks, 1_512_000, "a block budget, as when it was called seven days")
+        XCTAssertEqual(LaunchpadService.tradeLookbackMargin, 20_000, "the margin a coin's launch block is estimated early by")
         XCTAssertEqual(LaunchpadService.holderScanBlocks, 6_480_000)
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
     }

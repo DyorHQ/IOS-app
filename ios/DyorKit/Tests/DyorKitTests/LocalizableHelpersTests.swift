@@ -185,7 +185,7 @@ final class LocalizableHelpersTests: XCTestCase {
             "optionRow": ["subtitle"], "sheetHeader": ["0"], "MiniStat": ["label"], "readNotice": ["0"], "swatch": ["1"], "row": ["1"],
             "nftTile": ["caption"], "tokenRow": ["note"], "Feature": ["1", "2"], "HeroAuthCard": ["title", "subtitle"],
             "SecondaryAuthRow": ["title", "subtitle"], "SocialButton": ["title"], "LabeledDivider": ["0"], "PasswordField": ["title"],
-            "bookRow": ["side"],
+            "bookRow": ["side"], "holdingsUnreadRow": ["reading"], "holdingsRetryRow": ["0"],
         ]
         var checked = 0
         var verbatim = 0

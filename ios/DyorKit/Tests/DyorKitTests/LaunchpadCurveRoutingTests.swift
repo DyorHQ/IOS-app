@@ -514,10 +514,11 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         // every coin created and every pair asset, so a hidden retired coin's fees (aBIL in 0xad3d's escrow) are still read.
         let profile = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadProfileView.swift"), encoding: .utf8)
         XCTAssertTrue(profile.contains("var launched: [Created] { created.filter(\\.launch.listsOnBoard) }"))
-        XCTAssertTrue(profile.contains("stat(\"Launched\", \"\\(model.launched.count)\")"))
+        XCTAssertTrue(profile.contains("stat(\"Launched\", model.launchesRead ? \"\\(model.launched.count)\" : model.launchesUnread ? \"—\" : \"0\", reading: !model.launchesRead && !model.launchesUnread)"),
+                      "the count of what the board lists, a placeholder until the launches are read")
         XCTAssertTrue(profile.contains("ForEach(model.launched) { item in"))
         XCTAssertFalse(profile.contains("model.created"), "the view shows only what the board lists")
-        XCTAssertTrue(profile.contains("let createdPairs = launches.filter { $0.deployer == address }.map(\\.pairToken)\n        let escrowReads = await env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)"),
+        XCTAssertTrue(profile.contains("let createdPairs = launches.filter { $0.deployer == address }.map(\\.pairToken)\n        async let escrowRead = env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)"),
                       "the escrow pairs come from every coin created, unfiltered")
         XCTAssertTrue(Token.launchpadPairAssets.contains(Token.abil.address), "and every escrow reads aBIL, a pair asset, whatever was created")
 

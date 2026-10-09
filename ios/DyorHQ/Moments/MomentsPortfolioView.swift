@@ -86,8 +86,10 @@ struct MomentsPortfolioView: View {
             .navigationTitle(tr("My Moments"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            // A pull awaits the screen's own reads only: the history reads on behind it (`HistoryModel.kick`), and the
+            // proceeds follow it.
             .refreshable {
-                await env.history.refresh(env: env)
+                env.history.kick(env: env)
                 await load()
             }
             .task { await load() }
@@ -122,14 +124,14 @@ struct MomentsPortfolioView: View {
     /// trading fees after graduation, split into what it withdrew (Claimed) and what the contracts still hold for it
     /// (Unclaimed, withdrawn on each Moment's page). Both pairs add up to the same USDC.
     @ViewBuilder private var proceedsSection: some View {
-        if let earnings, !earnings.complete, !earnings.moments.isEmpty || !env.history.filling {
+        if let earnings, !earnings.complete, !earnings.moments.isEmpty || !proceedsReading {
             // The Moments history hasn't been read to the head: a total is never shown in part. While the history is
             // still filling in it says how far it has got; stalled or unreachable, it says so, with a pull to retry.
             Section {
-                if env.history.filling {
+                if proceedsReading {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("Reading your history… \(NumberStyle.percent(env.history.snapshot.progress * 100, fractionDigits: 0, signed: false))").foregroundStyle(.secondary).monospacedDigit()
+                        Text("Reading your history… \(NumberStyle.percent(proceedsProgress * 100, fractionDigits: 0, signed: false))").foregroundStyle(.secondary).monospacedDigit()
                     }
                 } else {
                     InlineError(message: "Part of your proceeds couldn't be read just now. Pull to refresh.")
@@ -168,8 +170,8 @@ struct MomentsPortfolioView: View {
             Section {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    if env.history.filling {
-                        Text("Reading your history… \(NumberStyle.percent(env.history.snapshot.progress * 100, fractionDigits: 0, signed: false))").foregroundStyle(.secondary).monospacedDigit()
+                    if proceedsReading {
+                        Text("Reading your history… \(NumberStyle.percent(proceedsProgress * 100, fractionDigits: 0, signed: false))").foregroundStyle(.secondary).monospacedDigit()
                     } else {
                         Text("Reading your Moments…").foregroundStyle(.secondary)
                     }
@@ -179,6 +181,12 @@ struct MomentsPortfolioView: View {
             }
         }
     }
+
+    /// The Moments scan of the wallet's history, the proceeds' only source (`WalletHistoryScans.proceeds`), is still
+    /// reading its window with the chain reachable: no other scan holds the proceeds up.
+    private var proceedsReading: Bool { env.history.snapshot.filling(since: nil, scans: WalletHistoryScans.proceeds) }
+    /// How far the Moments scan has read its window, 0 to 1.
+    private var proceedsProgress: Double { env.history.snapshot.progress(since: nil, scans: WalletHistoryScans.proceeds) }
 
     /// A USDC amount's tile, rounded to the cent, in the coin tiles' style.
     private func usdcTile(_ title: Text, _ units: BigUInt, _ subtitle: Text, tint: Color = .primary) -> some View {

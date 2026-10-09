@@ -239,20 +239,26 @@ public struct Log: Sendable, Hashable, Identifiable {
     public let blockNumber: UInt64
     public let transactionHash: Data
     public let logIndex: Int
+    /// When the log's block was mined (seconds since 1970), as the endpoint said it: Monad's `eth_getLogs` answers carry
+    /// `blockTimestamp` (rpc2, 2026-10-08). Nil where none was given — a receipt, a log kept before the app read it, a
+    /// node that leaves it out — and the time is then estimated from a later block (`BlockClock.time(of:anchor:secondsPerBlock:)`).
+    public let blockTimestamp: Int?
 
     /// `txHash-logIndex`, unique across the chain.
     public var id: String { "\(transactionHash.hexString)-\(logIndex)" }
 
-    public init(address: Address, topics: [Data], data: Data, blockNumber: UInt64, transactionHash: Data, logIndex: Int) {
+    public init(address: Address, topics: [Data], data: Data, blockNumber: UInt64, transactionHash: Data, logIndex: Int, blockTimestamp: Int? = nil) {
         self.address = address
         self.topics = topics
         self.data = data
         self.blockNumber = blockNumber
         self.transactionHash = transactionHash
         self.logIndex = logIndex
+        self.blockTimestamp = blockTimestamp
     }
 
-    /// Parses one log object from a JSON-RPC response. Returns nil when a required field is missing or malformed.
+    /// Parses one log object from a JSON-RPC response. Returns nil when a required field is missing or malformed. The
+    /// block's timestamp is optional: one missing or malformed is left out (nil), never a reason to drop the log.
     public init?(json: JSON) {
         guard let addressHex = json["address"].string, let address = Address(addressHex),
               let topicList = json["topics"].array,
@@ -266,7 +272,9 @@ public struct Log: Sendable, Hashable, Identifiable {
             guard let hex = topic.string, let bytes = Data(hex: hex) else { return nil }
             topics.append(bytes)
         }
-        self.init(address: address, topics: topics, data: data, blockNumber: UInt64(clamping: block), transactionHash: hash, logIndex: Int(clamping: index))
+        let timestamp = json["blockTimestamp"].string.flatMap { BigUInt(hexQuantity: $0) }.map { Int(clamping: $0) }
+        self.init(address: address, topics: topics, data: data, blockNumber: UInt64(clamping: block), transactionHash: hash, logIndex: Int(clamping: index),
+                  blockTimestamp: timestamp)
     }
 
     /// The `index`th indexed parameter as an address (topic 0 is the event signature).

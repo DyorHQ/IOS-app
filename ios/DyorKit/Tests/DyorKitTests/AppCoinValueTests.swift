@@ -195,9 +195,15 @@ final class AppCoinValueTests: XCTestCase {
         XCTAssertTrue(launchpad.contains("private var marketCapUSD: Double? { launch.marketCapInPair.flatMap { cap in pairUSD.map { cap * $0 } } }"))
         XCTAssertTrue(launchpad.contains("guard let current = launch.pairPrice.map({ $0 * unit }) else { return points }"))
         XCTAssertEqual(launchpad.components(separatedBy: "launch.marketCapInPair.map {").count - 1, 2, "the board card and the page header")
+        // My Launchpad values a holding exactly as Home does: Spot's price, asked for every coin held in the same read as the
+        // pair assets, else the coin's own decimal price; its profit and loss is measured against that same value.
         let profile = try source("Launchpad/LaunchpadProfileView.swift")
-        XCTAssertTrue(profile.contains("let valueUSD = DyorPrice.launch(launch, spot: nil, pairUSD: pairUSD).map { Amount.units(balance, decimals: 18) * $0 }"))
-        XCTAssertTrue(profile.contains("let currentValuePair = launch.pairPrice.map { Amount.units(balance, decimals: 18) * $0 }"))
+        XCTAssertTrue(profile.contains("let valueUSD = DyorPrice.launch(launch, spot: spotUSD[token], pairUSD: pairUSD).map { Amount.units(balance, decimals: 18) * $0 }"))
+        XCTAssertTrue(profile.contains("let pairUSD = launch.pair.isNative ? self.pairUSD[Monad.native] : self.pairUSD[launch.pairToken]"), "the pair's price as Home picks it")
+        XCTAssertTrue(profile.contains("} + heldCoins.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }"), "every coin held priced by Spot")
+        XCTAssertTrue(profile.contains("spotUSD = Dictionary(heldCoins.compactMap { launch in DyorPrice.valid(priceMap[launch.token]?.usd).map { (launch.token, $0) } }"))
+        XCTAssertFalse(profile.contains("spot: nil"), "never the curve price alone while Spot has one")
+        XCTAssertTrue(profile.contains("history.launch.pnl(curve: launch.curve, pairDecimals: launch.pair.decimals, valueUSD: valueUSD, pairUSD: pairUSD)"))
     }
 
     /// The sources wire it in: the wallet's lists value DyorHQ's coins from `heldLaunches` and the Moments' live prices,

@@ -251,10 +251,14 @@ public extension LaunchpadService {
         return list.filter { !$0.isZero && seen.insert($0).inserted }
     }
 
-    /// Pure half of `walletHistory`, each row's time estimated from `anchor` at `secondsPerBlock`.
+    /// Pure half of `walletHistory`, each row's time its block's own when the log carries it (`Log.blockTimestamp`), else
+    /// estimated from `anchor` at `secondsPerBlock`.
     nonisolated static func walletHistory(buys: [Log], sells: [Log], escrowNative: [Log], escrowToken: [Log], sharing: [Log], paid: [Log] = [], paidToken: [Log] = [],
                                           anchor: BlockHeader, secondsPerBlock: Double, curves: Set<Address>) -> LaunchpadWalletHistory {
-        func when(_ log: Log) -> Date { Date(timeIntervalSince1970: TimeInterval(time(anchor: anchor, block: log.blockNumber, secondsPerBlock: secondsPerBlock))) }
+        func when(_ log: Log) -> Date {
+            if let timestamp = log.blockTimestamp { return Date(timeIntervalSince1970: TimeInterval(timestamp)) }
+            return Date(timeIntervalSince1970: TimeInterval(time(anchor: anchor, block: log.blockNumber, secondsPerBlock: secondsPerBlock)))
+        }
         var fills: [WalletCurveFill] = []
         for log in buys where curves.contains(log.address) {
             guard let fill = LaunchpadABI.fill(log) else { continue }

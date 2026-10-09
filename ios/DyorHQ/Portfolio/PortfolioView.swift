@@ -83,10 +83,11 @@ struct PortfolioView: View {
         }
     }
 
-    /// The Portfolio's three reads — volume / history, My Holdings and Past Cohorts — side by side. A pull reads the
-    /// history on as well.
+    /// The Portfolio's three reads — volume / history, My Holdings and Past Cohorts — side by side, each read again in
+    /// full on a pull (`force`). A pull reads the history on as well, behind them and never waited for
+    /// (`HistoryModel.kick`): the figures follow it (`env.history.version`).
     private func reload(force: Bool) async {
-        if force { await env.history.refresh(env: env) }
+        if force { env.history.kick(env: env) }
         async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: force, passkey: session.isPasskeyAccount)
         async let holdings: () = assets.load(env: env, address: session.address, force: force)
         async let past: () = pastMoments.load(env: env, address: session.address, force: force)
@@ -127,11 +128,12 @@ struct PortfolioView: View {
                 Label(error, systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(Color.attention)
             } else if model.historyUnreachable {
                 Label("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.", systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(Color.attention)
-            } else if model.historyFilling {
-                // The store is still reading the wallet's history: the figures grow as it does.
+            } else if model.historyFilling(router.period, scans: WalletHistoryScans.ids) {
+                // The store is still reading the period's window of the wallet's history, in every scan (fees received
+                // show here, holder rewards among them): the figures grow as it does.
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text("Reading your history… \(NumberStyle.percent(model.historyProgress * 100, fractionDigits: 0, signed: false))").font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                    Text("Reading your history… \(NumberStyle.percent(model.historyProgress(router.period, scans: WalletHistoryScans.ids) * 100, fractionDigits: 0, signed: false))").font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
                 }
             } else if let updated = model.updatedAt {
                 Text("Updated \(updated, style: .relative) ago").font(.caption2).foregroundStyle(.tertiary)

@@ -141,9 +141,22 @@ final class HistoryStoreTests: XCTestCase {
     }
 
     /// Rounds that stop short: the scans still behind are said not to have reached the chain, so a screen shows its
-    /// error with Retry instead of "Reading your history…" for ever; a scan that read its whole window keeps its state.
+    /// error with Retry instead of "Reading your history…" for ever; a scan that read its whole window lately keeps its
+    /// state, and one that read it long ago (`HistoryStatus.isCurrent`) is behind too.
+    /// The stand-in published before the store's instant read lands is not a read history: Home's "Reading your
+    /// history… N%" waits for one, so it never flashes "0%" at launch; any scan's state makes it one.
+    func testTheStandInBeforeTheStoresReadIsNotARead() {
+        XCTAssertFalse(WalletHistorySnapshot.empty.read)
+        XCTAssertTrue(WalletHistorySnapshot.empty.filling, "still filling, as before: the read state is a separate question")
+        var snapshot = WalletHistorySnapshot.empty
+        snapshot.status = [WalletHistoryScans.transfersInId: HistoryStatus(complete: false, progress: 0, reachedChain: true, updatedAt: nil, floor: nil, head: nil)]
+        XCTAssertTrue(snapshot.read)
+        let home = try? DocsLinksTests.appSource("Home/HomeView.swift")
+        XCTAssertEqual(home?.contains("if env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {"), true)
+    }
+
     func testAStalledHistorySaysTheRestCouldntBeRead() {
-        let read = HistoryStatus(complete: true, progress: 1, reachedChain: true, updatedAt: nil, floor: 10, head: 20)
+        let read = HistoryStatus(complete: true, progress: 1, reachedChain: true, updatedAt: Date(), floor: 10, head: 20)
         let behind = HistoryStatus(complete: false, progress: 0.4, reachedChain: true, updatedAt: nil, floor: 10, head: 20)
         var snapshot = WalletHistorySnapshot.empty
         snapshot.status = [WalletHistoryScans.transfersInId: read, WalletHistoryScans.launchpadId: behind]
@@ -157,11 +170,17 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertFalse(stalled.status(WalletHistoryScans.launchpadId).reachedChain)
         XCTAssertFalse(stalled.status(WalletHistoryScans.momentsId).reachedChain, "a scan never read is behind too")
         XCTAssertEqual(stalled.progress, snapshot.progress)
+        var old = snapshot
+        old.status[WalletHistoryScans.transfersInId] = HistoryStatus(complete: true, progress: 1, reachedChain: true, updatedAt: Date().addingTimeInterval(-3_600), floor: 10, head: 20)
+        XCTAssertFalse(old.stalled().status(WalletHistoryScans.transfersInId).reachedChain, "read in full an hour ago: not up to now")
+        XCTAssertFalse(old.stalled().swapFactsStalled, "no transaction left out")
     }
 
     /// The transfer scans read back to the wallet's first transaction when that is older than their window, and to the
     /// window alone when it is nearer, or the wallet never sent one, or it couldn't be read. The first transaction's
-    /// block is found by bisection over the nonce at past blocks, and asked once.
+    /// block is found by bisection over the nonce at past blocks, asked once, and never waited for: the first round reads
+    /// with the window's floor while the lookup runs beside it, and the next round reads back to the block it found — or
+    /// at once to a block found before (`knownFirstActivity`).
     func testTheTransferScansReadBackToTheWalletsFirstTransaction() async throws {
         XCTAssertEqual(HistoryScan.Floor.earliest(block: 5_000, blocks: 1_000).block(head: 10_000), 5_000, "the first transaction, older than the window")
         XCTAssertEqual(HistoryScan.Floor.earliest(block: 9_500, blocks: 1_000).block(head: 10_000), 9_000, "the window, when the first transaction is nearer")
@@ -187,6 +206,12 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(instant[0].floor, WalletHistoryScans.transferFloor)
         let unasked = await asked.count
         XCTAssertEqual(unasked, 0)
+        // The first round: the window's floor, the lookup started beside it rather than waited for.
+        let roundOne = await service.scans(wallet: wallet)
+        XCTAssertEqual(roundOne[0].floor, WalletHistoryScans.transferFloor, "round 1 never waits for the lookup")
+        XCTAssertEqual(roundOne[2].floor, .block(LaunchpadAddresses.feeHistoryStart))
+        await service.firstTransactionLookup(wallet)
+        // The next round reads back to it.
         let scans = await service.scans(wallet: wallet)
         XCTAssertEqual(scans[0].floor, .earliest(block: 61_337, blocks: WalletHistoryScans.transferBlocks))
         XCTAssertEqual(scans[1].floor, scans[0].floor)
@@ -197,8 +222,22 @@ final class HistoryStoreTests: XCTestCase {
 
         let failing = WalletHistoryService(store: HistoryStore(router: router(), directory: nil), swapHistory: SwapHistoryService(rpc: client), clock: BlockClock(rpc: client),
                                            stacks: { [] }, cohorts: [], firstActivity: { _ in throw URLError(.notConnectedToInternet) })
+        _ = await failing.scans(wallet: wallet)
+        await failing.firstTransactionLookup(wallet)
         let fallback = await failing.scans(wallet: wallet)
         XCTAssertEqual(fallback[0].floor, WalletHistoryScans.transferFloor, "the window alone until it can be read")
+
+        // Found before (kept on the device): the first round reads back to it at once, the instant read too, with no lookup.
+        let lookups = Counter()
+        let known = WalletHistoryService(store: HistoryStore(router: router(), directory: nil), swapHistory: SwapHistoryService(rpc: client), clock: BlockClock(rpc: client),
+                                         stacks: { [] }, cohorts: [], firstActivity: { _ in await lookups.bump(); return nil }, knownFirstActivity: { _ in 61_337 })
+        let instantKnown = await known.scans(wallet: wallet, findingFirstTransaction: false)
+        XCTAssertEqual(instantKnown[0].floor, .earliest(block: 61_337, blocks: WalletHistoryScans.transferBlocks))
+        let roundKnown = await known.scans(wallet: wallet)
+        XCTAssertEqual(roundKnown[0].floor, .earliest(block: 61_337, blocks: WalletHistoryScans.transferBlocks), "a round never starts above a floor already known")
+        await known.firstTransactionLookup(wallet)
+        let looked = await lookups.count
+        XCTAssertEqual(looked, 0)
     }
 
     private actor Counter {

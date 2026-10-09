@@ -906,6 +906,9 @@ struct LaunchDetailView: View {
                     KnownTokenStore.add(token, owner: session.address)
                     KnownTokenStore.markChosen(launch.token, owner: session.address)
                     Activity.record(ActivityRecord(kind: .buy, title: tr("Bought \(launch.symbol)"), subtitle: tr("\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(rawAmount, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)"), hash: hash, usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 }), owner: session.address)
+                    // The fill is in the wallet's history in seconds, not at the next top-up: My Launchpad's profit and loss
+                    // and activity wait for it (`WalletHistorySnapshot.fillsCoverage`), and Total Volume counts it.
+                    env.history.kick(env: env)
                 }, intent: .launchpadBuy(token: launch.token, pay: .init(token: launch.pairToken, amount: rawAmount), usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You pay", verbatim: "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                     DetailRow("You receive", verbatim: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
@@ -914,6 +917,7 @@ struct LaunchDetailView: View {
             } else if side == .sell, let q = sellQuote {
                 ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
                     Activity.record(ActivityRecord(kind: .sell, title: tr("Sold \(launch.symbol)"), subtitle: tr("\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)"), hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
+                    env.history.kick(env: env)
                 }, intent: .launchpadSell(token: launch.token, amount: rawAmount, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You sell", verbatim: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol)")
                     DetailRow("You receive", verbatim: "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")

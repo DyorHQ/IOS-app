@@ -18495,6 +18495,34 @@
         }
       }
     },
+    "Holder rewards couldn't be read just now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer las recompensas para holders en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire les récompenses des détenteurs pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 홀더 보상을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取持有者奖励。"
+          }
+        }
+      }
+    },
     "Holders" : {
       "comment" : "Who holds the coin or its editions: a stat and a section header (a noun)",
       "localizations" : {
@@ -32226,6 +32254,34 @@
         }
       }
     },
+    "Reading your positions…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leyendo tus posiciones…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lecture de vos positions…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "포지션 읽는 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取你的仓位…"
+          }
+        }
+      }
+    },
     "Reading your wallet's history. Tokens found there will be added." : {
       "localizations" : {
         "es" : {
@@ -40005,6 +40061,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "跨链桥报告已完成。查看你在 %2$@ 上的 %1$@ 余额，确认是否到账。"
+          }
+        }
+      }
+    },
+    "The coins you launched couldn't be read just now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer las monedas que lanzaste en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire les jetons que vous avez lancés pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 내가 런칭한 코인을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你发射的币。"
           }
         }
       }
@@ -47933,6 +48017,35 @@
         }
       }
     },
+    "Your Moments couldn't be read just now." : {
+      "comment" : "Home, My Holdings' Moments tab before anything was read: the wallet's Moments editions and coins couldn't be read. A Retry button follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer tus Moments en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire vos Moments pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 내 Moment를 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的 Moment。"
+          }
+        }
+      }
+    },
     "Your NFT" : {
       "localizations" : {
         "es" : {
@@ -47957,6 +48070,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的 NFT"
+          }
+        }
+      }
+    },
+    "Your Perpl account couldn't be read just now." : {
+      "comment" : "Home, My Holdings' Perps tab before anything was read: the wallet's Perpl trading account (equity and positions) couldn't be read. A Retry button follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer tu cuenta de Perpl en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire votre compte Perpl pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 Perpl 계정을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的 Perpl 账户。"
           }
         }
       }
@@ -48669,6 +48811,35 @@
         }
       }
     },
+    "Your launch coins couldn't be read just now." : {
+      "comment" : "Home, My Holdings' Launch tab before anything was read: the launchpad coins the wallet holds couldn't be read. A Retry button follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer tus monedas de lanzamientos en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire vos jetons de lancement pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 런칭 코인을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的发射币。"
+          }
+        }
+      }
+    },
     "Your launches, swaps, buys, sells and perp orders show up here." : {
       "localizations" : {
         "es" : {
@@ -48943,6 +49114,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "过期时你的份额"
+          }
+        }
+      }
+    },
+    "Your tokens couldn't be read just now." : {
+      "comment" : "Home, My Holdings' Spot tab before anything was read: the wallet's token balances or their prices couldn't be read. A Retry button follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer tus tokens en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire vos jetons pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 토큰을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的代币。"
           }
         }
       }

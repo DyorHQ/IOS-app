@@ -36,6 +36,16 @@ public struct Multicall: Sendable {
 
     public init(rpc: RPCClient) { self.rpc = rpc }
 
+    /// Multicall3's own `getBlockNumber()`, as a call: added to a `read`, it says the block every other call in it was
+    /// answered at — one aggregate runs at a single block.
+    public static let blockNumber = ContractCall(to: address, data: ABI.selector("getBlockNumber()"), returns: [.uint(256)])
+
+    /// The block a `blockNumber` call answered; nil when it failed.
+    public static func block(_ result: Result<[ABIValue], Error>) -> UInt64? {
+        guard case .success(let values) = result, case .uint(let number)? = values.first else { return nil }
+        return UInt64(exactly: number)
+    }
+
     /// Runs every call; failed calls come back as `.failure` so one bad read never hides the others: a call that failed
     /// (it reverted or ran out of gas) as an `RPCError` carrying what it returned, and one whose return data isn't of its
     /// `returnTypes` as the decoding's error.

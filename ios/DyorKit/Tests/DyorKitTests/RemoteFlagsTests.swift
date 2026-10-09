@@ -79,7 +79,7 @@ final class RemoteFlagsTests: XCTestCase {
                      "moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock)",
                      "RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock)",
                      "activity = TokenActivityService(rpc: logsClient, clock: clock)",
-                     "swapHistory = SwapHistoryService(rpc: logsClient, clock: clock)",
+                     "swapHistory = SwapHistoryService(rpc: logsClient, clock: clock, archive: archiveClient)",
                      "walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock,",
                      "dyorCoins = DyorCoinsModel(registry: registry, policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))",
                      "updateGate.onFlags = { [weak self] flags in self?.apply(flags) }",

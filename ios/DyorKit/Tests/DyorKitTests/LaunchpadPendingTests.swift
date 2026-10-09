@@ -63,19 +63,10 @@ final class LaunchpadPendingTests: XCTestCase {
         assertNothingAskedOfAddressZero()
     }
 
-    func testRetiredActivityAndPortfolioWhileTheLiveStackIsPending() async throws {
+    func testRetiredWalletHistoryWhileTheLiveStackIsPending() async throws {
         let chain = FakeLaunchpadChain(auditFix: auditFix, legacy: legacy, wallet: wallet)
         MomentsChainStub.install(chain.answer, logs: chain.logs)
         let service = pendingService()
-
-        // The feed: the retired factories' launch and graduation, and trades on their curves only.
-        let activity = try await service.activity(limit: 50, lookbackBlocks: 9_000)
-        XCTAssertEqual(activity.count, 3)
-        XCTAssertEqual(Set(activity.map(\.token)), [chain.climbing, chain.graduated])
-        XCTAssertTrue(activity.contains { if case .launch(let token, _, _) = $0.kind { return token == chain.climbing }; return false })
-        XCTAssertTrue(activity.contains { if case .graduated(let token, _) = $0.kind { return token == chain.graduated }; return false })
-        XCTAssertTrue(activity.contains { if case .trade(let token, _, let trader, true, _, _) = $0.kind { return token == chain.climbing && trader == wallet }; return false })
-        XCTAssertFalse(activity.contains { $0.token == FakeLaunchpadChain.stranger }, "an unknown factory's launch and an unknown curve's trade are left out")
 
         // The wallet's history: its curve fills and the retired escrow's claim.
         let history = await service.walletHistory(wallet: wallet, lookbackBlocks: 1_000, curves: [chain.climbingCurve])
@@ -84,7 +75,10 @@ final class LaunchpadPendingTests: XCTestCase {
         let escrows = Set(MomentsChainStub.logQueries().compactMap(\.address))
         XCTAssertTrue(escrows.isSuperset(of: LaunchpadAddresses.retiredStacks.map(\.escrow)), "every retired escrow is scanned for the wallet's claims")
 
-        assertNothingAskedOfAddressZero()
+        // Logs only (the feed's launch reads went with it): no filter names address 0.
+        XCTAssertTrue(MomentsChainStub.calls().isEmpty)
+        XCTAssertFalse(MomentsChainStub.logQueries().isEmpty)
+        XCTAssertFalse(MomentsChainStub.logQueries().contains { $0.address == .zero }, "a log filter named address 0")
     }
 
     /// Reads that need the live stack answer nothing, without asking the chain anything.

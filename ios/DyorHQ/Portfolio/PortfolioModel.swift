@@ -85,12 +85,11 @@ final class PortfolioModel {
     /// The wallet the latest load is for. A load started for another (a refresh or a reload that outlived an account
     /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back (RS-10).
     private var loadingFor: Address?
-    /// The on-chain history as the history model has it (`applyHistory`): still filling in, how far, whether the chain
-    /// could be reached, and the day the transfer history reaches back to.
-    private(set) var historyFilling = false
-    private(set) var historyComplete = false
+    /// The on-chain history as the history model has it (`applyHistory`): how far each period's figures have been read
+    /// (`historyFilling`, `historyProgress`), whether the chain could be reached, and the day the transfer history
+    /// reaches back to.
+    private var history = WalletHistorySnapshot.empty
     private(set) var historyUnreachable = false
-    private(set) var historyProgress = 0.0
     private(set) var historySince: Date?
     private var historyVersion = -1
 
@@ -115,6 +114,24 @@ final class PortfolioModel {
 
     func totals(_ period: VolumePeriod) -> Stats {
         Section.allCases.reduce(Stats()) { $0 + stats($1, period) }
+    }
+
+    /// Whether `period`'s figures built from `scans` (`WalletHistoryScans.volume` for Total Volume, every scan where fees
+    /// received show too) are still being read: some of those scans hasn't read every block since the period began (All:
+    /// its whole window), with the chain reachable. The store reads newest first, so the last day is read long before
+    /// the last month: each period says so only until its own window is. Until then its figures are a part, and say so.
+    func historyFilling(_ period: VolumePeriod, scans: [String]) -> Bool {
+        history.filling(since: historyStart(period), scans: scans)
+    }
+
+    /// How far `scans` have read `period`'s window, 0 to 1 (`historyFilling`).
+    func historyProgress(_ period: VolumePeriod, scans: [String]) -> Double {
+        history.progress(since: historyStart(period), scans: scans)
+    }
+
+    /// The moment `period`'s window starts at, as its figures are cut (`stats`); nil for All, every scan's whole window.
+    private func historyStart(_ period: VolumePeriod) -> Date? {
+        period.seconds == nil ? nil : period.since()
     }
 
     func stats(_ section: Section, _ period: VolumePeriod) -> Stats {
@@ -424,7 +441,7 @@ final class PortfolioModel {
         loadedFor = address
         hasLoaded = true
         applyHistory(env.history.snapshot, version: env.history.version, for: address, force: true)
-        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio for \(address.short, privacy: .public): swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count) history \(self.historyProgress)")
+        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio for \(address.short, privacy: .public): swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count) history \(self.history.progress)")
         if !listing.complete || fetchedMoments == nil || !retired.complete || fetchedPrices == nil {
             error = tr("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.")
             updatedAt = nil
@@ -440,13 +457,11 @@ final class PortfolioModel {
     func applyHistory(_ snapshot: WalletHistorySnapshot, version: Int, for address: Address?, force: Bool = false) {
         guard let address, loadedFor == address || loadingFor == address, force || version != historyVersion else { return }
         historyVersion = version
+        history = snapshot
         swaps = snapshot.swaps
         launchHistory = snapshot.launch
         momentsHistory = snapshot.moments
-        historyFilling = snapshot.filling
-        historyComplete = snapshot.complete
         historyUnreachable = snapshot.unreachable
-        historyProgress = snapshot.progress
         if let anchor = snapshot.anchor, let floor = snapshot.status(WalletHistoryScans.transfersInId).floor {
             historySince = BlockClock.time(of: floor, anchor: anchor, secondsPerBlock: BlockClock.fallbackSecondsPerBlock)
         }
@@ -459,7 +474,7 @@ final class PortfolioModel {
         launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsByKey = [:]
         tokens = [:]; prices = [:]
         hasLoaded = false; updatedAt = nil; loadedFor = nil; perpsNote = nil
-        historyFilling = false; historyComplete = false; historyUnreachable = false; historyProgress = 0; historySince = nil; historyVersion = -1
+        history = .empty; historyUnreachable = false; historySince = nil; historyVersion = -1
     }
 
     /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events. Without

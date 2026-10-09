@@ -119,6 +119,8 @@ struct RootView: View {
             env.social.bind(address: session.address)
             // The wallet's on-chain history: from the store at once, filled in behind every screen (`HistoryModel`).
             env.history.start(env: env, wallet: session.address)
+            // My Launchpad keeps one wallet's state between openings: another wallet, or a sign-out, clears it.
+            env.launchpadProfile.follow(session.address)
             // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest (RS-2).
             env.bridgeTracker.bind(owner: session.address)
             // Perpl trading and the notification center follow the account at once, not after the backend sign-in's

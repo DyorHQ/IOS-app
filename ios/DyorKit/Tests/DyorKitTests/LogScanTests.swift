@@ -630,7 +630,9 @@ final class LogScanTests: XCTestCase {
 /// or lets it be answered from `logs`. With `batchSpan`, a request's ranges share that many blocks, as on rpc3: a range
 /// past what the ranges before it in the request used is refused for its size. With `singleErrorStatus`, a single-object
 /// request (not an array) whose call is refused gets that HTTP status, the error still its body, as rpc1 sends a size
-/// refusal (400).
+/// refusal (400). With `answer`, a call other than the logs (a transaction, a receipt, a balance or a nonce at a block) is
+/// answered by the test, by the host asked. A log with a block timestamp is answered with it (`blockTimestamp`), as
+/// Monad's endpoints answer.
 final class LogsStub: URLProtocol {
     struct Range: Hashable, Sendable {
         let from: UInt64
@@ -655,6 +657,8 @@ final class LogsStub: URLProtocol {
     }
 
     typealias Rule = @Sendable (Range) -> Failure?
+    /// Answers a call that isn't `eth_getLogs`, by host, method and params: nil leaves it to the stub.
+    typealias Answer = @Sendable (String, String, JSON) -> JSON?
     /// A rule by host as well (`LogsRouter` tests): consulted before `rule`.
     typealias HostRule = @Sendable (String, Range) -> Failure?
 
@@ -680,12 +684,14 @@ final class LogsStub: URLProtocol {
     /// The block the stub wallet sent its first transaction in (`eth_getTransactionCount` answers 1 from it on); nil
     /// says it never did.
     nonisolated(unsafe) private static var firstTransaction: UInt64?
+    nonisolated(unsafe) private static var answer: Answer?
 
     /// `latency`: how long each request takes to answer, so requests sent together overlap (`maxInFlight()`). `logCap`: a
     /// range matching more logs is refused as rpc1 refuses one over its 10K, naming the range from its start that fits.
     static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, latency: TimeInterval = 0,
-                        logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, rule: @escaping Rule) {
+                        logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, answer: Answer? = nil, rule: @escaping Rule) {
         lock.lock(); defer { lock.unlock() }
+        self.answer = answer
         self.head = head
         chainLogs = logs
         self.batchSpan = batchSpan
@@ -787,7 +793,8 @@ final class LogsStub: URLProtocol {
         func error(_ code: Int, _ message: String) -> JSON {
             .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(Double(code)), "message": .string(message)])])
         }
-        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let hostRule = self.hostRule; let budget = batchSpan; let cap = logCap; let failHead = self.failHead; lock.unlock()
+        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let hostRule = self.hostRule; let budget = batchSpan; let cap = logCap; let failHead = self.failHead; let answer = self.answer; lock.unlock()
+        if let answer, let method = call["method"].string, method != "eth_getLogs", let value = answer(host, method, call["params"]) { return result(value) }
         switch call["method"].string {
         case "eth_getBlockByNumber":
             if failHead { return nil }
@@ -839,9 +846,11 @@ final class LogsStub: URLProtocol {
     }
 
     private static func json(_ log: Log) -> JSON {
-        .object(["address": .string(log.address.hex), "topics": .array(log.topics.map { .string($0.hexString) }), "data": .string(log.data.hexString),
-                 "blockNumber": .string(BigUInt(log.blockNumber).hexQuantity), "transactionHash": .string(log.transactionHash.hexString),
-                 "logIndex": .string(BigUInt(log.logIndex).hexQuantity)])
+        var object: [String: JSON] = ["address": .string(log.address.hex), "topics": .array(log.topics.map { .string($0.hexString) }), "data": .string(log.data.hexString),
+                                      "blockNumber": .string(BigUInt(log.blockNumber).hexQuantity), "transactionHash": .string(log.transactionHash.hexString),
+                                      "logIndex": .string(BigUInt(log.logIndex).hexQuantity)]
+        if let timestamp = log.blockTimestamp { object["blockTimestamp"] = .string(BigUInt(timestamp).hexQuantity) }
+        return .object(object)
     }
 
     private static func body(_ request: URLRequest) -> Data {

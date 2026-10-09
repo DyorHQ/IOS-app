@@ -46,7 +46,7 @@ struct HomeView: View {
                     }
                     heroCard
                     quickActions
-                    if model.totalValue ?? 0 > 0 || !model.holdings.isEmpty { allocationCard }
+                    if let split = model.split, split.total > 0 || !model.holdings.isEmpty { allocationCard(split) }
                     topTokensCard
                     holdingsCard
                 }
@@ -60,10 +60,18 @@ struct HomeView: View {
             .safeAreaInset(edge: .top, spacing: 0) { HomeHeader(showSearch: $showSearch, error: model.error ?? historyError, updatedAt: model.updatedAt) }
             .navigationDestination(for: MarketRow.self) { row in TokenDetailView(row: row) }
             .navigationDestination(item: $searchTarget) { row in TokenDetailView(row: row) }
+            // A pull awaits Home's own reads, side by side, never a round of the history: that reads on behind the screen
+            // (`HistoryModel.kick`), and Total Volume follows it (`env.history.version`).
+            // The reads run in a task of their own: SwiftUI cancels a pull's action when the list redraws under it (the
+            // loads' own `loading` changes do), and a cancelled load publishes nothing, so a pull used to end with Home
+            // unchanged. The spinner still waits for both.
             .refreshable {
-                await model.load(env: env, address: session.address)
-                await env.history.refresh(env: env)
-                await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: true, passkey: session.isPasskeyAccount)
+                env.history.kick(env: env)
+                await Task {
+                    async let home: () = model.load(env: env, address: session.address)
+                    async let portfolio: () = env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: true, passkey: session.isPasskeyAccount)
+                    _ = await (home, portfolio)
+                }.value
             }
             .task(id: session.address) { await model.poll(env: env, address: session.address) }
             .task(id: session.address) { await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: false, passkey: session.isPasskeyAccount) }
@@ -109,6 +117,8 @@ struct HomeView: View {
     private var heroCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
+                // The total and the day's move in it wait for every part of the wallet (`HomeModel.totalValue`).
+                let unread = model.totalValue == nil
                 VStack(alignment: .leading, spacing: 4) {
                     Text(PriceFormat.usdValue(model.totalValue ?? 0))
                         .font(.system(size: 40, weight: .semibold, design: .serif))
@@ -116,13 +126,14 @@ struct HomeView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
                         .contentTransition(.numericText(value: model.totalValue ?? 0))
-                        .redacted(reason: model.totalValue == nil ? .placeholder : [])
+                        .unreadFigure(unread)
                     HStack(spacing: 8) {
                         Text(PriceFormat.usdValue(changeAmount, signed: true))
                             .font(.subheadline.weight(.medium)).monospacedDigit()
-                            .foregroundStyle(changeAmount < 0 ? Color.negative : Color.positive)
-                        ChangeBadge(value: model.change24h ?? 0)
+                            .foregroundStyle(unread ? Color.secondary : changeAmount < 0 ? Color.negative : Color.positive)
+                        ChangeBadge(value: unread ? 0 : model.change24h ?? 0)
                     }
+                    .unreadFigure(unread)
                 }
                 Spacer(minLength: 8)
                 totalVolume
@@ -133,7 +144,7 @@ struct HomeView: View {
             HStack(alignment: .top) {
                 statColumn("Avail. Balance", value: model.availableBalance, tint: .primary)
                 Spacer()
-                statColumn("In Use", value: model.inUse, tint: model.inUse > 0 ? .positive : .primary, alignment: .trailing)
+                statColumn("In Use", value: model.inUse, tint: (model.inUse ?? 0) > 0 ? .positive : .primary, alignment: .trailing)
             }
 
             Divider()
@@ -164,7 +175,8 @@ struct HomeView: View {
     /// Total Volume for the period, right-aligned, with the period menu (24h · 7 days · 30 days · All) under it —
     /// the same figure the Portfolio breaks down by section. Tapping the number opens the Portfolio. A placeholder
     /// until the Portfolio has loaded and the chain history has been read at all (never "$0.00" ahead of it): the
-    /// figure then follows the history as it fills in.
+    /// figure then follows the history as it fills in, said to be read on until the scans it is built from
+    /// (`WalletHistoryScans.volume`) have read the period's own window — the last day long before the last month.
     private var totalVolume: some View {
         @Bindable var router = router
         let unread = session.address != nil && env.history.snapshot.anchor == nil
@@ -180,10 +192,11 @@ struct HomeView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Total volume \(router.period.label)")
-            if env.portfolio.historyFilling {
-                // The figure follows the history as it fills in: how far that has got, so a figure short of older
-                // trades is never taken for the whole.
-                Text("Reading your history… \(NumberStyle.percent(env.portfolio.historyProgress * 100, fractionDigits: 0, signed: false))")
+            if env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {
+                // The figure follows the history as it fills in: how far the period's window has got, so a figure short
+                // of older trades is never taken for the whole. Not before the store's instant read has landed (`read`):
+                // the figure is a placeholder until then, and the line would flash "0%".
+                Text("Reading your history… \(NumberStyle.percent(env.portfolio.historyProgress(router.period, scans: WalletHistoryScans.volume) * 100, fractionDigits: 0, signed: false))")
                     .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
             }
             Menu {
@@ -204,22 +217,26 @@ struct HomeView: View {
         }
     }
 
-    private func statColumn(_ title: LocalizedStringKey, value: Double, tint: Color, alignment: HorizontalAlignment = .leading) -> some View {
+    /// `value` nil: the part it comes from isn't read for the wallet yet, so a placeholder (`unreadFigure`).
+    private func statColumn(_ title: LocalizedStringKey, value: Double?, tint: Color, alignment: HorizontalAlignment = .leading) -> some View {
         VStack(alignment: alignment, spacing: 2) {
             Text(title).font(.footnote).foregroundStyle(.secondary)
-            Text(PriceFormat.usdValue(value)).font(.headline).monospacedDigit().foregroundStyle(tint)
+            Text(PriceFormat.usdValue(value ?? 0)).font(.headline).monospacedDigit().foregroundStyle(tint)
+                .unreadFigure(value == nil)
         }
     }
 
-    /// One of the four categories under the balance, named as My Holdings' switch names it.
-    private func splitStat(_ category: HoldingCategory, _ value: Double, _ dot: Color) -> some View {
+    /// One of the four categories under the balance, named as My Holdings' switch names it. `value` nil: the category
+    /// isn't read for the wallet yet (a failed read included), so a placeholder (`unreadFigure`).
+    private func splitStat(_ category: HoldingCategory, _ value: Double?, _ dot: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 Circle().fill(dot).frame(width: 7, height: 7)
                 Text(verbatim: category.label).font(.caption).foregroundStyle(.secondary)
             }
-            Text(PriceFormat.usdValue(value))
+            Text(PriceFormat.usdValue(value ?? 0))
                 .font(.subheadline.weight(.medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+                .unreadFigure(value == nil)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -238,17 +255,18 @@ struct HomeView: View {
 
     // MARK: Allocation
 
-    private var allocationCard: some View {
+    /// Drawn once every part is read for the wallet (`HomeModel.split`), so no share is a part not read yet.
+    private func allocationCard(_ split: HomeModel.Split) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Allocation").font(.headline)
             AllocationDonut(
                 segments: [
-                    .init(label: tr("Spot"), value: model.spotValue, color: .allocationSpot),
-                    .init(label: tr("Perps"), value: model.perpsValue, color: .allocationPerps),
-                    .init(label: tr("Launchpad"), value: model.launchpadValue, color: .allocationLaunchpad),
-                    .init(label: tr("Moments"), value: model.momentsValue, color: .allocationMoments),
+                    .init(label: tr("Spot"), value: split.spot, color: .allocationSpot),
+                    .init(label: tr("Perps"), value: split.perps, color: .allocationPerps),
+                    .init(label: tr("Launchpad"), value: split.launch, color: .allocationLaunchpad),
+                    .init(label: tr("Moments"), value: split.moments, color: .allocationMoments),
                 ],
-                total: model.totalValue ?? 0
+                total: split.total
             )
         }
         .padding(16)
@@ -295,10 +313,14 @@ struct HomeView: View {
             }
             .pickerStyle(.segmented)
 
+            // A tab says it holds none only once its part of the wallet was read (`HomeReadState`): before, a loading row,
+            // or that it couldn't be read, with Retry.
             switch holdingTab {
             case .spot:
-                if model.holdings.isEmpty { holdingsEmpty("No spot balances", "Buy or swap a token and it appears here.") }
-                else {
+                if model.holdings.isEmpty {
+                    if model.reads.isRead(.spot) { holdingsEmpty("No spot balances", "Buy or swap a token and it appears here.") }
+                    else { holdingsUnreadRow(.spot, reading: "Reading your balances…") }
+                } else {
                     VStack(spacing: 0) {
                         ForEach(Array(model.holdings.enumerated()), id: \.element.id) { index, row in
                             NavigationLink(value: row) { HoldingRow(row: row, unverified: model.unverified.contains(row.id)) }.buttonStyle(.plain)
@@ -307,8 +329,10 @@ struct HomeView: View {
                     }
                 }
             case .perps:
-                if model.positions.isEmpty { holdingsEmpty("No open positions", "Open a perp from the Trade tab.") }
-                else {
+                if model.positions.isEmpty {
+                    if model.reads.isRead(.perps) { holdingsEmpty("No open positions", "Open a perp from the Trade tab.") }
+                    else { holdingsUnreadRow(.perps, reading: "Reading your positions…") }
+                } else {
                     VStack(spacing: 0) {
                         ForEach(Array(model.positions.enumerated()), id: \.element.id) { index, position in
                             Button { router.openPerp(id: position.perpId) } label: { PositionSummaryRow(position: position) }
@@ -318,8 +342,10 @@ struct HomeView: View {
                     }
                 }
             case .launchpad:
-                if model.launchHoldings.isEmpty { holdingsEmpty("No launch holdings", "Buy or launch a coin on the Launch tab.") }
-                else {
+                if model.launchHoldings.isEmpty {
+                    if model.reads.isRead(.launch) { holdingsEmpty("No launch holdings", "Buy or launch a coin on the Launch tab.") }
+                    else { holdingsUnreadRow(.launch, reading: "Reading your balances…") }
+                } else {
                     VStack(spacing: 0) {
                         let totals = model.totals
                         ForEach(Array(model.launchHoldings.enumerated()), id: \.element.id) { index, holding in
@@ -330,10 +356,14 @@ struct HomeView: View {
                             if index < model.launchHoldings.count - 1 { Divider().padding(.leading, 44) }
                         }
                     }
+                    // Read from the launchpads read so far, while one never has been: the rest are said to be missing.
+                    if model.reads.status(.launch) == .failed { holdingsRetryRow("Some launch coins couldn't be read just now — showing the last ones read.") }
                 }
             case .moments:
-                if model.momentRows.isEmpty { holdingsEmpty("No Moments yet", "Collect a Moment on the Moments tab and your editions and coins appear here.") }
-                else {
+                if model.momentRows.isEmpty {
+                    if model.reads.isRead(.moments) { holdingsEmpty("No Moments yet", "Collect a Moment on the Moments tab and your editions and coins appear here.") }
+                    else { holdingsUnreadRow(.moments, reading: "Reading your Moments…") }
+                } else {
                     VStack(spacing: 0) {
                         let totals = model.totals
                         ForEach(Array(model.momentRows.enumerated()), id: \.element.id) { index, row in
@@ -356,6 +386,36 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
+    }
+
+    /// A tab whose part of the wallet isn't read yet (`HomeReadState`): a loading row while its first read runs, and once
+    /// that failed, says so with Retry. Never "No … yet" for want of an answer.
+    @ViewBuilder private func holdingsUnreadRow(_ part: HomeReadState.Part, reading: LocalizedStringKey) -> some View {
+        if model.reads.status(part) == .failed {
+            holdingsRetryRow(HomeModel.unreadMessage(part))
+        } else {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(reading).font(.subheadline).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20)
+        }
+    }
+
+    /// A read that failed, said with Retry; a spinner in its place while Home reads again (the Retry, or its refresh).
+    private func holdingsRetryRow(_ message: LocalizedStringResource) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            InlineError(message: message)
+            Spacer(minLength: 8)
+            if model.loading {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("Retry") { Task { await model.load(env: env, address: session.address) } }
+                    .font(.footnote.weight(.semibold))
+            }
+        }
+        .padding(.vertical, 12)
     }
 }
 
@@ -604,6 +664,19 @@ extension View {
     func cardBackground() -> some View {
         background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
+
+    /// A figure not read yet (`unread`) — on Home, a part of the wallet; on My Launchpad, a stat, a holding's value or its
+    /// profit and loss: drawn as the placeholder shape of one, and said by VoiceOver to be loading, never as the "$0.00"
+    /// or "0" the shape is drawn from.
+    @ViewBuilder func unreadFigure(_ unread: Bool) -> some View {
+        if unread {
+            redacted(reason: .placeholder)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Loading…"))
+        } else {
+            self
+        }
+    }
 }
 
 /// A token as the Home screen shows it: price, movement, and the signed-in wallet's balance. `info` is the price read as
@@ -635,13 +708,26 @@ final class HomeModel {
         var valueUSD: Double? { priceUSD.map { units * $0 } }
     }
 
+    /// Home's four parts as the balance card splits them, once each of them can be told (`HomeReadState.showsValue`).
+    struct Split: Hashable {
+        let spot: Double
+        let perps: Double
+        let launch: Double
+        let moments: Double
+        var total: Double { spot + perps + launch + moments }
+    }
+
     private(set) var rows: [MarketRow] = []
     private(set) var launches: [Launch] = []
     private(set) var launchHoldings: [LaunchHolding] = []
     private(set) var positions: [PerpPosition] = []
+    /// The Perpl account's equity: 0 without an account, nil until it is read for the wallet (never taken for 0).
     private(set) var perpEquity: Double?
     /// The wallet's Moments stakes (editions, entitlements, coins), valued at each graduated pool's price.
     private(set) var momentRows: [MomentPortfolioRow] = []
+    /// How far each part of the wallet has been read for it (`HomeReadState`): a figure from a part not read yet is nil,
+    /// a placeholder on screen, and its holdings tab shows a loading row, or says it couldn't be read, with Retry.
+    private(set) var reads = HomeReadState()
     private(set) var loading = false
     private(set) var error: String?
     private(set) var updatedAt: Date?
@@ -650,6 +736,10 @@ final class HomeModel {
     private(set) var unverified: Set<Address> = []
     /// Whose data the model holds.
     private var loadedFor: Address?
+    /// The launchpads whose launches have been read at least once, whoever is signed in (as `launches`, which they fill):
+    /// one that couldn't be read keeps only the launches an earlier read found (`LaunchListing.keeping`), so the Launch
+    /// tab is read in full only once every launchpad has been.
+    @ObservationIgnored private var listedFactories: Set<Address> = []
     /// The registry taking in the coins of the launches and Moments the last load read (`DyorCoinsModel.ingest`).
     @ObservationIgnored private var ingesting: Task<Void, Never>?
 
@@ -669,20 +759,29 @@ final class HomeModel {
         return MomentsMath.coins(row.coinBalance) + MomentsMath.coins(owed)
     }
 
-    /// The tokens no other tab counts (`HomeTotals.spot`).
-    var spotValue: Double { totals.spot }
-    var perpsValue: Double { perpEquity ?? 0 }
+    // Each part's figure is nil until it can be told for the wallet (`HomeReadState.showsValue`): a placeholder on
+    // screen, never "$0.00" for want of an answer.
+
+    /// The tokens no other tab counts (`HomeTotals.spot`), once the Launch and Moments tabs are read too.
+    var spotValue: Double? { reads.showsValue(of: .spot) ? totals.spot : nil }
+    /// The Perpl account's equity, 0 without one; nil while it is unread, a failed read included.
+    var perpsValue: Double? { reads.showsValue(of: .perps) ? perpEquity : nil }
     /// Value of the launch coins the Launch tab lists. Feeds the allocation ring and total.
-    var launchpadValue: Double { totals.launch }
+    var launchpadValue: Double? { reads.showsValue(of: .launch) ? totals.launch : nil }
     /// Value of the wallet's Moment coins (held plus still owed) at Spot's price or each pool's live one; a Moment with no
     /// market yet counts at zero.
-    var momentsValue: Double { totals.moments }
-    var availableBalance: Double { spotValue }
-    var inUse: Double { perpsValue }
+    var momentsValue: Double? { reads.showsValue(of: .moments) ? totals.moments : nil }
+    var availableBalance: Double? { spotValue }
+    var inUse: Double? { perpsValue }
 
-    var totalValue: Double? {
-        rows.isEmpty ? nil : totals.total + perpsValue
+    /// The four parts' figures, once every one of them can be told: the allocation ring's shares and the total.
+    var split: Split? {
+        guard let spot = spotValue, let perps = perpsValue, let launch = launchpadValue, let moments = momentsValue else { return nil }
+        return Split(spot: spot, perps: perps, launch: launch, moments: moments)
     }
+
+    /// Everything the wallet holds: nil until every part is read for it, so a total short of one is never shown.
+    var totalValue: Double? { split?.total }
 
     /// Value-weighted 24h change of the wallet, when every priced holding has a change.
     var change24h: Double? {
@@ -747,7 +846,7 @@ final class HomeModel {
         defer { loading = false }
         // Another account: nothing of the previous one's may stay on screen, even when a read below fails.
         if address != loadedFor {
-            rows = []; launchHoldings = []; positions = []; perpEquity = nil; momentRows = []; updatedAt = nil
+            rows = []; launchHoldings = []; positions = []; perpEquity = nil; momentRows = []; updatedAt = nil; reads = HomeReadState()
             loadedFor = address
         }
         // The curated list plus anything the wallet has acquired (swapped into, launched), so held tokens like an
@@ -794,6 +893,16 @@ final class HomeModel {
         // of Top Tokens (IOST-12).
         if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }
         unverified = KnownTokenStore.unverified(owner: address)
+        // Each part read for the wallet, or not (`HomeReadState`). Its tokens need their balances and prices both; the
+        // launch coins their balances and prices, read over every launchpad's launches; Perps and Moments their own read.
+        // Set once, and only when it changed, so an unchanged refresh doesn't redraw what follows it.
+        listedFactories.formUnion(listing.factories.filter { listing.unread[$0] == nil })
+        var next = reads
+        next.record(.spot, answered: priceMap != nil && balanceMap != nil)
+        next.record(.perps, answered: perpState != nil)
+        next.record(.launch, answered: holdings != nil && priceMap != nil && listing.factories.allSatisfy(listedFactories.contains))
+        next.record(.moments, answered: momentState != nil)
+        if next != reads { reads = next }
         if let priceMap {
             let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
             rows = tokens.map { token in
@@ -806,9 +915,13 @@ final class HomeModel {
         if let priceError {
             error = describe(priceError)
         } else if balanceMap == nil {
-            error = tr("Your balances couldn't be read just now — showing the last ones read.")
+            // None read for the wallet yet: there are no last ones to show.
+            error = reads.isRead(.spot) ? tr("Your balances couldn't be read just now — showing the last ones read.") : tr("Your balances couldn't be read. Check your connection and try again.")
         } else if !listing.complete {
             error = tr("Some launch coins couldn't be read just now — showing the last ones read.")
+        } else if let part = reads.failed.first {
+            // A part not read for the wallet yet: its tab says so, with Retry, and the total waits for it.
+            error = tr(Self.unreadMessage(part))
         } else {
             error = nil
             updatedAt = .now
@@ -852,12 +965,23 @@ final class HomeModel {
         .sorted { ($0.valueUSD ?? 0) > ($1.valueUSD ?? 0) }
     }
 
-    /// The Perpl account's positions and equity: none without an account, nil when a read failed.
-    private func loadPerps(env: AppEnvironment, address: Address?) async -> (positions: [PerpPosition], equity: Double?)? {
-        guard let address else { return ([], nil) }
+    /// What a part's holdings tab says when no read of it has answered for the wallet and the last one failed
+    /// (`HomeReadState.Status.failed`); the header's warning says it too.
+    static func unreadMessage(_ part: HomeReadState.Part) -> LocalizedStringResource {
+        switch part {
+        case .spot: return LocalizedStringResource("Your tokens couldn't be read just now.", comment: "Home, My Holdings' Spot tab before anything was read: the wallet's token balances or their prices couldn't be read. A Retry button follows")
+        case .perps: return LocalizedStringResource("Your Perpl account couldn't be read just now.", comment: "Home, My Holdings' Perps tab before anything was read: the wallet's Perpl trading account (equity and positions) couldn't be read. A Retry button follows")
+        case .launch: return LocalizedStringResource("Your launch coins couldn't be read just now.", comment: "Home, My Holdings' Launch tab before anything was read: the launchpad coins the wallet holds couldn't be read. A Retry button follows")
+        case .moments: return LocalizedStringResource("Your Moments couldn't be read just now.", comment: "Home, My Holdings' Moments tab before anything was read: the wallet's Moments editions and coins couldn't be read. A Retry button follows")
+        }
+    }
+
+    /// The Perpl account's positions and equity: none and 0 without an account, nil when a read failed (never read as 0).
+    private func loadPerps(env: AppEnvironment, address: Address?) async -> (positions: [PerpPosition], equity: Double)? {
+        guard let address else { return ([], 0) }
         let found: PerpAccount?
         do { found = try await env.perpl.account(address) } catch { return nil }
-        guard let account = found else { return ([], nil) }
+        guard let account = found else { return ([], 0) }
         guard let markets = try? await env.perpl.markets(), let positions = try? await env.perpl.positions(account, markets: markets) else { return nil }
         let equity = Amount.units(account.balance, decimals: Perpl.collateralDecimals) + positions.reduce(0) { $0 + $1.unrealized }
         return (positions, equity)

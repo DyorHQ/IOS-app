@@ -39,7 +39,8 @@ final class AssetsModel {
     /// balance): a token it holds may be missing, which the card says, with Retry, rather than pass the list off as
     /// everything the wallet holds.
     private(set) var complete = true
-    /// The wallet's transfer history was still filling in when the list was read (`HistoryModel`): tokens found there
+    /// The wallet's transfer history — the transfers into it, the only scan the list is read from
+    /// (`WalletHistoryScans.holdings`) — was still filling in when the list was read (`HistoryModel`): tokens found there
     /// join the list once it has, and the card says so rather than "couldn't be read".
     private(set) var historyFilling = false
     private(set) var historyProgress = 0.0
@@ -108,8 +109,8 @@ final class AssetsModel {
         pricesFailed = failed
         unpriced = unpricedHeld
         complete = (read?.complete ?? false) && retired.complete
-        historyFilling = !(read?.complete ?? false) && env.history.filling
-        historyProgress = env.history.snapshot.progress
+        historyFilling = !(read?.complete ?? false) && env.history.snapshot.filling(since: nil, scans: WalletHistoryScans.holdings)
+        historyProgress = env.history.snapshot.progress(since: nil, scans: WalletHistoryScans.holdings)
         balancesUnread = read == nil
         tokens = ranked
 

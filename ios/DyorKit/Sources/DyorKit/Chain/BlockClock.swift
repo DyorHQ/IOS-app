@@ -11,7 +11,7 @@ import Foundation
 /// filters (24H, 7D, 30D) and every time estimated from a block number (`time(of:anchor:secondsPerBlock:)`). Scan windows
 /// that are really block budgets keep their block counts, under names that say so
 /// (`WalletTokenDiscovery.defaultWindowBlocks`, `TokenActivityService.defaultLookbackBlocks`,
-/// `LaunchpadService.recentActivityBlocks`, `LaunchpadService.holderScanBlocks`, `SwapHistoryService.Window.allBlocks`).
+/// `LaunchpadService.holderScanBlocks`, `SwapHistoryService.Window.allBlocks`).
 public actor BlockClock {
     /// The rate used until a measurement answers, and whenever one fails: Monad's average over a million blocks
     /// (measured 2026-09-29).
@@ -48,6 +48,11 @@ public actor BlockClock {
 
     /// Whether the rate came from the chain this session, rather than the fallback.
     public var isMeasured: Bool { measured != nil }
+
+    /// The rate known now, with no read: the one measured this session, else `fallbackSecondsPerBlock`. Never starts a
+    /// measurement — for what must not wait on the network (the wallet's history read from the device at launch, which
+    /// is timed again once a measurement answers).
+    public var knownSecondsPerBlock: Double { measured ?? Self.fallbackSecondsPerBlock }
 
     /// Seconds per block: measured once a session from two block headers and kept; the fallback while a measurement
     /// fails, measured again on the first call `retryAfter` seconds later. Callers that arrive while a measurement is
@@ -112,6 +117,13 @@ public actor BlockClock {
     public static func time(of block: UInt64, anchor: BlockHeader, secondsPerBlock: Double) -> Date {
         let back = Double(anchor.number > block ? anchor.number - block : 0) * secondsPerBlock
         return Date(timeIntervalSince1970: TimeInterval(anchor.timestamp) - back)
+    }
+
+    /// When `log`'s block was mined: the block's own timestamp when the endpoint gave it (`Log.blockTimestamp`), exact;
+    /// else estimated from `anchor` at `secondsPerBlock` (`time(of:anchor:secondsPerBlock:)`).
+    public static func time(of log: Log, anchor: BlockHeader, secondsPerBlock: Double) -> Date {
+        if let timestamp = log.blockTimestamp { return Date(timeIntervalSince1970: TimeInterval(timestamp)) }
+        return time(of: log.blockNumber, anchor: anchor, secondsPerBlock: secondsPerBlock)
     }
 
     /// The first estimate of `block(at:)`: the block `target` seconds (since 1970) falls in, counting back from `anchor`.

@@ -41,9 +41,13 @@ final class CreatorEscrowTests: XCTestCase {
         app.appendPathComponent("DyorHQ")
         guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let source = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadProfileView.swift"), encoding: .utf8)
-        let read = try XCTUnwrap(source.range(of: "let escrowReads = await env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)"))
-        let guardEmpty = try XCTUnwrap(source.range(of: "guard !launches.isEmpty else {"))
-        XCTAssertLessThan(read.lowerBound, guardEmpty.lowerBound, "the escrows are read even when no launch could be")
+        // The escrows are read whatever the launches read, beside the holdings (which need a launch to read): nothing
+        // returns early on an empty listing before them.
+        let read = try XCTUnwrap(source.range(of: "async let escrowRead = env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)"))
+        let holdings = try XCTUnwrap(source.range(of: "async let holdingsRead: LaunchHoldings? = launches.isEmpty ? nil : (try? await env.launchpad.holdings(of: launches, account: address))"))
+        XCTAssertLessThan(read.lowerBound, holdings.lowerBound, "the escrows are read even when no launch could be")
+        XCTAssertFalse(source.contains("guard !launches.isEmpty"), "an empty listing is unread, never a reason to skip a read")
+        XCTAssertTrue(source.contains("let escrowReads = await escrowRead"))
         XCTAssertTrue(source.contains("if escrowReads.contains(where: { $0.balances == nil }) { unread = true }"))
         XCTAssertTrue(source.contains("let pairTokens = Set(launches.map(\\.pairToken)).union(Token.launchpadPairAssets).union([Monad.native])"))
         XCTAssertFalse(source.contains("pairsByEscrow"), "never only the pair assets of the created coins read")
@@ -105,12 +109,37 @@ final class CreatorEscrowTests: XCTestCase {
         let source = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadProfileView.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("LaunchpadEscrowRead.keeping(escrowReads, previous: escrowsFor == address ? lastEscrowReads : [])"))
         XCTAssertTrue(source.contains("for holding in escrows where holding.current && !holding.balances.isEmpty"), "Claim All plans only escrows read in this load")
+        // And only holder rewards read in this load: its plan, its count, its detail list and what it forgets once settled
+        // are all `claimAllRewardClaimables`, never every reward listed (one kept from an earlier read among them).
+        XCTAssertTrue(source.contains("var claimAllRewardClaimables: [RewardClaim] { rewardClaimables.filter(\\.current) }"))
+        XCTAssertTrue(source.contains("for reward in claimAllRewardClaimables { steps += await env.launchpad.claimRewardsPlan("))
+        XCTAssertFalse(source.contains("for reward in rewardClaimables { steps +="))
+        XCTAssertTrue(source.contains("var claimAllCount: Int { claimAllCreatorClaimables.count + claimAllRewardClaimables.count }"))
+        XCTAssertTrue(source.contains("ForEach(model.claimAllRewardClaimables) { reward in DetailRow("))
+        XCTAssertTrue(source.contains("model.claimedRewards(model.claimAllRewardClaimables.map(\\.launch.token), for: session.address)"))
         XCTAssertTrue(source.contains("Creator fees couldn't be read just now."))
         XCTAssertFalse(source.contains("$0.balances ?? EscrowBalances(native: 0, tokens: [:])"), "a failed read is never zero")
-        // A wallet change clears every figure of the previous wallet, and only the newest load, not cancelled, publishes.
-        XCTAssertTrue(source.contains("if shownFor != address {\n            positions = []; created = []; activity = []; incomplete = nil"))
+        // A wallet change clears every figure of the previous wallet (in the load, and as soon as the wallet signed in changes,
+        // `follow`), and only the newest load, not cancelled, publishes.
+        XCTAssertTrue(source.contains("if shownFor != address {\n            reset()\n            shownFor = address"))
+        XCTAssertTrue(source.contains("guard address != shownFor else { return }\n        loads += 1\n        reset()"))
+        let reset = try XCTUnwrap(source.range(of: "private func reset() {"))
+        let resetBody = String(source[reset.upperBound...]).components(separatedBy: "\n    }\n").first ?? ""
+        for field in ["positions = nil", "created = []", "escrows = []", "activity = []", "shownFor = nil", "held = nil", "lastEscrowReads = []", "escrowsFor = nil", "income = nil", "spotUSD = [:]", "history = .empty"] {
+            XCTAssertTrue(resetBody.contains(field), field)
+        }
         XCTAssertTrue(source.contains("func current() -> Bool { load == loads && !Task.isCancelled }"))
-        XCTAssertGreaterThanOrEqual(source.components(separatedBy: "guard current() else { return }").count - 1, 6, "checked after every read")
+        // The listing, the holdings, the escrows and the prices: each checked after it is read. (The per-coin trade scans
+        // and the activity scan that followed are gone: both come from the wallet's history.)
+        let load = try XCTUnwrap(source.range(of: "func load(env: AppEnvironment, address: Address?) async {"))
+        let loadBody = String(source[load.upperBound...]).components(separatedBy: "private func takeHoldings(").first ?? ""
+        XCTAssertEqual(loadBody.components(separatedBy: "guard current() else { return }").count - 1, 4, "checked after every read")
+        for read in ["let listing = await env.launchpad.launchListing(limit: 100)\n        secondsPerBlock = await pace\n        guard current() else { return }",
+                     "let read = await holdingsRead\n        guard current() else { return }",
+                     "let escrowReads = await escrowRead\n        guard current() else { return }",
+                     "let priceMap = try? await env.prices.prices(for: priceTokens)\n        guard current() else { return }"] {
+            XCTAssertTrue(loadBody.contains(read), read)
+        }
         XCTAssertTrue(source.contains("model.claimed([asset], for: session.address)"), "a claimed balance is forgotten")
         XCTAssertTrue(source.contains("asset.current ? \"Creator fees\" : \"Creator fees (as last read)\""))
     }

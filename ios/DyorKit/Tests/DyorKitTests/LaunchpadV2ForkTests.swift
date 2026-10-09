@@ -155,13 +155,8 @@ final class LaunchpadV2ForkTests: V2ForkCase {
         let after = try await info(fork, wallet.address)
         XCTAssertEqual(after.launchCount, terms.launchCount + cases.count)
 
-        // The feed and the wallet's history decode the v2 events: every launch, the wallet's fills and its claims.
+        // The wallet's history decodes the v2 events: the wallet's fills and its claims.
         let lookback = try await latest().number - start + 1
-        let feed = try await fork.service.activity(limit: 100, lookbackBlocks: lookback, launches: launches)
-        let launched = Set(feed.compactMap { item -> Address? in if case .launch(let token, _, _) = item.kind { return token }; return nil })
-        XCTAssertEqual(launched, Set(launches.map(\.token)))
-        let traded = feed.filter { if case .trade = $0.kind { return true }; return false }
-        XCTAssertEqual(traded.count, 2 * cases.count + cases.filter { $0.developerBuy > 0 }.count, "a buy and a sell on each curve, and each developer buy")
         let history = await fork.service.walletHistory(wallet: wallet.address, lookbackBlocks: lookback, curves: Set(launches.map(\.curve)))
         XCTAssertEqual(history.fills.filter(\.isBuy).count, cases.count)
         XCTAssertEqual(history.fills.filter { !$0.isBuy }.count, cases.count)

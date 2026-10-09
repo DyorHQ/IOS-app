@@ -24,36 +24,37 @@ public extension MomentsService {
                             secondsPerBlock: secondsPerBlock, factory: addresses.factory)
     }
 
-    /// Pure half of `history`, so the parsers can be tested on canned logs. Each record's time is estimated from `anchor`
-    /// at `secondsPerBlock`; `factory` tags every record with its cohort (Moment ids restart at 1 on every factory).
+    /// Pure half of `history`, so the parsers can be tested on canned logs. Each record's time is its block's own when the
+    /// log carries it (`Log.blockTimestamp`), else estimated from `anchor` at `secondsPerBlock`; `factory` tags every
+    /// record with its cohort (Moment ids restart at 1 on every factory).
     nonisolated static func history(collected: [Log], claimed: [Log], withdrawn: [Log], feesWithdrawn: [Log], published: [Log], anchor: BlockHeader, secondsPerBlock: Double,
                                     factory: Address = .zero) -> MomentsAccountHistory {
-        func time(anchor: BlockHeader, block: UInt64) -> Date { Self.time(anchor: anchor, block: block, secondsPerBlock: secondsPerBlock) }
+        func time(_ log: Log) -> Date { BlockClock.time(of: log, anchor: anchor, secondsPerBlock: secondsPerBlock) }
         var collects: [MomentCollectRecord] = []
         for log in collected {
             guard let e = MomentsABI.collected(log) else { continue }
-            collects.append(MomentCollectRecord(hash: log.transactionHash, block: log.blockNumber, time: time(anchor: anchor, block: log.blockNumber), momentId: e.momentId, collector: e.collector,
+            collects.append(MomentCollectRecord(hash: log.transactionHash, block: log.blockNumber, time: time(log), momentId: e.momentId, collector: e.collector,
                                                 gross: e.gross, editions: Int(clamping: e.editions), firstRank: Int(clamping: e.firstRank), entitlement: e.entitlement,
                                                 reserveIn: e.reserveIn, creatorIn: e.creatorIn, platformIn: e.platformIn, factory: factory))
         }
         var claims: [MomentClaimRecord] = []
         for log in claimed {
             guard let e = MomentsABI.claimed(log) else { continue }
-            claims.append(MomentClaimRecord(hash: log.transactionHash, block: log.blockNumber, time: time(anchor: anchor, block: log.blockNumber), momentId: e.momentId, collectorAmount: e.collectorAmount, creatorAmount: e.creatorAmount, factory: factory))
+            claims.append(MomentClaimRecord(hash: log.transactionHash, block: log.blockNumber, time: time(log), momentId: e.momentId, collectorAmount: e.collectorAmount, creatorAmount: e.creatorAmount, factory: factory))
         }
         var withdrawals: [MomentWithdrawalRecord] = []
         for log in withdrawn {
             guard let e = MomentsABI.withdrawn(log) else { continue }
-            withdrawals.append(MomentWithdrawalRecord(hash: log.transactionHash, block: log.blockNumber, time: time(anchor: anchor, block: log.blockNumber), momentId: e.momentId, kind: .proceeds, amount: e.amount, factory: factory))
+            withdrawals.append(MomentWithdrawalRecord(hash: log.transactionHash, block: log.blockNumber, time: time(log), momentId: e.momentId, kind: .proceeds, amount: e.amount, factory: factory))
         }
         for log in feesWithdrawn {
             guard let e = MomentsABI.withdrawn(log) else { continue }
-            withdrawals.append(MomentWithdrawalRecord(hash: log.transactionHash, block: log.blockNumber, time: time(anchor: anchor, block: log.blockNumber), momentId: e.momentId, kind: .poolFees, amount: e.amount, factory: factory))
+            withdrawals.append(MomentWithdrawalRecord(hash: log.transactionHash, block: log.blockNumber, time: time(log), momentId: e.momentId, kind: .poolFees, amount: e.amount, factory: factory))
         }
         var publishes: [MomentPublishRecord] = []
         for log in published {
             guard let e = MomentsABI.published(log) else { continue }
-            publishes.append(MomentPublishRecord(hash: log.transactionHash, block: log.blockNumber, time: time(anchor: anchor, block: log.blockNumber), momentId: e.momentId, coin: e.coin, factory: factory))
+            publishes.append(MomentPublishRecord(hash: log.transactionHash, block: log.blockNumber, time: time(log), momentId: e.momentId, coin: e.coin, factory: factory))
         }
         return MomentsAccountHistory(
             collects: collects.sorted { $0.block > $1.block },
