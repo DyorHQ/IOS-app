@@ -147,13 +147,36 @@ public actor HistoryStore {
         return loaded
     }
 
+    /// The chain head, from the first endpoint that answers (`LogsRouter.latest`); nil when none does. A round of every
+    /// scan reads it once and hands it to each (`refresh(_:wallet:budget:at:)`, `WalletHistoryService.refresh`).
+    public func latest() async -> BlockHeader? {
+        await router.latest()
+    }
+
     /// Reads what `scan` is missing for `wallet` — the blocks since the newest read, then the gaps back to the floor,
     /// newest first — within `budget`, and returns the entry as it then stands. A refresh already running for the same
-    /// scan and wallet is joined, not doubled.
+    /// scan and wallet is joined, not doubled. The head is read first (`latest`).
     public func refresh(_ scan: HistoryScan, wallet: Address, budget: LogsBudget) async -> HistoryEntry {
+        await refresh(scan, wallet: wallet, budget: budget, head: .read)
+    }
+
+    /// `refresh` up to `latest`, the head the caller read for a round of every scan (`WalletHistoryService.refresh`): five
+    /// scans each reading it were five identical requests to the logs endpoint, outside the gate, beside the scans' own.
+    /// Nil: the head couldn't be read, so the chain wasn't reached and nothing moves, as when the refresh reads it itself.
+    public func refresh(_ scan: HistoryScan, wallet: Address, budget: LogsBudget, at latest: BlockHeader?) async -> HistoryEntry {
+        await refresh(scan, wallet: wallet, budget: budget, head: .given(latest))
+    }
+
+    /// Where a refresh's head comes from: read by the refresh, or given by its caller (nil: it couldn't be read).
+    private enum Head: Sendable {
+        case read
+        case given(BlockHeader?)
+    }
+
+    private func refresh(_ scan: HistoryScan, wallet: Address, budget: LogsBudget, head: Head) async -> HistoryEntry {
         let key = Self.key(scan, wallet)
         if let running = refreshing[key] { return await running.value }
-        let task = Task { await self.read(scan, wallet: wallet, key: key, budget: budget) }
+        let task = Task { await self.read(scan, wallet: wallet, key: key, budget: budget, head: head) }
         refreshing[key] = task
         let entry = await task.value
         refreshing[key] = nil
@@ -169,7 +192,7 @@ public actor HistoryStore {
         if let directory { try? FileManager.default.removeItem(at: directory.appendingPathComponent(wallet.hex.lowercased())) }
     }
 
-    private func read(_ scan: HistoryScan, wallet: Address, key: String, budget: LogsBudget) async -> HistoryEntry {
+    private func read(_ scan: HistoryScan, wallet: Address, key: String, budget: LogsBudget, head given: Head) async -> HistoryEntry {
         var entry = cached(scan, wallet: wallet)
         let erasure = erasures
         // Keeps the entry, in memory and on disk, unless the wallet was forgotten meanwhile.
@@ -178,7 +201,13 @@ public actor HistoryStore {
             entries[key] = entry
             save(entry, scan, wallet)
         }
-        guard let latest = await router.latest() else {
+        // The head: read now, or the one the round read for every scan.
+        let header: BlockHeader?
+        switch given {
+        case .read: header = await router.latest()
+        case .given(let read): header = read
+        }
+        guard let latest = header else {
             entry.reachedChain = false
             if erasures == erasure { entries[key] = entry }
             return entry
@@ -197,11 +226,12 @@ public actor HistoryStore {
             let left = budget.requests - requests
             return left > 0 && seconds > 0 ? LogsBudget(requests: left, seconds: seconds) : nil
         }
-        // The blocks since the newest read, with a little overlap, first — unless what was read lies below the
-        // window now (the app unopened for longer than it), when the gaps below read down from the head instead.
+        // Every read is the history's, at the gate (`LogsGate.Lane.history`): behind the screen the user is looking at, ahead
+        // of the background. The blocks since the newest read, with a little overlap, first — unless what was read lies
+        // below the window now (the app unopened for longer than it), when the gaps below read down from the head instead.
         if let newest = entry.covered.last, newest.upperBound < head, newest.upperBound >= floor, let budget = remaining() {
             let from = newest.upperBound > Self.overlap ? newest.upperBound - Self.overlap : 0
-            let read = await router.read(scan.query, from: max(from, floor), to: head, order: .ascending, budget: budget)
+            let read = await router.read(scan.query, from: max(from, floor), to: head, order: .ascending, budget: budget, lane: .history)
             requests += read.requests
             entry.merge(read)
         }
@@ -211,7 +241,7 @@ public actor HistoryStore {
         entry.floor = floor
         for gap in entry.gaps(head: head, floor: floor) {
             guard let budget = remaining(), !Task.isCancelled else { break }
-            let read = await router.read(scan.query, from: gap.lowerBound, to: gap.upperBound, order: .descending, budget: budget)
+            let read = await router.read(scan.query, from: gap.lowerBound, to: gap.upperBound, order: .descending, budget: budget, lane: .history)
             requests += read.requests
             entry.merge(read)
             keep(entry)

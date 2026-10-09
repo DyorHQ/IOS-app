@@ -53,7 +53,7 @@ News and Get Help; Home's header opens Profile and Notifications (`App/Router.sw
 
 | Screen | Reads | Writes | Source |
 | --- | --- | --- | --- |
-| Portfolio (menu) | Volume, fees and P&L per section: Spot from the wallet's `Transfer` logs (up to 90 days), Perps from Perpl's signed fills and position history, Launch from own curve fills and claims, Moments from the Moments logs (live and retired cohorts), Bridge from the local `BridgeStore`. Assets: every held ERC-20 (Multicall3 balances, discovery from `Transfer` logs) and ERC-721 (`Transfer` logs from block 0, `ownerOf`, `tokenURI`). | None; rows navigate to their section. | `Portfolio/PortfolioModel.swift`, `Portfolio/AssetsModel.swift`, `Services/WalletNFTDiscovery.swift` |
+| Portfolio (menu) | Volume, fees and P&L per section: Spot from the wallet's `Transfer` logs (up to 90 days), Perps from Perpl's signed fills and position history, Launch from own curve fills and claims, Moments from the Moments logs (live and retired cohorts), Bridge from the local `BridgeStore`. Assets: every held ERC-20 (Multicall3 balances, discovery from `Transfer` logs) and ERC-721 (the four-topic `Transfer` logs among the transfers into the wallet its history store holds, then `ownerOf`, `tokenURI`; no scan of their own). | None; rows navigate to their section. | `Portfolio/PortfolioModel.swift`, `Portfolio/AssetsModel.swift`, `Services/WalletNFTDiscovery.swift` |
 | Profile (header) | The wallet's `profiles` row (PostgREST), Recent Activity (local log merged with launchpad activity and 7-day swap scans), Perpl trading status, price-alert count, the RPC host. | Send (native transfer or ERC-20 `transfer`; the recipient is checked with `eth_getCode`). DyorHQ Social: sign in (`wallet-auth`), upsert `profiles` (handle, display name, bio), avatar to the `avatars` bucket. Settings mirrored to `user_settings`. Perpl: enroll or remove the trading key, enable one-click trading. Export: the Keychain key behind Face ID, Privy's export page in a `WKWebView`, or a passkey account's recovery phrase. Delete account: the `delete-account` Edge Function (a Privy token, or the wallet session for an email + password account), the `email_accounts` row, then everything on the device. Sign-out closes the `sessions` row. | `Profile/ProfileView.swift`, `Profile/Settings.swift`, `Profile/RecentActivityView.swift`, `Profile/AccountDeletion.swift`, `Social/SocialSession.swift`, `Social/SocialProfileView.swift`, `Wallet/WalletExportView.swift` |
 | Notifications (bell) | The in-app center (`NotificationHub`, on device). While the app is open, `AlertCenter` checks price alerts every 30 s against `PriceService` and open Perpl positions for margin warnings (`PerpRisk`), fills and closes. There is no push server: local notifications only. | Local `UNUserNotificationCenter` posts; the center and price alerts are mirrored to the `notifications` and `alerts` tables. | `Notifications/*.swift`, `Wallet/Notifications.swift`, `Wallet/PriceAlerts.swift`, `Services/Notifications/` |
 | News (menu) | The public RSS feeds of CoinDesk, Cointelegraph, Decrypt, The Defiant and The Block, fetched directly; articles open on the publisher's site. | None. | `News/NewsView.swift`, `Services/News/NewsService.swift` |
@@ -118,7 +118,14 @@ left as a gap rather than failing the whole read). Range sizes per endpoint (`RP
 10,000 logs per answer); `rpc3` / `rpc4` 1,000 blocks; a local fork 50,000. Every scan therefore goes to `rpc1`
 (`LaunchpadService.defaultLogsRPC`), filtered by a contract or by the wallet's own address as a topic. Windows in the
 code: curve trades 24 hours (`BlockClock` turns it into blocks), launchpad activity 1,512,000 blocks (about 5.3 days),
-holder counts and wallet token discovery 6,480,000 blocks (about 22.7 days), swap history up to 90 days, Moments
-history from each cohort's deploy block, NFT discovery and the venue token list from genesis (the latter in
-5,000,000-block segments, checkpointed). Monad's pace is measured from block headers rather than assumed
+a launch coin's holders from its launch and a Moment coin's from its publish, wallet token discovery 6,480,000 blocks
+(about 22.7 days), swap history up to 90 days, Moments history from each cohort's deploy block, and the venue token list
+from genesis (in 5,000,000-block segments, checkpointed). The wallet's NFTs come from its history store's transfers in,
+with no scan of their own. A screen's scan wider than its budget reads newest first (`RPCClient.newestLogs`,
+`chunkedLogsReport(order: .descending)`) and says when it stopped short: a holder count is then a minimum ("12+", with a
+plain note rather than an error, since no read can do better for a coin older than the budget reaches), and the 24h
+volume of the trades read too. A range refused for ending past the answering node's head is asked again after a pause
+(`LogsRouter.headPause`), and the head of those windows is read from the logs endpoints themselves. The NFTs list says how
+far back the transfers into the wallet reach ("Only NFTs received since …") and counts what it lists as a minimum. Monad's
+pace is measured from block headers rather than assumed
 (`Chain/BlockClock.swift`).

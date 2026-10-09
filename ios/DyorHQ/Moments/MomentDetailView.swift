@@ -19,6 +19,12 @@ struct MomentDetailView: View {
     @State private var quantity = 1
     @State private var nftHolders: (holders: Int, topHolder: Address?, topCount: Int)?
     @State private var holderStats: MomentHolderStats?
+    /// The latest read of `holderStats` failed: the last good statistics stay, and the holders section says so.
+    @State private var holderStatsUnread = false
+    /// The page's reads asked for after the first — Retry, an action done — which key its read (`.task(id:)`): a new one
+    /// cancels the one under way, and closing the page cancels it, rather than a `Task` of its own reading on after the
+    /// page closed (the coin's holders are a scan of up to 80 requests).
+    @State private var reloads = 0
     @State private var loadError: String?
     @State private var action: MomentAction?
     @Environment(\.openURL) private var openURL
@@ -67,7 +73,7 @@ struct MomentDetailView: View {
         }
         .refreshable { await load() }
         .task { await clock.run() }
-        .task { await load() }
+        .task(id: reloads) { await load() }
         .task(id: "\(quantity)-\(info.ledger.reserve)-\(info.state.rawValue)") { await refreshQuote() }
         .sheet(item: $action) { which in sheet(for: which) }
     }
@@ -358,10 +364,25 @@ struct MomentDetailView: View {
                 LabeledContent("Largest", value: tr("\(top.short) · \(count) editions"))
             }
             if info.graduated {
-                LabeledContent("Coin holders", value: holderStats.map { "\($0.holders)" } ?? "—")
-                if let stats = holderStats, stats.holders > 0 {
+                // A read that stopped short of the publish gives the holders as a minimum ("+", and "—" for a minimum of
+                // none), and the figures only the whole history gives — the top wallet and its share, the pool's share —
+                // not at all (`MomentHolderStats.complete`).
+                LabeledContent("Coin holders", value: coinHoldersText)
+                if let stats = holderStats, stats.complete, stats.holders > 0 {
                     LabeledContent("Top wallet", value: tr("\(stats.topHolder?.short ?? "—") · \(NumberStyle.basisPoints(stats.topHolderBps)) of circulating"))
                     LabeledContent("In the pool", value: NumberStyle.basisPoints(stats.poolBps))
+                }
+                if holderStatsUnread {
+                    HStack(alignment: .firstTextBaseline) {
+                        InlineError(message: "This coin's holders couldn't be read just now.")
+                        Spacer(minLength: 8)
+                        Button("Retry") { reloads += 1 }.font(.footnote.weight(.semibold))
+                    }
+                } else if let stats = holderStats, !stats.complete {
+                    // A coin older than one read reaches back (80 requests: about two weeks of a Moment's age on the widest
+                    // endpoint) always gets a minimum: no failure, and no Retry that could ever do better.
+                    Paragraph("Counted from this coin's most recent transfers only, so there may be more holders.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
         }
@@ -493,10 +514,8 @@ struct MomentDetailView: View {
     }
 
     private func finished() {
-        Task {
-            await load()
-            onChanged()
-        }
+        reloads += 1
+        onChanged()
     }
 
     // MARK: Loading
@@ -513,12 +532,28 @@ struct MomentDetailView: View {
             nftHolders = holders
             self.account = account
             loadError = nil
-            if info.graduated {
-                holderStats = await env.moments.holderStats(coin: m.coin, publishedAt: m.publishedAt)
-            }
+            if info.graduated { await loadHolderStats() }
         } catch {
             loadError = describe(error)
         }
+    }
+
+    /// The coin's holders as the section shows them: "—" until read, a minimum ("+") when not every transfer since the
+    /// publish was (`MomentHolderStats.complete`), and "—" for a minimum of none, which says nothing ("0+" read as no
+    /// holders).
+    private var coinHoldersText: String {
+        guard let stats = holderStats else { return "—" }
+        if stats.complete { return "\(stats.holders)" }
+        return stats.holders > 0 ? "\(stats.holders)+" : "—"
+    }
+
+    /// The coin's holder statistics (`MomentsService.holderStats`, its transfers read newest first): a read that failed
+    /// keeps the last good statistics, and the holders section says so, with Retry.
+    private func loadHolderStats() async {
+        let stats = await env.moments.holderStats(coin: m.coin, publishedAt: m.publishedAt)
+        guard !Task.isCancelled else { return }
+        if let stats { holderStats = stats }
+        holderStatsUnread = stats == nil
     }
 
     private func loadAccount() async throws -> MomentAccountView? {

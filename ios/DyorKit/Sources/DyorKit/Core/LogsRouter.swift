@@ -20,7 +20,9 @@ import Foundation
    1. One logs router, every endpoint (this file). A scan is a window of blocks; the router cuts it into ranges of
       what the endpoint answers (learned from its refusals and remembered for a day), sends them in batches, and
       moves to the next endpoint when one throttles or fails. Every `eth_getLogs` in the app goes through one gate
-      (`LogsGate`): a few in flight, a few a second, so the app never throttles itself. A scan has a budget of
+      (`LogsGate`): a few in flight, a few a second, so the app never throttles itself; a screen's requests go through
+      it first, then the history's (or the history's first, once one has waited a moment), then the background's, one
+      at a time. A scan has a budget of
       requests and seconds; past it, the caller gets what was read and exactly which blocks it covers (`LogsRead`),
       never a part passed off as the whole. A range refused for how many logs it holds is split, not taken for the
       endpoint's span.
@@ -212,34 +214,183 @@ public struct UserDefaultsLogsCapabilityStore: LogsCapabilityStore, @unchecked S
 /// their starts, so forty scans opening at once never throttle the app on an endpoint that counts requests a second per
 /// client. Four a second: rpc2 answered 260 requests of six ranges at that pace with no refusal (measured 2026-10-08),
 /// and refused one in five at eleven a second.
+///
+/// Requests wait in lanes (`Lane`), and a free slot goes to the request waiting longest in the highest lane: a screen the
+/// user is looking at first, then the wallet's history rounds, then the background (the swap picker's venue list, read
+/// from genesis), which never holds more than `backgroundSlots` of the slots, however many are free. In build 22 and
+/// earlier the gate was first come first served: a screen's scan of five requests queued behind the history's twenty
+/// and the venue list's four, 10–25 s, and the venue list's 5,600 requests from genesis took half the gate from a fresh
+/// install's history, doubling its first fill. Now a screen's next request is through as soon as a slot frees (a
+/// request answers in well under a second), and the venue list reads one request at a time, only while nothing else
+/// waits.
+///
+/// The history's lane ages: once its oldest request has waited `historyWait` (2 s), the next free slot is its, ahead of
+/// a screen's. A screen's scan asks four requests at once and queues its next before a slot frees, so with priority alone
+/// a long one — an older coin's Launch page, 80 requests and more, about 22 s; a Retry tapped again and again — held
+/// every history round back for as long as it read, and a minute and a half of it aged the history past what counts as
+/// up to now (`HistoryCadence.freshFor`): screens showing final figures went back to "Reading your history… 99%" until
+/// the round got through. A screen's scan now gives up at most one start in eight (one every 2 s, at four a second) while
+/// the history waits.
+///
+/// A request is let through only as it starts — a slot free and the space after the last start passed — so one waiting
+/// holds neither. One whose task is cancelled while it waits (its screen closed) leaves the queue at once and takes
+/// nothing: no slot, and no start the next request must keep its space from. One cancelled the moment it was let
+/// through, before its request went out, gives both back (`enter`). A closed screen costs the scans still reading no
+/// time at the gate, where each queued request used to send a request that failed at once, a slot and a quarter of a
+/// second each.
 public actor LogsGate {
-    public static let shared = LogsGate(inFlight: 4, interval: .milliseconds(250))
+    /// Where a request waits: a slot goes to `interactive` first, then `history`, then `background`.
+    public enum Lane: Sendable, Hashable {
+        /// A scan a screen the user is looking at waits for: every `chunkedLogsReport`, unless it says otherwise.
+        case interactive
+        /// The wallet's history rounds (`HistoryStore`, `WalletHistoryService.refresh`): what every history screen fills
+        /// in from, behind the screen in front of the user — until one has waited `historyWait`.
+        case history
+        /// Work nobody is waiting on (`VenueTokensService`'s venue list from genesis): behind everything, and never more
+        /// than `backgroundSlots` of the slots at once.
+        case background
+
+        /// The lanes in the order a free slot goes to them.
+        static let byPriority: [Lane] = [.interactive, .history, .background]
+    }
+
+    /// A slot taken (`enter`): handed back with `leave` once the request is answered.
+    public struct Slot: Sendable {
+        public let lane: Lane
+    }
+
+    public static let shared = LogsGate(inFlight: 4, interval: .milliseconds(250), backgroundSlots: 1)
+
+    /// A request waiting: the order it came in, when, and what to tell it.
+    private struct Waiter {
+        let id: UInt64
+        let since: ContinuousClock.Instant
+        let continuation: CheckedContinuation<Grant?, Never>
+    }
+
+    /// A request let through: when it started, and the start before it — given back if its task was cancelled as it was
+    /// let through (`enter`).
+    private struct Grant: Sendable {
+        let start: ContinuousClock.Instant
+        let previous: ContinuousClock.Instant?
+    }
+
     private let maxInFlight: Int
+    /// The most of the slots the background lane holds at once.
+    let backgroundSlots: Int
+    /// How long the history's oldest request waits behind a screen's before the next free slot is its.
+    let historyWait: Duration
     private let interval: Duration
     private var inFlight = 0
+    /// Slots taken, by lane.
+    private var holding: [Lane: Int] = [:]
     private var lastStart: ContinuousClock.Instant?
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    /// Requests waiting, by lane, in the order they came.
+    private var waiting: [Lane: [Waiter]] = [:]
+    private var nextId: UInt64 = 0
+    /// When the gate wakes to let the next request through, once the space after the last start is all that holds it.
+    private var wakeAt: ContinuousClock.Instant?
 
-    public init(inFlight: Int, interval: Duration) {
+    /// `inFlight`: requests in flight at once; `interval`: the space between two starts; `backgroundSlots`: the most of
+    /// the slots the background lane holds at once; `historyWait`: how long the history's oldest request waits behind a
+    /// screen's before it goes first.
+    public init(inFlight: Int, interval: Duration, backgroundSlots: Int = 1, historyWait: Duration = .seconds(2)) {
         maxInFlight = max(1, inFlight)
         self.interval = interval
+        self.backgroundSlots = min(maxInFlight, max(1, backgroundSlots))
+        self.historyWait = historyWait
     }
 
-    /// Waits for a slot, then for the space after the last start.
-    public func enter() async {
-        while inFlight >= maxInFlight {
-            await withCheckedContinuation { waiters.append($0) }
+    /// Waits in `lane` until the request may start — a slot free for it and the space after the last start passed — and
+    /// takes the slot, to hand back with `leave`. Nil when the task was cancelled before it was let through: it left the
+    /// queue and took neither the slot nor a start, and its request is not to be sent.
+    public func enter(_ lane: Lane = .interactive) async -> Slot? {
+        guard !Task.isCancelled else { return nil }
+        let id = nextId
+        nextId += 1
+        let grant = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Grant?, Never>) in
+                waiting[lane, default: []].append(Waiter(id: id, since: .now, continuation: continuation))
+                letThrough()
+            }
+        } onCancel: {
+            Task { await self.withdraw(id, from: lane) }
         }
-        inFlight += 1
-        let now = ContinuousClock.now
-        let start = max(now, lastStart.map { $0 + interval } ?? now)
-        lastStart = start
-        if start > now { try? await Task.sleep(until: start, clock: .continuous) }
+        guard let grant else { return nil }
+        // Cancelled as it was let through, before its request went out: the slot goes back, and the start with it unless
+        // another came after it.
+        if Task.isCancelled {
+            release(lane)
+            if lastStart == grant.start { lastStart = grant.previous }
+            letThrough()
+            return nil
+        }
+        return Slot(lane: lane)
     }
 
-    public func leave() {
+    /// Hands back the slot `enter` took, once its request is answered (or failed).
+    public func leave(_ slot: Slot) {
+        release(slot.lane)
+        letThrough()
+    }
+
+    private func release(_ lane: Lane) {
         inFlight = max(0, inFlight - 1)
-        if !waiters.isEmpty { waiters.removeFirst().resume() }
+        holding[lane] = max(0, (holding[lane] ?? 0) - 1)
+    }
+
+    /// A waiter whose task was cancelled leaves the queue, told it was let through nowhere; nothing when it already was.
+    private func withdraw(_ id: UInt64, from lane: Lane) {
+        guard let index = waiting[lane]?.firstIndex(where: { $0.id == id }), let waiter = waiting[lane]?.remove(at: index) else { return }
+        waiter.continuation.resume(returning: nil)
+    }
+
+    /// The highest lane with a request that may take a slot now: the background only below its share
+    /// (`backgroundSlots`); the history ahead of a screen once its oldest request has waited `historyWait`.
+    private func nextLane() -> Lane? {
+        if let oldest = waiting[.history]?.first, ContinuousClock.now - oldest.since >= historyWait { return .history }
+        return Lane.byPriority.first { lane in
+            guard !(waiting[lane]?.isEmpty ?? true) else { return false }
+            return lane != .background || (holding[.background] ?? 0) < backgroundSlots
+        }
+    }
+
+    /// Lets through every request that may start now, the highest lane first, each in the order it came; when the space
+    /// after the last start is all that holds the next one, the gate wakes once it has passed.
+    private func letThrough() {
+        while inFlight < maxInFlight, let lane = nextLane() {
+            let now = ContinuousClock.now
+            if let last = lastStart, last + interval > now {
+                wake(at: last + interval)
+                return
+            }
+            let waiter = waiting[lane]!.removeFirst()
+            inFlight += 1
+            holding[lane, default: 0] += 1
+            let previous = lastStart
+            lastStart = now
+            waiter.continuation.resume(returning: Grant(start: now, previous: previous))
+        }
+    }
+
+    private func wake(at instant: ContinuousClock.Instant) {
+        if let wakeAt, wakeAt <= instant { return }
+        wakeAt = instant
+        // On the gate, as the method that starts it.
+        Task {
+            try? await Task.sleep(until: instant, clock: .continuous)
+            woke(at: instant)
+        }
+    }
+
+    private func woke(at instant: ContinuousClock.Instant) {
+        if wakeAt == instant { wakeAt = nil }
+        letThrough()
+    }
+
+    /// What the gate holds now (tests): slots taken and requests waiting, by lane, and the last start.
+    func state() -> (holding: [Lane: Int], waiting: [Lane: Int], lastStart: ContinuousClock.Instant?) {
+        (holding.filter { $0.value > 0 }, waiting.compactMapValues { $0.isEmpty ? nil : $0.count }, lastStart)
     }
 }
 
@@ -267,12 +418,19 @@ public actor LogsRouter {
     /// The widest endpoint is waited for while its rest ends within this long, rather than reading on an endpoint that
     /// answers a fifth of its span or less: a 1,000-block endpoint takes ten requests for one of a 10,000-block one.
     static let waitForWider: TimeInterval = 8
+    /// A range refused for ending past the answering node's head (`LogsAnswer.pastHead`) is asked again after
+    /// `headPause` seconds, then twice that: `headRetries` waits a scan, not a range, not counted against it — as a scan
+    /// off the router waits (`LogScanLimits.headPause`). Monad makes a block every 0.4 s and the nodes behind one URL are
+    /// a few blocks apart, the head read from one and the logs from another; three seconds cover seven blocks. Past the
+    /// waits a refusal counts as any other, a gap after `maxAttempts`.
+    static let headPause: TimeInterval = 1
+    static let headRetries = 2
 
     private let endpoints: [LogsEndpoint]
     private let clients: [URL: RPCClient]
     private let gate: LogsGate
     private let store: (any LogsCapabilityStore)?
-    /// Batches in flight at once for one scan.
+    /// Batches in flight at once for one scan, at most: a scan may ask for fewer (`read`'s `concurrency`).
     private let concurrency: Int
     /// What each endpoint answers now: its measured span, lowered by its refusals.
     private var spans: [URL: UInt64] = [:]
@@ -332,13 +490,28 @@ public actor LogsRouter {
 
     private struct Piece: Hashable, Sendable { let from: UInt64; let to: UInt64 }
     /// One request's outcome: each piece's answer; whether the request was throttled; whether it got no answer at all
-    /// (a transport failure, a timeout, an HTTP error), which is the endpoint's fault, not the pieces'.
-    private struct Batch: Sendable { let url: URL; let pieces: [Piece]; let answers: [LogsAnswer]; let throttled: Bool; let unanswered: Bool }
+    /// (a transport failure, a timeout, an HTTP error), which is the endpoint's fault, not the pieces'; whether it was
+    /// sent at all (false: the scan was cancelled while it waited at the gate, `LogsGate.enter`); how long it waited at
+    /// the gate for a slot.
+    private struct Batch: Sendable {
+        let url: URL; let pieces: [Piece]; let answers: [LogsAnswer]; let throttled: Bool; let unanswered: Bool; var sent = true; var waited: Duration = .zero
+    }
 
-    /// Reads `query` over `[from, to]`, newest ranges first when `order` is descending, within `budget`.
-    public func read(_ query: LogsQuery, from: UInt64, to: UInt64, order: Order = .ascending, budget: LogsBudget) async -> LogsRead {
+    /// Reads `query` over `[from, to]`, newest ranges first when `order` is descending, within `budget`. `concurrency`:
+    /// the most batches in flight at once for this scan, never more than the router's own (nil: the router's) — the venue
+    /// list reads one at a time. `lane`: where its requests wait at the gate (`LogsGate.Lane`): a screen's scan, the
+    /// default, goes ahead of the wallet's history rounds, and both ahead of the background.
+    ///
+    /// A background scan's seconds are the time its requests were out, not the time they waited at the gate: it waits
+    /// behind every screen and history round by design, and a user browsing for two minutes timed the venue list's run out
+    /// with its endpoints answering, a run that ended short, read again only after a pause on a later return to the app
+    /// (`VenueTokenList.resume`). The venue list, the one background scan, reads one request at a time, so its waits never
+    /// overlap; its requests stay bounded (`LogsBudget.requests`).
+    public func read(_ query: LogsQuery, from: UInt64, to: UInt64, order: Order = .ascending, budget: LogsBudget, concurrency: Int? = nil,
+                     lane: LogsGate.Lane = .interactive) async -> LogsRead {
         guard from <= to else { return LogsRead(logs: [], covered: [], requests: 0) }
-        let deadline = ContinuousClock.now + .seconds(budget.seconds)
+        let batchesAtOnce = min(self.concurrency, max(1, concurrency ?? self.concurrency))
+        var deadline = ContinuousClock.now + .seconds(budget.seconds)
         var logs: [Log] = []
         var seen = Set<String>()
         var covered: [ClosedRange<UInt64>] = []
@@ -350,6 +523,12 @@ public actor LogsRouter {
         var retry: [Piece] = []
         var attempts: [Piece: Int] = [:]
         let maxAttempts = 3
+        // Ranges refused for ending past the answering node's head, each with when it is asked again (`headPause`), and
+        // the scan's waits for them so far. A scan read newest first stands on its newest range (`NewestLogs`): asked
+        // again at once, three refusals in a row from a node a few blocks behind left it a gap, and the whole read with
+        // it — a coin's holders unread, its trades none.
+        var behindHead: [(piece: Piece, at: ContinuousClock.Instant)] = []
+        var headWaits = 0
 
         func requeue(_ piece: Piece, counting: Bool) {
             if counting {
@@ -364,6 +543,10 @@ public actor LogsRouter {
             let span = span(of: endpoint.url)
             let limit = batchLimit(endpoint)
             var out: [Piece] = []
+            // Ranges past a node's head whose pause is over go first: they are the window's newest.
+            let now = ContinuousClock.now
+            retry.insert(contentsOf: behindHead.filter { $0.at <= now }.map(\.piece), at: 0)
+            behindHead.removeAll { $0.at <= now }
             // Ranges to ask again first, cut to this endpoint's span; what doesn't fit the request waits at the front.
             while out.count < limit, let piece = retry.first {
                 retry.removeFirst()
@@ -398,7 +581,7 @@ public actor LogsRouter {
         await withTaskGroup(of: Batch.self) { group in
             var inFlight = 0
             while true {
-                while inFlight < concurrency, requests < budget.requests, ContinuousClock.now < deadline, !Task.isCancelled,
+                while inFlight < batchesAtOnce, requests < budget.requests, ContinuousClock.now < deadline, !Task.isCancelled,
                       let endpoint = await available(deadline: deadline) {
                     let pieces = nextPieces(endpoint)
                     guard !pieces.isEmpty else { break }
@@ -407,14 +590,38 @@ public actor LogsRouter {
                     let client = clients[endpoint.url]!
                     let url = endpoint.url
                     group.addTask { [gate] in
-                        await gate.enter()
+                        let queued = ContinuousClock.now
+                        // Cancelled while it waited at the gate: it left the queue, took no slot, and sends nothing.
+                        guard let slot = await gate.enter(lane) else {
+                            return Batch(url: url, pieces: pieces, answers: [], throttled: false, unanswered: false, sent: false)
+                        }
+                        let waited = ContinuousClock.now - queued
                         let answered = await Self.ask(client, query: query, pieces: pieces.map { ($0.from, $0.to) })
-                        await gate.leave()
-                        return Batch(url: url, pieces: pieces, answers: answered.answers, throttled: answered.throttled, unanswered: answered.unanswered)
+                        await gate.leave(slot)
+                        return Batch(url: url, pieces: pieces, answers: answered.answers, throttled: answered.throttled, unanswered: answered.unanswered,
+                                     waited: waited)
                     }
                 }
-                guard inFlight > 0, let batch = await group.next() else { break }
+                guard inFlight > 0, let batch = await group.next() else {
+                    // Nothing in flight, and only ranges past a node's head left, waiting their pause: the scan waits for
+                    // the first, within its deadline and budget. One whose pause is over and still unsent found no
+                    // endpoint within the deadline: the scan ends, and it is a gap.
+                    if let wake = behindHead.map(\.at).min(), wake > .now, wake < deadline, requests < budget.requests, !Task.isCancelled {
+                        try? await Task.sleep(until: wake, clock: .continuous)
+                        continue
+                    }
+                    break
+                }
                 inFlight -= 1
+                // A batch the gate never let start is no request. The gate turns one away only when its task is cancelled,
+                // and its task is cancelled only with the scan's (nothing here cancels one alone): the scan is ending, and
+                // its ranges are left unread.
+                if !batch.sent {
+                    requests -= 1
+                    continue
+                }
+                // The background's seconds leave out its waits at the gate (above).
+                if lane == .background { deadline = deadline + batch.waited }
                 // Cancelled (the screen closed): what came back is dropped, and no endpoint is blamed for the rest.
                 if Task.isCancelled { continue }
                 var stats = statsByURL[batch.url] ?? Stats()
@@ -431,6 +638,7 @@ public actor LogsRouter {
                 } else {
                     // Whether a range refused at the floor rested the endpoint: the rest then stands, not cleared below.
                     var rested = false
+                    var pastHead: [Piece] = []
                     for (piece, answer) in zip(batch.pieces, batch.answers) {
                         switch answer {
                         case .logs(let found):
@@ -459,10 +667,21 @@ public actor LogsRouter {
                             }
                         case .pastHead:
                             stats.pastHead += 1
-                            requeue(piece, counting: true)
+                            pastHead.append(piece)
                         case .failed, .throttled:
                             stats.failed += 1
                             requeue(piece, counting: true)
+                        }
+                    }
+                    // Past the answering node's head: asked again once it has had time to catch up, while the scan's
+                    // waits last (`headPause`), uncounted; past them, counted as any refusal.
+                    if !pastHead.isEmpty {
+                        if headWaits < Self.headRetries {
+                            headWaits += 1
+                            let at = ContinuousClock.now + .seconds(Self.headPause * Double(headWaits))
+                            behindHead += pastHead.map { ($0, at) }
+                        } else {
+                            for piece in pastHead { requeue(piece, counting: true) }
                         }
                     }
                     if !rested { lastRest[batch.url] = nil }

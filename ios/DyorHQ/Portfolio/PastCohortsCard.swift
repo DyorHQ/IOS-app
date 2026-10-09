@@ -38,9 +38,14 @@ final class PastMomentsModel {
         var found: [RetiredMomentPosition] = []
         var failure: String?
         var cut = false
+        // A cohort's list cut short is completed from the wallet's own Moments history: the history store's, which scans
+        // every cohort for it already (`WalletHistoryScans.moments`), once it is read in full; until then each cohort scans
+        // its own, newest first (`RetiredMoments.positions`).
+        let snapshot = env.history.snapshot
+        let history = env.history.wallet == address && snapshot.status(WalletHistoryScans.momentsId).complete ? snapshot.moments : nil
         for cohort in env.retiredMoments {
             do {
-                let read = try await cohort.positions(account: address)
+                let read = try await cohort.positions(account: address, history: history)
                 found += read.positions
                 if !read.complete { cut = true }
             } catch {

@@ -11,7 +11,7 @@ import Foundation
 /// filters (24H, 7D, 30D) and every time estimated from a block number (`time(of:anchor:secondsPerBlock:)`). Scan windows
 /// that are really block budgets keep their block counts, under names that say so
 /// (`WalletTokenDiscovery.defaultWindowBlocks`, `TokenActivityService.defaultLookbackBlocks`,
-/// `LaunchpadService.holderScanBlocks`, `SwapHistoryService.Window.allBlocks`).
+/// `SwapHistoryService.Window.allBlocks`); a coin's holders are read from its launch (`LaunchpadService.launchBlock`).
 public actor BlockClock {
     /// The rate used until a measurement answers, and whenever one fails: Monad's average over a million blocks
     /// (measured 2026-09-29).

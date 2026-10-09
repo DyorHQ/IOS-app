@@ -9,10 +9,9 @@ public actor LaunchpadService {
     public static let defaultLogsRPC = URL(string: "https://rpc1.monad.xyz")!
     /// `LaunchpadFactory.MAX_EXEMPTIONS`.
     public static let maxExemptions = 32
-    /// How far back `holderCount` reads a coin's transfers: a block budget, 6,480,000 blocks (about 22.7 days).
-    public static let holderScanBlocks: UInt64 = 6_480_000
-    /// Blocks added to a coin's age in blocks when the block it launched in is estimated
-    /// (`WalletHistorySnapshot.launchBlock`), so the launch itself is inside the window its fills are read from.
+    /// Blocks added to a coin's age in blocks when the block it launched in is estimated (`launchBlock`), so the launch
+    /// itself is inside the window its fills and its holders are read from. (A coin's holders were read over a fixed
+    /// 6,480,000 blocks, `holderScanBlocks`, until build 23: they are read from its launch now, `holders`.)
     public static let tradeLookbackMargin: UInt64 = 20_000
 
     public let rpc: RPCClient

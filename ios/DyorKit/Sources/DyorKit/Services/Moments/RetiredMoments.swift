@@ -132,16 +132,21 @@ public struct RetiredMoments: Sendable {
     /// The Moments of this cohort the account still has something in (see `RetiredMomentPosition.isOpen`), newest first,
     /// among `moments` (Moments a caller already read; this cohort's are kept, and `cut` says whether that read left
     /// Moments out) or, when nil, the cohort's own `list`. When the list was cut, the Moments of this cohort the account
-    /// collected, claimed, withdrew from or published (`history`) that aren't in it are read by id and counted too. That
-    /// history is a log scan, and a Moment the account only received by transfer is in none of it, so the positions of a
-    /// cut list may still miss one: `complete` is then false. A scan or a read of those Moments that fails leaves them out
-    /// (the list's positions stay; `complete` is false already). A list that wasn't cut scans nothing.
-    public func positions(account: Address, moments: [MomentInfo]? = nil, cut: Bool = false) async throws -> (positions: [RetiredMomentPosition], complete: Bool) {
+    /// collected, claimed, withdrew from or published that aren't in it are read by id and counted too: from `history` when
+    /// the caller has it read in full — the app's history store scans every cohort for the wallet already
+    /// (`WalletHistoryScans.moments`) — else from this cohort's own scan (`history(account:)`). That history is a log scan,
+    /// and a Moment the account only received by transfer is in none of it, so the positions of a cut list may still miss
+    /// one: `complete` is then false. A scan or a read of those Moments that fails leaves them out (the list's positions
+    /// stay; `complete` is false already). A list that wasn't cut scans nothing.
+    public func positions(account: Address, moments: [MomentInfo]? = nil, cut: Bool = false, history known: MomentsAccountHistory? = nil) async throws
+        -> (positions: [RetiredMomentPosition], complete: Bool) {
         let read: (moments: [MomentInfo], cut: Bool)
         if let moments { read = (moments.filter { $0.moment.factory == factory }, cut) } else { read = try await list() }
         var list = read.moments
         if read.cut {
-            let missing = Self.ownIds(await history(account: account), factory: factory).subtracting(list.map(\.id))
+            let own: MomentsAccountHistory
+            if let known { own = known } else { own = await history(account: account).history }
+            let missing = Self.ownIds(own, factory: factory).subtracting(list.map(\.id))
             if !missing.isEmpty {
                 list += (try? await service.infos(ids: missing.sorted(by: >))) ?? []
                 list.sort { $0.id > $1.id }
@@ -159,8 +164,9 @@ public struct RetiredMoments: Sendable {
         return Set(keys.filter { $0.factory == factory }.map(\.id))
     }
 
-    /// Everything the account did on this cohort since its deployment block; every record carries this factory.
-    public func history(account: Address) async -> MomentsAccountHistory {
+    /// Everything the account did on this cohort since its deployment block, every record carrying this factory, and
+    /// whether it was read in full (`MomentsService.history(account:fromBlock:)`, newest first).
+    public func history(account: Address) async -> (history: MomentsAccountHistory, complete: Bool) {
         await service.history(account: account)
     }
 

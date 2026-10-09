@@ -479,10 +479,24 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertEqual(environment.components(separatedBy: "VenueTokenStore.").count - 1, 2, "the list reads and writes the store; nothing else does")
         // A cold launch runs the list; every return to the app resets log scans' outage and resumes a run that ended short.
         let root = squeezed(try String(contentsOf: app.appendingPathComponent("App/RootView.swift"), encoding: .utf8))
-        // ...the stored list read at once for search, and the run once the wallet's history is no longer filling in
-        // (the two share the gate), or at once with no wallet signed in.
+        // ...the stored list read at once for search, and the run told, on every change, which wallet is signed in and
+        // whether its history is filling in — as it is too while the history model isn't on that wallet yet
+        // (`VenueTokenList.follow`): paused while a wallet's history fills in for the first time (the two share the gate),
+        // and, with no wallet signed in, held while nothing was read. In build 22 and earlier the run started at once with
+        // no wallet signed in — a fresh install's read from genesis during onboarding — and nothing paused it once the
+        // history started filling. Nothing while the session is restored at launch.
         XCTAssertTrue(root.contains(".task { await env.venueList.load() }"))
-        XCTAssertTrue(root.contains(".task(id: \"\\(session.address?.hex ?? \"\")-\\(env.history.filling)\") { if session.address == nil || !env.history.filling { env.refreshVenueTokens() } }"))
+        XCTAssertTrue(root.contains(".task(id: \"\\(session.state == .loading)-\\(session.address?.hex ?? \"\")-\\(env.history.wallet?.hex ?? \"\")-\\(env.history.filling)\") { "
+                                    + "guard session.state != .loading else { return } "
+                                    + "env.followVenueTokens(wallet: session.address, historyFilling: env.history.wallet != session.address || env.history.filling) }"))
+        XCTAssertTrue(environment.contains("func followVenueTokens(wallet: Address?, historyFilling: Bool) { venueList.follow(wallet: wallet, historyFilling: historyFilling) }"))
+        // Nothing else starts a run: a return to the app resumes one that ended short (below), which waits as a run does.
+        var starts = 0
+        for file in FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.compactMap({ $0 as? URL }) ?? [] where file.pathExtension == "swift" {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            starts += source.components(separatedBy: "venueList.refresh()").count - 1 + source.components(separatedBy: "refreshVenueTokens").count - 1
+        }
+        XCTAssertEqual(starts, 0, "the app starts the list's run through `follow` only")
         // In the scene-phase handler, wherever its branches sit: the background is noted, and only the activation that
         // follows it, a return, resets log scans' outage and resumes the list (`LogScanClock`).
         let phases = try XCTUnwrap(root.range(of: ".onChange(of: scenePhase)")).upperBound
@@ -493,7 +507,8 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
         let service = squeezed(try String(contentsOf: ios.appendingPathComponent("DyorKit/Sources/DyorKit/Services/VenueTokensService.swift"), encoding: .utf8))
         XCTAssertTrue(service.contains("public init(logsRPC: RPCClient, multicall: Multicall) {"))
-        XCTAssertTrue(service.contains("concurrency: 1, mode: .paced)"), "one request at a time, a throttle waited out")
+        XCTAssertTrue(service.contains("concurrency: 1, mode: .paced, lane: .background)"),
+                      "one request at a time, a throttle waited out, in the gate's background lane: behind every screen's scan and the wallet's history")
 
         let store = try String(contentsOf: app.appendingPathComponent("Wallet/VenueTokenStore.swift"), encoding: .utf8)
         XCTAssertTrue(store.contains("private static let key = \"venueTokens.v1\""), "the list is kept")

@@ -13,7 +13,38 @@ final class AssetsModel {
     private(set) var tokens: [TokenAsset] = []
     /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12).
     private(set) var unverified: Set<Address> = []
+    /// The NFTs the wallet holds, newest received first (`WalletNFTDiscovery.held`), from the transfers into it that its
+    /// history store holds — the scan its tokens are found in, no scan of their own.
     private(set) var nfts: [NFTAsset] = []
+    /// False when an NFT the wallet holds may be missing from `nfts`: the transfers into it weren't all read yet (the
+    /// history still filling in: `nftsFilling`), or an ownership read failed. The NFTs tab says so, with Retry, never "No
+    /// NFTs" on a read that was a part.
+    private(set) var nftsComplete = true
+    /// More NFTs may be held than the list resolves at once (`WalletNFTDiscovery.Held.cut`): its count reads as a minimum.
+    private(set) var nftsCut = false
+    /// The transfers into the wallet were still reading their window when the NFTs were read
+    /// (`WalletHistorySnapshot.readingWindow`, what the token list waits on, `WalletTokens.history`): the tab says how far
+    /// the history has got (`nftsProgress`), and the NFTs are read again once it has read them all. Not for a history that
+    /// is complete but last read a while ago (read from the device at launch, the app away), which `filling` counts as
+    /// still reading — a failed ownership read then showed "Reading your history… 99%" with no Retry — nor for another
+    /// wallet's history.
+    private(set) var nftsFilling = false
+    /// How much of the transfers' window the history had read when the NFTs were read, of this wallet's history only.
+    private(set) var nftsProgress = 0.0
+    /// The block the transfers into the wallet were read back to when the NFTs were read (`HistoryStatus.floor`), and the
+    /// day it was, when above the chain's first block: the scan reads back to the wallet's first transaction or 30 days,
+    /// whichever is earlier, and never below the logs it keeps (`HistoryEntry.capFloor`), so an NFT received before then,
+    /// and not since, isn't among the candidates — an airdrop to a wallet that has sent nothing yet, say. The tab says how
+    /// far back it reached, and counts what it lists as a minimum ("N+"), never "No NFTs in this wallet".
+    private(set) var nftsFloor: UInt64?
+    private(set) var nftsSince: Date?
+    /// The NFTs are being read: after the tokens, which the card shows meanwhile.
+    private(set) var nftsLoading = false
+    /// The wallet the NFTs shown are of: an earlier read's are kept, for an NFT whose ownership couldn't be read again,
+    /// only for the same wallet.
+    private var nftsFor: Address?
+    /// The NFTs have been read once for the wallet shown: until then an empty list is unread, never "No NFTs".
+    var nftsRead: Bool { nftsFor != nil }
     /// Moments by their NFT contract, so a Moment edition opens its own page instead of a generic link.
     private(set) var momentsByNFT: [Address: MomentInfo] = [:]
     /// Retired-cohort Moments by their coin: such a coin opens its claim-only page, never a swap (a trade on a retired
@@ -69,19 +100,56 @@ final class AssetsModel {
         }
     }
 
-    func load(env: AppEnvironment, address: Address?, force: Bool) async {
-        guard let address else { tokens = []; nfts = []; complete = true; balancesUnread = false; loadedFor = nil; return }
-        if !force, loadedFor == address { return }
-        loading = true
-        defer { loading = false }
+    /// What part of the NFTs couldn't be read, in words: nil when they all were, or while they are being read.
+    var nftGap: String? {
+        guard !nftsComplete, !nftsLoading else { return nil }
+        if nftsFilling { return tr("Reading your history… \(NumberStyle.percent(nftsProgress * 100, fractionDigits: 0, signed: false))") }
+        return nfts.isEmpty ? tr("No NFTs found, but part of your wallet couldn't be read, so some may be missing.")
+            : tr("Part of your wallet couldn't be read, so an NFT may be missing from the list.")
+    }
 
-        async let nftTask = env.nftDiscovery.heldNFTs(wallet: address)
+    /// The NFTs' count as the card shows it: a minimum ("+") when one may be missing — a read that was a part, more held
+    /// than are listed, or transfers read back to a day only (`nftsSince`).
+    var nftCount: String {
+        nftsComplete && !nftsCut && nftsSince == nil ? "\(nfts.count)" : "\(nfts.count)+"
+    }
+
+    /// The day the transfers the NFTs come from were read back to (`nftsSince`), in the app's language; nil when they reach
+    /// the chain's first block.
+    var nftsSinceDay: String? {
+        nftsSince.map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(L10n.locale)) }
+    }
+
+    /// Reads the wallet's tokens and, unless `nfts` is false (the Update screen lists balances only), its NFTs, after the
+    /// tokens: the card shows the tokens as soon as they are valued (`loading`), and the NFTs once read (`nftsLoading`).
+    func load(env: AppEnvironment, address: Address?, force: Bool, nfts includeNFTs: Bool = true) async {
+        guard let address else {
+            tokens = []; nfts = []; nftsComplete = true; nftsCut = false; nftsFilling = false; nftsProgress = 0; nftsFloor = nil; nftsSince = nil; nftsFor = nil
+            complete = true; balancesUnread = false; loadedFor = nil; return
+        }
+        if !force, loadedFor == address { return }
+        // Another wallet's NFTs are never shown while this one's are read.
+        if nftsFor != address { nfts = []; nftsComplete = true; nftsCut = false; nftsFilling = false; nftsProgress = 0; nftsFloor = nil; nftsSince = nil; nftsFor = nil }
+        loading = true
+        nftsLoading = includeNFTs
+        defer { loading = false; nftsLoading = false }
+
         async let momentsTask = env.moments.moments(limit: 200)
         async let retiredTask = PastMomentsModel.allMoments(env: env)
 
         // The token part is the Send sheet's too (`WalletTokens`). Balances that couldn't be read list nothing, as before,
         // and the card says so, as it says when only part of the wallet couldn't be read.
         let read = try? await WalletTokens.read(env: env, address: address)
+        // The NFTs, from the transfers into the wallet its history store holds — those the token list was just read from,
+        // once `WalletTokens.history` had waited for them — beside the tokens' valuing. In build 22 and earlier they had a
+        // scan of their own, from block 0 and oldest first, which never reached a Moment edition (`WalletNFTDiscovery`).
+        let ownHistory = env.history.wallet == address
+        let history = ownHistory ? env.history.snapshot : .empty
+        let previousNFTs = nftsFor == address ? nfts : []
+        async let nftTask: WalletNFTDiscovery.Held? = includeNFTs
+            ? await env.nftDiscovery.held(wallet: address, incoming: history.transfersIn, complete: history.status(WalletHistoryScans.transfersInId).complete,
+                                          keeping: previousNFTs)
+            : nil
         var ranked: [TokenAsset] = []
         var found: CurveHoldings?
         var failed = false
@@ -113,12 +181,27 @@ final class AssetsModel {
         historyProgress = env.history.snapshot.progress(since: nil, scans: WalletHistoryScans.holdings)
         balancesUnread = read == nil
         tokens = ranked
+        loading = false
 
         let moments = (try? await momentsTask) ?? []
         // Their coins, proven by their cohorts, for the coins' pictures and labels.
         await env.dyorCoins.ingest(moments + retired.moments)
+        // Known before the NFTs show, so a Moment edition never reads as an unverified collection in between.
         momentsByNFT = Dictionary(moments.map { ($0.moment.nft, $0) }, uniquingKeysWith: { first, _ in first })
-        nfts = await nftTask
+        if let held = await nftTask {
+            nfts = held.nfts
+            nftsComplete = held.complete
+            nftsCut = held.cut
+            // Only this wallet's history reading its window is "reading": the stand-in for another's reads as reading too.
+            nftsFilling = ownHistory && !held.complete && history.readingWindow(scans: WalletHistoryScans.holdings)
+            nftsProgress = history.progress(since: nil, scans: WalletHistoryScans.holdings)
+            let transfers = history.status(WalletHistoryScans.transfersInId)
+            nftsFloor = transfers.floor
+            nftsSince = transfers.floor.flatMap { floor in
+                floor > 0 ? history.anchor.map { BlockClock.time(of: floor, anchor: $0, secondsPerBlock: history.secondsPerBlock) } : nil
+            }
+            nftsFor = address
+        }
         loadedFor = address
     }
 }
@@ -154,9 +237,12 @@ struct AssetsCard: View {
             HStack {
                 Text("My Holdings").font(.headline)
                 Spacer()
-                if model.loading { ProgressView().controlSize(.mini) }
+                if model.loading || (kind == .nfts && model.nftsLoading) { ProgressView().controlSize(.mini) }
                 else if kind == .assets, model.showsTotal { Text(PriceFormat.usdValue(model.totalValue)).font(.subheadline.weight(.semibold)).monospacedDigit() }
-                else if kind == .nfts, !model.nfts.isEmpty { Text(verbatim: "\(model.nfts.count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary) }
+                else if kind == .nfts, !model.nfts.isEmpty {
+                    // A list that may be missing one counts at least what it shows, never passed off as all of them.
+                    Text(verbatim: model.nftCount).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
+                }
             }
 
             Picker("Holdings", selection: $kind) {
@@ -180,9 +266,32 @@ struct AssetsCard: View {
                 Text(model.loading ? "Reading the wallet…" : "No tokens in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
             }
-            if kind == .nfts, model.nfts.isEmpty {
-                Text(model.loading ? "Reading the wallet…" : "No NFTs in this wallet yet.").font(.subheadline).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
+            if kind == .nfts, let gap = model.nftGap {
+                // A read that was a part — the history still filling in, or an ownership read that failed — is said, never
+                // "No NFTs".
+                VStack(alignment: .leading, spacing: 8) {
+                    Paragraph(verbatim: gap).font(.footnote).foregroundStyle(.secondary)
+                    if !model.nftsFilling { Button("Retry", systemImage: "arrow.clockwise", action: retry).font(.footnote.weight(.medium)) }
+                }
+            }
+            if kind == .nfts, model.nfts.isEmpty, model.nftsLoading || model.nftGap == nil {
+                Group {
+                    if model.nftsLoading || !model.nftsRead {
+                        Text("Reading the wallet…")
+                    } else if let day = model.nftsSinceDay {
+                        // Read back to a day, not the chain's start: says how far, never "No NFTs in this wallet".
+                        Paragraph(verbatim: tr("No NFTs received since \(day).")).multilineTextAlignment(.center)
+                    } else {
+                        Text("No NFTs in this wallet yet.")
+                    }
+                }
+                .font(.subheadline).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
+            }
+            if kind == .nfts, !model.nfts.isEmpty, !model.nftsLoading, model.nftGap == nil, let day = model.nftsSinceDay {
+                // The list is every NFT the transfers read name, and they reach back to a day: one received before it, and
+                // not since, isn't in it.
+                Paragraph(verbatim: tr("Only NFTs received since \(day) are listed.")).font(.footnote).foregroundStyle(.secondary)
             }
 
             if kind == .assets, !model.tokens.isEmpty {

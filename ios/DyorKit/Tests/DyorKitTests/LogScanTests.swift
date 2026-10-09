@@ -298,8 +298,9 @@ final class LogScanTests: XCTestCase {
     }
 
     /// Only the wallet's history on Send and the Portfolio (`WalletTokens.history`) is read fail-fast: every other log
-    /// scan — the launchpad's events and holdings, Moments' history, swap history, NFTs, venue tokens, Home's 30-day
-    /// discovery — keeps the patient default, whose callers take what it read.
+    /// scan — the launchpad's events and holdings, Moments' history, swap history, venue tokens, Home's 30-day discovery —
+    /// keeps the patient default, whose callers take what it read (the wallet's NFTs scan nothing since build 23: they come
+    /// from the history store).
     func testOnlyTheWalletsHistoryIsReadFailFast() throws {
         var ios = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
@@ -323,8 +324,14 @@ final class LogScanTests: XCTestCase {
         let discovery = try String(contentsOf: kit.appendingPathComponent("Services/WalletTokenDiscovery.swift"), encoding: .utf8)
         XCTAssertTrue(discovery.contains("logScan: LogScanMode = .patient"))
         XCTAssertTrue(discovery.contains("fromBlock: from, toBlock: latest, mode: logScan)"))
-        let logs = try String(contentsOf: kit.appendingPathComponent("Core/Logs.swift"), encoding: .utf8)
-        XCTAssertTrue(logs.contains("mode: LogScanMode = .patient) async -> (logs: [Log], complete: Bool)"))
+        // Read with every run of whitespace as one space: the checks pin the code, not its line breaks or indentation.
+        let logs = try String(contentsOf: kit.appendingPathComponent("Core/Logs.swift"), encoding: .utf8).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        // A scan is a screen's at the gate unless it says otherwise (`LogsGate.Lane`), and the router reads it in its lane,
+        // as many requests at once as it asks for, from the end it asks for (`LogsRouter.Order`): oldest first unless it
+        // says newest first, as every wide scan a screen shows does (`newestLogs`, `NewestFirstScanTests`).
+        XCTAssertTrue(logs.contains("mode: LogScanMode = .patient, lane: LogsGate.Lane = .interactive, order: LogsRouter.Order = .ascending) async -> (logs: [Log], complete: Bool)"))
+        XCTAssertTrue(logs.contains("from: fromBlock, to: toBlock, order: order, budget: LogsBudget(mode: mode), concurrency: concurrency, lane: lane)"))
+        XCTAssertTrue(logs.contains("from: fromBlock, to: toBlock, order: .descending, budget: LogsBudget(mode: mode), lane: lane)"), "newestLogs reads newest first")
     }
 
     /// The finding (build 17): rpc3 answers 1,000 blocks a request, however many ranges it holds, and refuses the rest,
@@ -685,11 +692,21 @@ final class LogsStub: URLProtocol {
     /// says it never did.
     nonisolated(unsafe) private static var firstTransaction: UInt64?
     nonisolated(unsafe) private static var answer: Answer?
+    /// Requests asking a range `holding` matches wait, unanswered, until `release()` (or the next `install`), counted in
+    /// `held()`: a test holds a scan at a point of its choosing, whatever the machine's pace.
+    nonisolated(unsafe) private static var holding: (@Sendable (Range) -> Bool)?
+    nonisolated(unsafe) private static var waiting = 0
+    private static let released = NSCondition()
 
     /// `latency`: how long each request takes to answer, so requests sent together overlap (`maxInFlight()`). `logCap`: a
     /// range matching more logs is refused as rpc1 refuses one over its 10K, naming the range from its start that fits.
     static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, latency: TimeInterval = 0,
-                        logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, answer: Answer? = nil, rule: @escaping Rule) {
+                        logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, answer: Answer? = nil,
+                        holding: (@Sendable (Range) -> Bool)? = nil, rule: @escaping Rule) {
+        released.lock()
+        self.holding = holding
+        released.broadcast()
+        released.unlock()
         lock.lock(); defer { lock.unlock() }
         self.answer = answer
         self.head = head
@@ -728,6 +745,20 @@ final class LogsStub: URLProtocol {
         return mostInFlight
     }
 
+    /// Lets every request `holding` held through, and holds no more.
+    static func release() {
+        released.lock()
+        holding = nil
+        released.broadcast()
+        released.unlock()
+    }
+
+    /// How many requests `holding` holds now.
+    static func held() -> Int {
+        released.lock(); defer { released.unlock() }
+        return waiting
+    }
+
     /// How many requests were made.
     static func requests() -> Int {
         lock.lock(); defer { lock.unlock() }
@@ -759,6 +790,7 @@ final class LogsStub: URLProtocol {
         Self.mostInFlight = max(Self.mostInFlight, Self.inFlight)
         let latency = Self.latency
         Self.lock.unlock()
+        Self.waitWhileHeld(calls)
         if latency > 0 { Thread.sleep(forTimeInterval: latency) }
         defer { Self.lock.lock(); Self.inFlight -= 1; Self.lock.unlock() }
         // Every call is recorded, even in a request that is to get no answer.
@@ -783,6 +815,20 @@ final class LogsStub: URLProtocol {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
+    }
+
+    /// Waits while `holding` matches a range `calls` ask (`release`).
+    private static func waitWhileHeld(_ calls: [JSON]) {
+        let ranges = calls.filter { $0["method"].string == "eth_getLogs" }.map { call -> Range in
+            let filter = call["params"][0]
+            return Range(from: filter["fromBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0,
+                         to: filter["toBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0)
+        }
+        released.lock(); defer { released.unlock() }
+        guard let holding, ranges.contains(where: holding) else { return }
+        waiting += 1
+        while let holding = self.holding, ranges.contains(where: holding) { released.wait() }
+        waiting -= 1
     }
 
     /// The answer to one call; nil when the request is to get no answer at all. `spent`: the blocks the ranges answered

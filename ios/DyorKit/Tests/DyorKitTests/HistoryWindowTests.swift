@@ -229,7 +229,8 @@ final class HistoryWindowTests: XCTestCase {
     func testEachScreenAsksAboutItsOwnScans() throws {
         let source = DocsLinksTests.appSource
         let home = try source("Home/HomeView.swift")
-        XCTAssertTrue(home.contains("if env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {"))
+        XCTAssertTrue(home.contains("if env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {"),
+                      "not before the history kept on the phone is read")
         XCTAssertTrue(home.contains("NumberStyle.percent(env.portfolio.historyProgress(router.period, scans: WalletHistoryScans.volume) * 100"))
         let portfolio = try source("Portfolio/PortfolioView.swift")
         XCTAssertTrue(portfolio.contains("} else if model.historyFilling(router.period, scans: WalletHistoryScans.ids) {"))

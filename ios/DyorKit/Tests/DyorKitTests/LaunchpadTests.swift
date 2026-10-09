@@ -789,7 +789,6 @@ final class LaunchpadTests: XCTestCase {
     func testServiceConstants() {
         XCTAssertEqual(LaunchpadService.maxExemptions, 32)
         XCTAssertEqual(LaunchpadService.tradeLookbackMargin, 20_000, "the margin a coin's launch block is estimated early by")
-        XCTAssertEqual(LaunchpadService.holderScanBlocks, 6_480_000)
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
     }
 }

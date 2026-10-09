@@ -2,26 +2,34 @@ import BigInt
 import Foundation
 
 /* On-chain history for Moments without an indexer: `eth_getLogs` from the factory's deployment block (nothing
-   about Moments exists before it) in chunks the endpoint accepts. Every event that matters carries the wallet as
-   an indexed topic, so each scan is one filtered query. */
+   about Moments exists before it) in chunks the endpoint accepts, newest first. Every event that matters carries the
+   wallet as an indexed topic, so each scan is one filtered query. The app's own screens read the wallet's Moments history
+   from its history store (`WalletHistoryScans.moments`, every cohort), not from here. */
 
 public extension MomentsService {
     /// Everything the wallet did on Moments — collects, vesting claims, USDC withdrawals, publishes — since
-    /// `fromBlock` (default: the factory's deployment block), newest first.
-    func history(account: Address, fromBlock: UInt64? = nil) async -> MomentsAccountHistory {
-        guard isDeployed, let anchor = try? await logsRPC.block(.latest) else { return .empty }
+    /// `fromBlock` (default: the factory's deployment block), newest first, and whether every scan read the whole window
+    /// (`complete`): false when the head couldn't be read, or a scan stopped short. The scans read newest first, so one
+    /// that stops short holds the latest records; in build 22 and earlier they read oldest first and said nothing, and a
+    /// cohort deployed more than about 4.8M blocks ago (each scan's budget, 80 requests) came back with its first weeks
+    /// only, passed off as the whole.
+    func history(account: Address, fromBlock: UInt64? = nil) async -> (history: MomentsAccountHistory, complete: Bool) {
+        guard isDeployed else { return (.empty, true) }
+        guard let anchor = try? await logsRPC.block(.latest) else { return (.empty, false) }
         let secondsPerBlock = await clock.secondsPerBlock()
         let from = max(fromBlock ?? addresses.deployBlock, addresses.deployBlock)
-        guard from <= anchor.number else { return .empty }
+        guard from <= anchor.number else { return (.empty, true) }
         let word = account.data.leftPadded(to: 32)
-        async let collectedLogs = logsRPC.chunkedLogs(address: addresses.collect, topics: [MomentsABI.Events.collectedTopic, nil, word], fromBlock: from, toBlock: anchor.number)
-        async let claimedLogs = logsRPC.chunkedLogs(address: addresses.vesting, topics: [MomentsABI.Events.claimedTopic, nil, word], fromBlock: from, toBlock: anchor.number)
-        async let withdrawnLogs = logsRPC.chunkedLogs(address: addresses.collect, topics: [MomentsABI.Events.withdrawnTopic, nil, word], fromBlock: from, toBlock: anchor.number)
-        async let feesLogs = logsRPC.chunkedLogs(address: addresses.hook, topics: [MomentsABI.Events.feesWithdrawnTopic, nil, word], fromBlock: from, toBlock: anchor.number)
-        async let publishedLogs = logsRPC.chunkedLogs(address: addresses.factory, topics: [MomentsABI.Events.publishedTopic, nil, word], fromBlock: from, toBlock: anchor.number)
-        let (collected, claimed, withdrawn, fees, published) = await (collectedLogs, claimedLogs, withdrawnLogs, feesLogs, publishedLogs)
-        return Self.history(collected: collected, claimed: claimed, withdrawn: withdrawn, feesWithdrawn: fees, published: published, anchor: anchor,
-                            secondsPerBlock: secondsPerBlock, factory: addresses.factory)
+        let to = anchor.number
+        async let collectedRead = logsRPC.chunkedLogsReport(address: addresses.collect, topics: [MomentsABI.Events.collectedTopic, nil, word], fromBlock: from, toBlock: to, order: .descending)
+        async let claimedRead = logsRPC.chunkedLogsReport(address: addresses.vesting, topics: [MomentsABI.Events.claimedTopic, nil, word], fromBlock: from, toBlock: to, order: .descending)
+        async let withdrawnRead = logsRPC.chunkedLogsReport(address: addresses.collect, topics: [MomentsABI.Events.withdrawnTopic, nil, word], fromBlock: from, toBlock: to, order: .descending)
+        async let feesRead = logsRPC.chunkedLogsReport(address: addresses.hook, topics: [MomentsABI.Events.feesWithdrawnTopic, nil, word], fromBlock: from, toBlock: to, order: .descending)
+        async let publishedRead = logsRPC.chunkedLogsReport(address: addresses.factory, topics: [MomentsABI.Events.publishedTopic, nil, word], fromBlock: from, toBlock: to, order: .descending)
+        let (collected, claimed, withdrawn, fees, published) = await (collectedRead, claimedRead, withdrawnRead, feesRead, publishedRead)
+        let history = Self.history(collected: collected.logs, claimed: claimed.logs, withdrawn: withdrawn.logs, feesWithdrawn: fees.logs, published: published.logs,
+                                   anchor: anchor, secondsPerBlock: secondsPerBlock, factory: addresses.factory)
+        return (history, [collected, claimed, withdrawn, fees, published].allSatisfy { $0.complete })
     }
 
     /// Pure half of `history`, so the parsers can be tested on canned logs. Each record's time is its block's own when the
@@ -65,14 +73,28 @@ public extension MomentsService {
     }
 
     /// Holder statistics for a Moment coin from its `Transfer` logs since publish. The pool and the other protocol
-    /// addresses are reported apart from wallets (spec §12 containment: holder count + top-holder share).
-    func holderStats(coin: Address, publishedAt: Int) async -> MomentHolderStats {
-        guard isDeployed, let anchor = try? await logsRPC.block(.latest) else { return .empty }
+    /// addresses are reported apart from wallets (spec §12 containment: holder count + top-holder share). Nil when the
+    /// head, or the newest of the coin's blocks, couldn't be read: no figure at all, never 0 holders.
+    ///
+    /// The transfers are read newest first (`RPCClient.newestLogs`) within the patient budget (80 requests, about 4.8M
+    /// blocks on rpc2, about 13 days of a Moment's age at this lookback; 80,000 blocks, hours, on the 1,000-block
+    /// endpoints): a read that stops short of the publish gives the holders as a minimum and says so
+    /// (`MomentHolderStats.complete`). In build 22 and earlier it read oldest first and said nothing: an older Moment's
+    /// holders, top wallet and pool share were those of its first days, shown with the head as `scannedTo`.
+    func holderStats(coin: Address, publishedAt: Int) async -> MomentHolderStats? {
+        guard isDeployed, let anchor = try? await logsRPC.block(.latest) else { return nil }
         // The publish block from the anchor and the session's pace (with slack), never before deployment.
         let back = Self.holderLookback(ageSeconds: anchor.timestamp - publishedAt, secondsPerBlock: await clock.secondsPerBlock())
         let from = max(addresses.deployBlock, anchor.number > back ? anchor.number - back : 0)
-        let logs = await logsRPC.chunkedLogs(address: coin, topics: [MomentsABI.Events.transferTopic], fromBlock: from, toBlock: anchor.number)
-        return Self.holderStats(transfers: logs, addresses: addresses, scannedTo: anchor.number)
+        let read = await logsRPC.newestLogs(address: coin, topics: [MomentsABI.Events.transferTopic], fromBlock: from, toBlock: anchor.number)
+        return Self.holderStats(read, addresses: addresses, scannedTo: anchor.number)
+    }
+
+    /// Pure half of `holderStats(coin:publishedAt:)` for a read that may have stopped short: nil when nothing was read down
+    /// from the head.
+    nonisolated static func holderStats(_ read: NewestLogs, addresses: MomentsAddresses, scannedTo: UInt64) -> MomentHolderStats? {
+        guard read.readFrom != nil else { return nil }
+        return holderStats(transfers: read.logs, addresses: addresses, scannedTo: scannedTo, complete: read.complete)
     }
 
     /// How far back `holderStats` reads a Moment's transfers: its age (no less than 0) in blocks at `secondsPerBlock`,
@@ -81,8 +103,9 @@ public extension MomentsService {
         BlockClock.blocks(in: TimeInterval(max(0, ageSeconds)) * 1.25, secondsPerBlock: secondsPerBlock) + 2_000
     }
 
-    /// Pure half of `holderStats`.
-    nonisolated static func holderStats(transfers: [Log], addresses: MomentsAddresses, scannedTo: UInt64) -> MomentHolderStats {
+    /// Pure half of `holderStats`: `complete`, whether `transfers` are every one since the publish
+    /// (`MomentHolderStats.complete`).
+    nonisolated static func holderStats(transfers: [Log], addresses: MomentsAddresses, scannedTo: UInt64, complete: Bool = true) -> MomentHolderStats {
         var balances: [Address: BigInt] = [:]
         for log in transfers {
             guard let from = log.indexedAddress(0), let to = log.indexedAddress(1) else { continue }
@@ -110,7 +133,8 @@ public extension MomentsService {
             circulatingCoins: Double(circulating) / scale,
             poolBps: minted == 0 ? 0 : Int(clamping: (pool * 10_000 / minted).magnitude),
             mintedCoins: Double(minted) / scale,
-            scannedTo: scannedTo
+            scannedTo: scannedTo,
+            complete: complete
         )
     }
 }

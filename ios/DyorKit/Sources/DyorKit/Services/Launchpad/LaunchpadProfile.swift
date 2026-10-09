@@ -201,13 +201,11 @@ public extension WalletHistorySnapshot {
     /// history last read (`anchor`): its age a quarter longer at `secondsPerBlock`, plus
     /// `LaunchpadService.tradeLookbackMargin`, so a chain a little faster than measured still puts the launch after it;
     /// never before the first launchpad's block (`LaunchpadAddresses.feeHistoryStart`), before which no DyorHQ curve
-    /// traded. Nil before the history read any head.
+    /// traded (`LaunchpadService.launchBlock`, which the coin's holder count reads from too). Nil before the history read
+    /// any head.
     func launchBlock(launchedAt: Int, secondsPerBlock: Double) -> UInt64? {
         guard let anchor else { return nil }
-        let age = max(0, TimeInterval(anchor.timestamp - launchedAt))
-        let back = BlockClock.blocks(in: age * 1.25, secondsPerBlock: secondsPerBlock).addingReportingOverflow(LaunchpadService.tradeLookbackMargin)
-        let estimate = back.overflow || back.partialValue >= anchor.number ? 0 : anchor.number - back.partialValue
-        return max(estimate, LaunchpadAddresses.feeHistoryStart)
+        return LaunchpadService.launchBlock(launchedAt: launchedAt, anchor: anchor, secondsPerBlock: secondsPerBlock)
     }
 
     private func coverage(curves: Set<Address>, covered: Bool, current: Bool) -> HistoryCoverage {

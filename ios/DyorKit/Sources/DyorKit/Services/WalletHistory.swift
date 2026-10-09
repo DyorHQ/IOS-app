@@ -557,12 +557,16 @@ public actor WalletHistoryService {
         await store.forget(wallet: wallet)
     }
 
-    /// Reads on in every scan, each within `budget`, all at once through the gate, and builds the history again, the facts
-    /// its swaps lack read.
+    /// Reads on in every scan, each within `budget`, all at once through the gate in the history's lane (behind the screen
+    /// the user is looking at, `LogsGate.Lane.history`), and builds the history again, the facts its swaps lack read. The
+    /// chain head is read once for the round and handed to every scan (`HistoryStore.refresh(_:wallet:budget:at:)`): each
+    /// reading its own was five identical requests a round to the logs endpoint, outside the gate. When no endpoint
+    /// answers it, every scan says the chain wasn't reached, as each did when it asked on its own.
     public func refresh(wallet: Address, budget: LogsBudget, curves: Set<Address>, decimals: [Address: Int]) async -> WalletHistorySnapshot {
         let scans = await scans(wallet: wallet)
+        let latest = await store.latest()
         let entries = await withTaskGroup(of: (String, HistoryEntry).self) { group in
-            for scan in scans { group.addTask { [store] in (scan.id, await store.refresh(scan, wallet: wallet, budget: budget)) } }
+            for scan in scans { group.addTask { [store] in (scan.id, await store.refresh(scan, wallet: wallet, budget: budget, at: latest)) } }
             var out: [String: HistoryEntry] = [:]
             for await (id, entry) in group { out[id] = entry }
             return out

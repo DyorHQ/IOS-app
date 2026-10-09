@@ -122,7 +122,9 @@ public struct SwapHistoryService: Sendable {
     private func scan(wallet: Address, from: UInt64, to latest: UInt64, anchor: BlockHeader, secondsPerBlock: Double, decimals: [Address: Int], limit: Int) async -> [SwapRecord] {
         let topic = ABI.eventTopic(Self.transferSig)
         let walletWord = wallet.data.leftPadded(to: 32)
-        // No address filter: one scan for everything the wallet sent, one for everything it received.
+        // No address filter: one scan for everything the wallet sent, one for everything it received, each newest first
+        // (`RPCClient.chunkedLogs`), so a window wider than a scan's budget gives its latest swaps. No screen reads swaps
+        // from here: the app builds them from its history store (`WalletHistoryService`), which says how far it has read.
         async let outgoing = rpc.chunkedLogs(address: nil, topics: [topic, walletWord, nil], fromBlock: from, toBlock: latest)
         async let incoming = rpc.chunkedLogs(address: nil, topics: [topic, nil, walletWord], fromBlock: from, toBlock: latest)
         let (outLogs, inLogs) = await (outgoing, incoming)

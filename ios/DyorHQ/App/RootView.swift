@@ -164,12 +164,17 @@ struct RootView: View {
                   let address = session.address, env.social.isBound(to: address), let wallet = session.backgroundWallet else { return }
             await env.social.signIn(address: address, wallet: wallet)
         }
-        // The venue token list: what the last run stored is read at once, for search. The run that reads on from it
-        // (from genesis, on a fresh install) goes through the same gate as the wallet's history, so it starts once the
-        // history is no longer filling in — read to the head, or stalled — or when no wallet is signed in.
+        // The venue token list: what the last run stored is read at once, for search. The run that reads on from it goes
+        // through the same gate as the wallet's history, behind it (`LogsGate.Lane.background`), and waits while the
+        // signed-in wallet's history fills in for the first time — until the history model is on that wallet, and then
+        // until its history is read to the head, or stalled: a run under way is paused, and reads on from its last segment
+        // read in full. With no wallet signed in, a list with nothing read (a fresh install, from genesis) waits for a
+        // sign-in (`VenueTokenList.follow`). Nothing while the session is restored at launch: it is signed in or out a
+        // moment later.
         .task { await env.venueList.load() }
-        .task(id: "\(session.address?.hex ?? "")-\(env.history.filling)") {
-            if session.address == nil || !env.history.filling { env.refreshVenueTokens() }
+        .task(id: "\(session.state == .loading)-\(session.address?.hex ?? "")-\(env.history.wallet?.hex ?? "")-\(env.history.filling)") {
+            guard session.state != .loading else { return }
+            env.followVenueTokens(wallet: session.address, historyFilling: env.history.wallet != session.address || env.history.filling)
         }
         // The DyorHQ coin registry: read at start, then every 5 minutes while the app is in the foreground.
         .task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }

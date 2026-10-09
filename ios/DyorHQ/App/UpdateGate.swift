@@ -128,7 +128,8 @@ struct UpdateRequiredView: View {
             .listStyle(.insetGrouped)
             .navigationTitle(SupportLinks.name)
             .navigationBarTitleDisplayMode(.inline)
-            .task(id: session.address) { await assets.load(env: env, address: session.address, force: false) }
+            // Balances only: this screen lists no NFTs, so none are read.
+            .task(id: session.address) { await assets.load(env: env, address: session.address, force: false, nfts: false) }
         }
     }
 }

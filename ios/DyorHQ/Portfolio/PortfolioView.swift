@@ -16,6 +16,8 @@ struct PortfolioView: View {
     @State private var pastMoments = PastMomentsModel()
 
     private var model: PortfolioModel { env.portfolio }
+    /// The transfers into the wallet as the history has them: what the holdings are found in.
+    private var transfersIn: HistoryStatus { env.history.snapshot.status(WalletHistoryScans.transfersInId) }
 
     var body: some View {
         @Bindable var router = router
@@ -72,11 +74,16 @@ struct PortfolioView: View {
             }
             .refreshable { await reload(force: true) }
             .task(id: session.address) { await reload(force: false) }
-            // The history fills in behind the screen (`HistoryModel`): the figures follow it, and the holdings are read
-            // again once the transfer history has been read in full.
+            // The history fills in behind the screen (`HistoryModel`): the figures follow it, and the holdings — tokens and
+            // NFTs, both found in the transfers into the wallet — are read again once the transfer history has been read in
+            // full, and once it reads further back (the wallet's first transaction found: a new floor, read in one round
+            // perhaps, so never seen incomplete) than NFTs already read were read from — not before the first read, which
+            // the screen's own load makes.
             .task(id: env.history.version) { model.applyHistory(env.history.snapshot, version: env.history.version, for: session.address) }
-            .task(id: env.history.snapshot.status(WalletHistoryScans.transfersInId).complete) {
-                if env.history.snapshot.status(WalletHistoryScans.transfersInId).complete, !assets.complete { await assets.load(env: env, address: session.address, force: true) }
+            .task(id: "\(transfersIn.complete)-\(transfersIn.floor.map(String.init) ?? "")") {
+                if transfersIn.complete, !assets.complete || !assets.nftsComplete || (assets.nftsRead && assets.nftsFloor != transfersIn.floor) {
+                    await assets.load(env: env, address: session.address, force: true)
+                }
             }
             // A Perpl key that appears (a passkey session unlocked) loads the perps history the last load lacked.
             .task(id: perplTrading.key != nil) { if perplTrading.key != nil { await reload(force: false) } }

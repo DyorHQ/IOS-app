@@ -35,7 +35,8 @@ final class AppEnvironment {
     let swapHistory: SwapHistoryService
     let walletDiscovery: WalletTokenDiscovery
     /// Where every `eth_getLogs` goes on mainnet: across the public endpoints, in ranges each answers, through one gate
-    /// (`LogsRouter`), and the client every history reader scans through.
+    /// (`LogsRouter`) — a screen's scan first, then the wallet's history, then the venue list (`LogsGate.Lane`) — and the
+    /// client every history reader scans through.
     let logsRouter: LogsRouter
     let logsClient: RPCClient
     /// The wallet's history scans, kept on the device and refreshed incrementally (`HistoryStore`), and the records built
@@ -114,10 +115,14 @@ final class AppEnvironment {
         swapHistory = SwapHistoryService(rpc: logsClient, clock: clock, archive: archiveClient)
         // Wallet discovery reads balances/metadata on the primary multicall.
         walletDiscovery = WalletTokenDiscovery(logsRPC: logsClient, multicall: multicall)
-        nftDiscovery = WalletNFTDiscovery(logsRPC: logsClient, multicall: multicall)
+        // The wallet's NFTs from the transfers into it its history store holds (`WalletHistorySnapshot.transfersIn`), with
+        // no scan of their own: ownership and metadata on the primary multicall.
+        nftDiscovery = WalletNFTDiscovery(multicall: multicall)
         kuruTokens = KuruTokenListClient()
         // The venue-wide pool scan (from genesis, no wallet filter), one venue after the other, one request at a time, a
-        // throttle waited out rather than split (`VenueTokensService`), through the same router and gate.
+        // throttle waited out rather than split (`VenueTokensService`), through the same router and gate, in its background
+        // lane: behind every screen's scan and the wallet's history rounds (`LogsGate.Lane`), and paused while the history
+        // fills in (`VenueTokenList.follow`).
         venueTokens = VenueTokensService(logsRPC: logsClient, multicall: multicall)
         // The wallet's history, kept in Application Support (a fork's apart from mainnet's).
         let historyDirectory = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))?
@@ -229,13 +234,14 @@ final class AppEnvironment {
     var bridgeMonad: EVMChain { EVMChain.monad(rpc: config.rpcURL) }
 
     /// Builds/refreshes the global venue token list (Uniswap + Monday Trade). The first run scans the FULL history
-    /// from genesis in checkpointed segments (rpc1 serves old logs even though it prunes old state), so progress
-    /// survives the app backgrounding; later runs resume from the checkpoint and only read the new tail. The checkpoint
-    /// moves past a segment only once it was read in full; a segment read in part is read again next time
-    /// (`VenueTokensService.refresh`). Each new token is enriched with its accurate Kuru logo and added to the list the
-    /// swap picker searches (`venueList`). Runs after `AppSettings` has decided App Lock (`settings` is built with this
-    /// environment), so what the store writes can't turn it off.
-    func refreshVenueTokens() {
-        venueList.refresh()
+    /// from genesis in checkpointed segments, so progress survives the app backgrounding; later runs resume from the
+    /// checkpoint and only read the new tail. The checkpoint moves past a segment only once it was read in full; a
+    /// segment read in part is read again next time (`VenueTokensService.refresh`). Each new token is enriched with its
+    /// accurate Kuru logo and added to the list the swap picker searches (`venueList`). A run waits while the signed-in
+    /// wallet's history fills in for the first time, one under way paused at once, and with no wallet signed in a list
+    /// with nothing read waits for a sign-in (`VenueTokenList.follow`). Runs after `AppSettings` has decided App Lock
+    /// (`settings` is built with this environment), so what the store writes can't turn it off.
+    func followVenueTokens(wallet: Address?, historyFilling: Bool) {
+        venueList.follow(wallet: wallet, historyFilling: historyFilling)
     }
 }

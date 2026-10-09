@@ -67,7 +67,8 @@ public extension MomentsService {
     /// from the factory's `Published` events naming it as the creator, so none is missed however many were published;
     /// their balances are read in one multicall, and the withdrawals naming it are summed for those Moments only (a
     /// platform or treasury withdrawal is never a creator's). Throws when the balances can't be read; a scan that
-    /// couldn't be read to the head makes `complete` false.
+    /// couldn't be read to the head makes `complete` false. The scans read newest first: one that stops short (the cohort's
+    /// window is wider than a scan's budget, about 4.8M blocks) holds the latest of it.
     func creatorEarnings(account: Address) async throws -> MomentsCreatorEarnings {
         guard isDeployed else { return .none }
         let head = try await logsRPC.blockNumber()
@@ -76,11 +77,11 @@ public extension MomentsService {
         let word = account.data.leftPadded(to: 32)
         let rpc = logsRPC
         let hook = addresses.hook
-        async let publishedRead = rpc.chunkedLogsReport(address: addresses.factory, topics: [MomentsABI.Events.publishedTopic, nil, word], fromBlock: from, toBlock: head)
-        async let withdrawnRead = rpc.chunkedLogsReport(address: addresses.collect, topics: [MomentsABI.Events.withdrawnTopic, nil, word], fromBlock: from, toBlock: head)
+        async let publishedRead = rpc.chunkedLogsReport(address: addresses.factory, topics: [MomentsABI.Events.publishedTopic, nil, word], fromBlock: from, toBlock: head, order: .descending)
+        async let withdrawnRead = rpc.chunkedLogsReport(address: addresses.collect, topics: [MomentsABI.Events.withdrawnTopic, nil, word], fromBlock: from, toBlock: head, order: .descending)
         async let feesRead: (logs: [Log], complete: Bool) = hook.isZero
             ? ([], true)
-            : rpc.chunkedLogsReport(address: hook, topics: [MomentsABI.Events.feesWithdrawnTopic, nil, word], fromBlock: from, toBlock: head)
+            : rpc.chunkedLogsReport(address: hook, topics: [MomentsABI.Events.feesWithdrawnTopic, nil, word], fromBlock: from, toBlock: head, order: .descending)
         let (published, withdrawn, fees) = await (publishedRead, withdrawnRead, feesRead)
         let complete = published.complete && withdrawn.complete && fees.complete
 

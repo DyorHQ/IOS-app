@@ -520,10 +520,28 @@ struct LaunchDetailView: View {
     @State private var detailUnread = false
     @State private var account: LaunchAccountView?
     @State private var trades: [CurveTrade] = []
+    /// The last 24 hours of the curve's trades were all read (`CurveTrades.complete`). False: the read stopped short, and
+    /// `trades` are the latest of them; the 24h volume reads as a minimum and the stats section says so, with Retry.
+    @State private var tradesComplete = true
+    /// The latest read of the trades failed outright: the chart and the list keep the last good read, and the stats
+    /// section says so, with Retry.
+    @State private var tradesUnread = false
+    /// A read of the trades has answered at least once: until then the chart is loading or unread, never "No trades yet",
+    /// and the 24h volume reads "—", never 0.
+    @State private var tradesRead = false
     @State private var priceSeries: [PricePoint] = []
     @State private var pairUSD: Double?
-    @State private var holders: Int?
+    /// The coin's holders (`LaunchpadService.holders`): a minimum when not every transfer since the launch was read.
+    @State private var holders: HolderCount?
+    /// The latest read of the holders failed: the last good count stays, and the stats section says so, with Retry.
+    @State private var holdersUnread = false
     @State private var loadingTrades = true
+    /// The page's reads asked for after the first — Retry, a trade or a claim done — which key its read (`.task(id:)`):
+    /// the read runs as the page's own task, so a new one cancels the one under way rather than stacking another
+    /// 80-request scan beside it, and closing the page cancels it. In build 22 and earlier each was a `Task` of its own,
+    /// which went on reading after the page closed, one more for every tap; at the logs gate, a screen's scan goes ahead
+    /// of the wallet's history (`LogsGate.Lane`).
+    @State private var reloads = 0
     @State private var side: TradeSide = .buy
     @State private var amountText = ""
     @State private var buyQuote: BuyQuote?
@@ -550,6 +568,23 @@ struct LaunchDetailView: View {
     /// 24h trading volume in pair units, and in USD when priced.
     private var volume24: Double { trades.filter { Date().timeIntervalSince1970 - Double($0.time) <= 86_400 }.reduce(0) { $0 + Amount.units($1.quoteAmount, decimals: $1.quoteDecimals) } }
     private var volume24USD: Double? { pairUSD.map { volume24 * $0 } }
+    /// The 24h volume as the stats show it: "—" until the trades have been read once (never 0 while unread), and a
+    /// minimum ("+") while what was read is the latest of them only, or the last good read when the latest failed: either
+    /// way every trade it sums is one of the last 24 hours, and only trades it doesn't hold are missing.
+    private var volume24Text: String {
+        guard tradesRead else { return "—" }
+        let value = volume24USD.map { PriceFormat.usdValue($0) } ?? "\(NumberStyle.number(volume24)) \(launch.pair.symbol)"
+        return tradesComplete && !tradesUnread ? value : value + "+"
+    }
+    /// The holder count as the stats show it: "—" until it has been read, a minimum ("+") when not every transfer since the
+    /// launch was (`HolderCount.complete`), and "—" for a minimum of none, which says nothing ("0+" read as no holders). A
+    /// count kept from the last good read when the latest failed is shown as it was, and the stats section says it
+    /// couldn't be read again.
+    private var holdersText: String {
+        guard let holders else { return "—" }
+        if holders.complete { return "\(holders.count)" }
+        return holders.count > 0 ? "\(holders.count)+" : "—"
+    }
 
     private enum TradeSide { case buy, sell }
     private var token: Token { Token(address: launch.token, symbol: launch.symbol, name: launch.name, decimals: 18, logoURL: URL(string: launch.logo), isLaunchpad: true) }
@@ -572,24 +607,24 @@ struct LaunchDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(launch.symbol)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+        .task(id: reloads) { await load() }
         .task(id: "\(side)-\(rawAmount)") { await quote() }
         .sheet(isPresented: $showConfirm) { confirmation }
         .sheet(isPresented: $showGraduate) {
-            ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { Task { await load() } },
+            ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { reloads += 1 },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: tr("\(launch.symbol) graduated"), subtitle: launch.graduationVenue.title, hash: hash, section: "launch"), owner: session.address) }) {
                 DetailRow("Venue", launch.graduationVenue.title)
                 DetailRow("Who pays", "You (gas only)")
             }
         }
         .sheet(isPresented: $showClaim) {
-            ConfirmationSheet(title: "Claim Rewards", confirmTitle: "Claim", build: { await env.launchpad.claimRewardsPlan(launch: launch, view: account) }, onDone: { Task { await load() } },
+            ConfirmationSheet(title: "Claim Rewards", confirmTitle: "Claim", build: { await env.launchpad.claimRewardsPlan(launch: launch, view: account) }, onDone: { reloads += 1 },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .claim, title: tr("Claimed \(launch.symbol) rewards"), subtitle: account.map { "\(NumberStyle.units($0.pendingRewards, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? tr("holder rewards"), hash: hash, section: "launch"), owner: session.address) }) {
                 if let account { DetailRow("Pending rewards", verbatim: "\(NumberStyle.units(account.pendingRewards, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
             }
         }
         .sheet(isPresented: $showCreatorClaim) {
-            ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { Task { await load() } },
+            ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { reloads += 1 },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected \(launch.symbol) creator fees"), subtitle: account.map { "\(NumberStyle.units($0.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? tr("creator fees"), hash: hash, section: "launch"), owner: session.address) }) {
                 if let account { DetailRow("Claimable", verbatim: "\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
                 DetailRow("To", session.address?.short ?? "—")
@@ -690,8 +725,9 @@ struct LaunchDetailView: View {
         } header: {
             Text("Price")
         } footer: {
-            // Only while the curve trades: a graduated coin trades in its pool, which its Graduated section explains.
-            if trades.isEmpty, !loadingTrades, launch.phase == .bonding {
+            // Only while the curve trades: a graduated coin trades in its pool, which its Graduated section explains. And only
+            // when the last 24 hours were read in full: a read that stopped short or failed isn't "no trades".
+            if trades.isEmpty, !loadingTrades, tradesRead, tradesComplete, !tradesUnread, launch.phase == .bonding {
                 Paragraph("No trades yet — the chart moves up as people buy on the curve and down as they sell.").font(.caption)
             }
         }
@@ -705,9 +741,9 @@ struct LaunchDetailView: View {
     private var statsSection: some View {
         Section {
             HStack(spacing: 0) {
-                stat("24h Volume", volume24USD.map { PriceFormat.usdValue($0) } ?? "\(NumberStyle.number(volume24)) \(launch.pair.symbol)")
+                stat("24h Volume", volume24Text)
                 Divider().frame(height: 34)
-                stat("Holders", holders.map { "\($0)" } ?? "—")
+                stat("Holders", holdersText)
                 Divider().frame(height: 34)
                 stat("Progress", "\(launch.progressBps / 100)%")
             }
@@ -715,8 +751,33 @@ struct LaunchDetailView: View {
                 HStack(alignment: .firstTextBaseline) {
                     InlineError(message: "Some details of this launch couldn't be read just now.")
                     Spacer(minLength: 8)
-                    Button("Retry") { Task { await load() } }.font(.footnote.weight(.semibold))
+                    Button("Retry") { reloads += 1 }.font(.footnote.weight(.semibold))
                 }
+            }
+            // A figure built from a read that stopped short, or kept from the last good read, says so: never a part passed
+            // off as the whole. Nothing read yet says just that: there is no part.
+            if !loadingTrades, tradesUnread || !tradesComplete {
+                HStack(alignment: .firstTextBaseline) {
+                    if tradesRead {
+                        InlineError(message: "Part of this coin's trades couldn't be read just now, so the chart and 24h volume may be missing some.")
+                    } else {
+                        InlineError(message: "This coin's trades couldn't be read just now.")
+                    }
+                    Spacer(minLength: 8)
+                    Button("Retry") { reloads += 1 }.font(.footnote.weight(.semibold))
+                }
+            }
+            if holdersUnread {
+                HStack(alignment: .firstTextBaseline) {
+                    InlineError(message: "This coin's holders couldn't be read just now.")
+                    Spacer(minLength: 8)
+                    Button("Retry") { reloads += 1 }.font(.footnote.weight(.semibold))
+                }
+            } else if let holders, !holders.complete {
+                // A coin older than one read reaches back (80 requests: about 17 days of its age on the widest endpoint,
+                // hours on the narrow ones) always gets a minimum: no failure, and no Retry that could ever do better.
+                Paragraph("Counted from this coin's most recent transfers only, so there may be more holders.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
     }
@@ -901,7 +962,7 @@ struct LaunchDetailView: View {
     @ViewBuilder private var confirmation: some View {
         if let address = session.address {
             if side == .buy, buysOpen, let q = buyQuote {
-                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { try await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
+                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { try await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; reloads += 1 }, onCompleted: { hash in
                     // Bought here, so chosen here: never shown as Unverified, as a swap into a token isn't.
                     KnownTokenStore.add(token, owner: session.address)
                     KnownTokenStore.markChosen(launch.token, owner: session.address)
@@ -915,7 +976,7 @@ struct LaunchDetailView: View {
                     DetailRow("Minimum", "\(NumberStyle.units(q.tokensOut * 99 / 100, decimals: 18, compact: true)) \(launch.symbol) (1% slippage)")
                 }
             } else if side == .sell, let q = sellQuote {
-                ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; Task { await load() } }, onCompleted: { hash in
+                ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; reloads += 1 }, onCompleted: { hash in
                     Activity.record(ActivityRecord(kind: .sell, title: tr("Sold \(launch.symbol)"), subtitle: tr("\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)"), hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                     env.history.kick(env: env)
                 }, intent: .launchpadSell(token: launch.token, amount: rawAmount, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 })) {
@@ -930,7 +991,7 @@ struct LaunchDetailView: View {
     private func load() async {
         async let d = env.launchpad.launch(token: launch.token, factory: launch.factory)
         async let t = env.launchpad.trades(curve: launch.curve, pair: launch.pair)
-        async let h = env.launchpad.holderCount(token: launch.token, excluding: [launch.curve])
+        async let h = env.launchpad.holders(token: launch.token, excluding: [launch.curve], launchedAt: launch.launchedAt)
         async let pu = pairUSDPrice()
         if let address = session.address { account = try? await env.launchpad.accountView(launch, account: address) }
         // A launch that can't be read keeps the last good detail and says so (`LaunchpadService.launch`); one that isn't
@@ -943,13 +1004,26 @@ struct LaunchDetailView: View {
             if !Task.isCancelled { detailUnread = true }
         }
         pairUSD = await pu
-        let curveTrades = (try? await t) ?? []
+        let curveTrades = await t
         // Nor are its empty answers: the chart keeps the trades it has.
         guard !Task.isCancelled else { return }
-        trades = curveTrades
-        priceSeries = Self.priceSeries(trades: curveTrades, launch: launch, unit: pairUSD ?? 1)
+        if let curveTrades {
+            // Read newest first: a read that stopped short holds the latest trades, and says so (`tradesComplete`).
+            trades = curveTrades.trades
+            tradesComplete = curveTrades.complete
+            tradesUnread = false
+            tradesRead = true
+        } else {
+            // A read that failed outright keeps the last good trades, and says so.
+            tradesUnread = true
+        }
+        priceSeries = Self.priceSeries(trades: trades, launch: launch, unit: pairUSD ?? 1)
         loadingTrades = false
-        holders = await h
+        let count = await h
+        guard !Task.isCancelled else { return }
+        // A count that couldn't be read keeps the last good one, and says so: never 0 for a read that failed.
+        if let count { holders = count }
+        holdersUnread = count == nil
     }
 
     private func pairUSDPrice() async -> Double? {

@@ -12861,6 +12861,34 @@
         }
       }
     },
+    "Counted from this coin's most recent transfers only, so there may be more holders." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se cuentan solo a partir de las transferencias más recientes de esta moneda, así que puede haber más holders."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calculé uniquement à partir des transferts les plus récents de ce jeton : il peut donc y avoir davantage de détenteurs."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 코인의 최근 전송 내역만으로 집계해서 홀더가 더 있을 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅根据此币最近的转账统计，因此持有者可能更多。"
+          }
+        }
+      }
+    },
     "Create Account" : {
       "localizations" : {
         "es" : {
@@ -24996,6 +25024,34 @@
         }
       }
     },
+    "No NFTs found, but part of your wallet couldn't be read, so some may be missing." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontraron NFT, pero no se pudo leer parte de tu billetera, así que puede que falten algunos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun NFT trouvé, mais une partie de votre portefeuille n'a pas pu être lue : certains peuvent donc manquer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "NFT를 찾지 못했지만 지갑의 일부를 읽지 못해 누락된 NFT가 있을 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未找到 NFT，但你的钱包有部分内容无法读取，因此可能有遗漏。"
+          }
+        }
+      }
+    },
     "No NFTs in this wallet yet." : {
       "localizations" : {
         "es" : {
@@ -25020,6 +25076,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此钱包中暂无 NFT。"
+          }
+        }
+      }
+    },
+    "No NFTs received since %@." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se recibió ningún NFT desde el %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun NFT reçu depuis le %@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 이후 받은 NFT가 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自 %@ 以来未收到任何 NFT。"
           }
         }
       }
@@ -27072,6 +27156,34 @@
         }
       }
     },
+    "Only NFTs received since %@ are listed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo se muestran los NFT recibidos desde el %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seuls les NFT reçus depuis le %@ sont affichés."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 이후 받은 NFT만 표시돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅列出自 %@ 以来收到的 NFT。"
+          }
+        }
+      }
+    },
     "Only enter it into a wallet you trust (MetaMask, Rabby, OKX…). A hardware wallet is safest." : {
       "localizations" : {
         "es" : {
@@ -28466,6 +28578,34 @@
         }
       }
     },
+    "Part of this coin's trades couldn't be read just now, so the chart and 24h volume may be missing some." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer parte de las operaciones de esta moneda en este momento, así que puede que falten algunas en el gráfico y en el volumen en 24 h."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une partie des transactions de ce jeton n'a pas pu être lue pour le moment : certaines peuvent donc manquer dans le graphique et le volume 24 h."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 이 코인의 거래 일부를 읽을 수 없어 차트와 24시간 거래량에서 일부 거래가 누락되었을 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取此币的部分交易，因此图表和 24 小时交易量中可能缺少一些交易。"
+          }
+        }
+      }
+    },
     "Part of this was already sent. Check it with View above before trying again — confirming again here could send it twice." : {
       "localizations" : {
         "es" : {
@@ -28658,6 +28798,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的钱包有部分内容无法读取，因此列表中可能缺少某个代币。"
+          }
+        }
+      }
+    },
+    "Part of your wallet couldn't be read, so an NFT may be missing from the list." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer parte de tu billetera, así que puede que falte algún NFT en la lista."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une partie de votre portefeuille n'a pas pu être lue : un NFT peut donc manquer dans la liste."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지갑의 일부를 읽지 못해 목록에서 NFT가 누락되었을 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的钱包有部分内容无法读取，因此列表中可能缺少某个 NFT。"
           }
         }
       }
@@ -41437,6 +41605,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此币将其创作者费用分给持有者：每位持有者按比例领取自己的份额（见“你的持仓”或“我的 Launchpad”）。"
+          }
+        }
+      }
+    },
+    "This coin's holders couldn't be read just now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer los holders de esta moneda en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les détenteurs de ce jeton n'ont pas pu être lus pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 이 코인의 홀더를 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取此币的持有者。"
+          }
+        }
+      }
+    },
+    "This coin's trades couldn't be read just now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer las operaciones de esta moneda en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les transactions de ce jeton n'ont pas pu être lues pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 이 코인의 거래를 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取此币的交易。"
           }
         }
       }

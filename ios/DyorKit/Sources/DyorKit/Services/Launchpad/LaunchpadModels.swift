@@ -836,6 +836,40 @@ public struct CurveTrade: Identifiable, Hashable, Sendable {
     public var transactionHash: Data? { Data(hex: String(id.prefix(66))) }
 }
 
+/// A window of one curve's fills (`LaunchpadService.trades`), and whether all of it was read.
+public struct CurveTrades: Sendable, Hashable {
+    /// The fills read, oldest first.
+    public let trades: [CurveTrade]
+    /// Every block of the window was read, so `trades` are all its fills. False: the read stopped short (its budget spent,
+    /// an endpoint that didn't answer). It reads newest first, so `trades` are the latest fills, every one down to where it
+    /// stopped, and the oldest of the window are missing: a screen says so, and never shows a sum of them (the 24h volume)
+    /// as the whole.
+    public let complete: Bool
+
+    public init(trades: [CurveTrade], complete: Bool) {
+        self.trades = trades
+        self.complete = complete
+    }
+}
+
+/// How many wallets hold a launch coin (`LaunchpadService.holders`): the addresses whose transfers since the launch leave
+/// them a positive balance, the zero address and the coin's curve left out.
+public struct HolderCount: Sendable, Hashable {
+    public let count: Int
+    /// Every transfer from before the coin's launch to the head was read: `count` is exact. False: the read stopped short
+    /// of the launch, and `count` is a minimum. The transfers are read newest first, so what was read runs from some block
+    /// to the head, and an address whose transfers there add up to more in than out holds the coin now, whatever it held
+    /// before (a balance is never below zero): every address counted holds it, and only holders whose last transfer is
+    /// older than the read are missing. Read oldest first, as in build 22 and earlier, the same count was of balances at
+    /// some block in the past, neither a minimum nor the count: a coin launched in the last six days read 0.
+    public let complete: Bool
+
+    public init(count: Int, complete: Bool) {
+        self.count = count
+        self.complete = complete
+    }
+}
+
 /// OHLC bucket for the lightweight chart. `volume` is quote traded, in pair units.
 public struct Candle: Hashable, Sendable, Identifiable {
     public var id: Int { time }

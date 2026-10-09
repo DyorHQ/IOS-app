@@ -3,9 +3,11 @@ import Observation
 
 /// The swap picker's venue token list (`VenueTokensService`) as the app holds it: read from the store once, off the main
 /// actor, and kept in memory, so a search never decodes it (9,405 tokens are 1.8 MB of JSON: 0.1–0.15 s to decode, 0.7 s
-/// to encode); brought up to the chain head in the background, one run at a time; and saved only once a segment is read
-/// in full or a run dropped addresses, off the main actor, in the format build 16 reads (a JSON array of `Token`), so a
-/// downgrade keeps the list.
+/// to encode); brought up to the chain head in the background, one run at a time, never while a wallet's history fills
+/// in for the first time, nor from genesis with no wallet signed in (`follow`); and saved only once a segment is read in
+/// full or a run
+/// dropped addresses, off the main actor, in the format build 16 reads (a JSON array of `Token`), so a downgrade keeps
+/// the list.
 @Observable
 @MainActor
 public final class VenueTokenList {
@@ -37,17 +39,33 @@ public final class VenueTokenList {
     public private(set) var isStopped = false
     /// Whether the store has been read.
     public private(set) var isLoaded = false
+    /// No wallet is signed in (`follow`): a list that holds nothing read waits for one. False until told.
+    private var signedOut = false
+    /// The signed-in wallet's history is filling in for the first time this session (`follow`): the run waits for it.
+    /// False until told.
+    private var historyFilling = false
+    /// The wallets whose history has been read to the head, or stalled, once this session (`follow`): the run waits for a
+    /// wallet's first fill only. In memory only, a flag per address, gone with the app.
+    @ObservationIgnored private var filledOnce: Set<Address> = []
 
     /// Whether a search may miss a token because the list is short of the chain: the store still being read by the first
     /// run, or the list short of what the last run read towards (`VenueTokensService.target`: a fresh install, the read
-    /// build 17 makes once more, a refill under way, or a run that ended short, read on at the next return to the app).
-    /// Before a run has read the head (offline, or the endpoint down), short of a block the chain is known to have passed
-    /// (`VenueTokensService.knownHeight`), so a list an earlier launch left half-built says so too. The swap picker says
-    /// so. After `stop()`, nothing reads on, so nothing is said.
+    /// build 17 makes once more, a refill under way or paused while the wallet's history fills in, or a run that ended
+    /// short, read on at the next return to the app). Before a run has read the head (offline, the endpoint down, or every
+    /// run paused so far), short of a block the chain is known to have passed (`VenueTokensService.knownHeight`), so a
+    /// list an earlier launch left half-built says so too. The swap picker says so. After `stop()`, nothing reads on, so
+    /// nothing is said.
     public var isCatchingUp: Bool {
         guard !isStopped else { return false }
         guard isLoaded else { return isRefreshing }
         return checkpoint < VenueTokensService.target(head: head ?? VenueTokensService.knownHeight)
+    }
+
+    /// Whether the run waits (`follow`): while the signed-in wallet's history fills in for the first time, and, with no
+    /// wallet signed in, while the list holds nothing read — no token and no checkpoint: a read from genesis. Before the
+    /// store is read, the second is decided once it is (`perform`).
+    public var isHeld: Bool {
+        historyFilling || (signedOut && isLoaded && tokens.isEmpty && checkpoint == 0)
     }
 
     @ObservationIgnored private let service: VenueTokensService
@@ -68,8 +86,11 @@ public final class VenueTokenList {
     @ObservationIgnored private var droppedStored: [Address] = []
     @ObservationIgnored private var droppedSaved: Set<Address> = []
     @ObservationIgnored private var run: Task<Void, Never>?
+    /// The store's read, under way or done (`loadStore`): one read, however many wait for it — `load` at launch and a
+    /// run starting meanwhile each decoded the 1.8 MB list.
+    @ObservationIgnored private var loading: Task<Void, Never>?
     /// Which run may change the list and the store: `stop` moves it on, so a run it cancelled, and a save of that run
-    /// already on its way, change nothing.
+    /// already on its way, change nothing. A pause (`follow`) doesn't: what the run it cancels read in full is the list's.
     @ObservationIgnored private var generation = 0
 
     /// `read` and `write` are the store: `read` runs off the main actor, once; `write` on it, with the list, the checkpoint
@@ -84,14 +105,46 @@ public final class VenueTokenList {
         self.now = now
     }
 
-    /// Brings the list up to the chain head in the background (`VenueTokensService.refresh`), unless a run already is. The
-    /// first run reads the store first. Call it once App Lock's default is decided (`AppSettings`): a save writes keys an
-    /// earlier install is told apart by.
+    /// Brings the list up to the chain head in the background (`VenueTokensService.refresh`), unless a run already is, or
+    /// the run waits (`isHeld`). The first run reads the store first. Call it once App Lock's default is decided
+    /// (`AppSettings`): a save writes keys an earlier install is told apart by.
     public func refresh() {
-        guard !isStopped, run == nil else { return }
+        guard !isStopped, run == nil, !isHeld else { return }
         isRefreshing = true
         let generation = generation
         run = Task { await perform(generation) }
+    }
+
+    /// The signed-in wallet (nil: none) and whether its history is filling in (true too while the app's history isn't on
+    /// that wallet yet), as the app has them on every change of either (RootView, once App Lock's default is decided, as
+    /// `refresh`), and with them whether the list reads on now (`isHeld`). The run's requests wait behind every screen's
+    /// scan and the history's at the app's one gate (`LogsGate.Lane.background`), and besides:
+    /// - while a wallet's history fills in for the first time this session (`historyFilling`), the run waits: one under
+    ///   way is cancelled at once, and the next reads on from the checkpoint — the end of the last segment it read in full,
+    ///   saved as it was read — so a pause costs the segment it was reading at most, read again. In build 22 and earlier a
+    ///   run started during onboarding read on, to the head, through a fresh install's first history fill. A run a pause
+    ///   cancelled isn't one that ended short (`shortRuns`): the next starts as soon as the history is read, or stalled,
+    ///   and at once when that came while the cancelled one was still ending (`perform`).
+    /// - once that wallet's history has been read to the head, or stalled, the run no longer waits for it: a round left
+    ///   with a gap, or the transfer scans reading further back once the wallet's first transaction is found, fills it in
+    ///   again, and pausing on each would cancel the run each time, a segment of up to three venues' requests read again;
+    ///   the gate already puts the run behind every history round.
+    /// - with no wallet signed in (`wallet` nil), a list that holds nothing read waits for a sign-in: a fresh install reads
+    ///   from genesis (about 5,600 requests) only once a wallet is signed in, and search has the curated and Kuru lists
+    ///   meanwhile, as it has while the list is empty. A list read before (in part, or build 16's) reads on. There is no
+    ///   wallet's history to wait for then: `historyFilling` counts only with a wallet signed in (the app's history with
+    ///   no wallet is an empty stand-in, which reads as filling in).
+    /// Otherwise the list reads on (`refresh`) — unless the last run ended short and its pause isn't over: a return to the
+    /// app after it runs it again (`resume`), as when nothing held it.
+    public func follow(wallet: Address?, historyFilling: Bool) {
+        signedOut = wallet == nil
+        if let wallet, !historyFilling { filledOnce.insert(wallet) }
+        self.historyFilling = wallet.map { historyFilling && !filledOnce.contains($0) } ?? false
+        if isHeld {
+            run?.cancel()
+        } else if shortRuns == 0 || now() >= retryAfter {
+            refresh()
+        }
     }
 
     /// Before this device's data is erased (Delete Account, Forget This Device): the run under way is cancelled, and
@@ -108,7 +161,8 @@ public final class VenueTokenList {
 
     /// On a return to the app: runs again when the last run ended short of the chain head, which a cold launch alone
     /// used to retry, after a pause that doubles with each such run in a row (`retryPause`), so an endpoint that is down
-    /// or throttling isn't asked again at every return. Nothing when the last run read to the head, or one is running.
+    /// or throttling isn't asked again at every return. Nothing when the last run read to the head, one is running, or
+    /// the run waits (`isHeld`).
     public func resume() {
         guard shortRuns > 0, now() >= retryAfter else { return }
         refresh()
@@ -125,16 +179,26 @@ public final class VenueTokenList {
     }
 
     /// Reads the stored list, so search has it at once; the run that brings it up to the chain head is `refresh`,
-    /// which may come later (after the wallet's history has been read). Nothing after `stop()`, or once read.
+    /// which may come later (`follow`: once the wallet's history has been read). Nothing after `stop()`, or once read.
     public func load() async {
         guard !isStopped, !isLoaded else { return }
         await loadStore(generation)
     }
 
-    /// The store into memory, unless a run started or `stop()` was called meanwhile, or another load got there first.
+    /// The store into memory, read once: a load or a run that comes while it is read waits for that read.
     private func loadStore(_ generation: Int) async {
-        let read = self.read
-        let stored = await Task.detached(priority: .utility) { Self.decode(read()) }.value
+        if loading == nil {
+            let read = self.read
+            loading = Task { [weak self] in
+                let stored = await Task.detached(priority: .utility) { Self.decode(read()) }.value
+                self?.take(stored, generation)
+            }
+        }
+        await loading?.value
+    }
+
+    /// What the store held, into memory, unless `stop()` was called while it was read.
+    private func take(_ stored: (tokens: [Token], checkpoint: UInt64, dropped: [Address]), _ generation: Int) {
         guard generation == self.generation, !isLoaded else { return }
         tokens = stored.tokens
         checkpoint = stored.checkpoint
@@ -146,26 +210,35 @@ public final class VenueTokenList {
     }
 
     private func perform(_ generation: Int) async {
-        if !isLoaded {
-            await loadStore(generation)
-            guard generation == self.generation, isLoaded else { return }
-        }
-        let result = await service.refresh(tokens: tokens, checkpoint: checkpoint, dropped: dropped, logos: logos) { [weak self] progress in
-            guard let self, await self.show(progress, generation) else { return }
-            let data = await Task.detached(priority: .utility) { Self.encode(progress.tokens) }.value
-            if let data { await self.store(data, checkpoint: progress.checkpoint, dropped: progress.dropped, generation) }
-        }
+        if !isLoaded { await loadStore(generation) }
+        // Stopped meanwhile: `stop()` ended the run, and nothing after it reads, saves or starts another (R4).
         guard generation == self.generation else { return }
-        // Nothing read (the head couldn't be read): the list is as it was, and so is what the picker says.
-        if let result { head = result.head; dropped = result.dropped }
-        if result?.complete == true {
-            shortRuns = 0
-        } else {
-            shortRuns += 1
-            retryAfter = now().addingTimeInterval(Self.retryPause(afterShortRuns: shortRuns))
+        // Held while the store was read (`follow`) — paused, or no wallet signed in and the store held nothing read — or
+        // cancelled by a pause: nothing is read, and this is no run that ended short.
+        if isLoaded, !isHeld, !Task.isCancelled {
+            let result = await service.refresh(tokens: tokens, checkpoint: checkpoint, dropped: dropped, logos: logos) { [weak self] progress in
+                guard let self, await self.show(progress, generation) else { return }
+                let data = await Task.detached(priority: .utility) { Self.encode(progress.tokens) }.value
+                if let data { await self.store(data, checkpoint: progress.checkpoint, dropped: progress.dropped, generation) }
+            }
+            guard generation == self.generation else { return } // stopped meanwhile (R4), as above
+            // Nothing read (the head couldn't be read): the list is as it was, and so is what the picker says.
+            if let result { head = result.head; dropped = result.dropped }
+            if result?.complete == true {
+                shortRuns = 0
+            } else if !Task.isCancelled {
+                // Short on its own account (a gap, the head unread, an endpoint down or throttling). One a pause cancelled
+                // (`follow`) isn't: it reads on as soon as nothing holds it, with no pause before.
+                shortRuns += 1
+                retryAfter = now().addingTimeInterval(Self.retryPause(afterShortRuns: shortRuns))
+            }
         }
         run = nil
         isRefreshing = false
+        // Cancelled by a pause that lifted while this run was ending (`follow` found it still running): the next run
+        // starts now, from the checkpoint. Nothing while the run still waits (`refresh`). A task started here doesn't
+        // inherit this one's cancellation.
+        if Task.isCancelled { refresh() }
     }
 
     /// A run's progress, in memory at once; whether the store should follow: only once the checkpoint moved or the run

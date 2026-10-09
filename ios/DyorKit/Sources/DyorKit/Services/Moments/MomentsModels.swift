@@ -873,7 +873,7 @@ public struct MomentPublishResult: Sendable, Hashable {
 /// Holder statistics for a Moment coin, rebuilt from `Transfer` logs (there is no indexer). Protocol addresses
 /// (the pool, the locker, vesting…) are reported apart from wallets.
 public struct MomentHolderStats: Sendable, Hashable {
-    /// Wallets with a non-zero balance (protocol addresses excluded).
+    /// Wallets with a non-zero balance (protocol addresses excluded): their number when `complete`, else a minimum.
     public let holders: Int
     public let topHolder: Address?
     /// Share of the circulating supply held by the largest wallet.
@@ -884,8 +884,13 @@ public struct MomentHolderStats: Sendable, Hashable {
     public let poolBps: Int
     public let mintedCoins: Double
     public let scannedTo: UInt64
+    /// Every transfer from before the publish to `scannedTo` was read. False: the read stopped short of the publish
+    /// (`MomentsService.holderStats` reads newest first), so `holders` is a minimum — every wallet counted holds coins, as
+    /// its transfers since where the read stopped leave it more in than out — and the rest (the top wallet and its share,
+    /// the circulating and minted coins, the pool's share) are of the transfers read only, which no screen shows.
+    public let complete: Bool
 
-    public init(holders: Int, topHolder: Address?, topHolderBps: Int, circulatingCoins: Double, poolBps: Int, mintedCoins: Double, scannedTo: UInt64) {
+    public init(holders: Int, topHolder: Address?, topHolderBps: Int, circulatingCoins: Double, poolBps: Int, mintedCoins: Double, scannedTo: UInt64, complete: Bool = true) {
         self.holders = holders
         self.topHolder = topHolder
         self.topHolderBps = topHolderBps
@@ -893,9 +898,8 @@ public struct MomentHolderStats: Sendable, Hashable {
         self.poolBps = poolBps
         self.mintedCoins = mintedCoins
         self.scannedTo = scannedTo
+        self.complete = complete
     }
-
-    public static let empty = MomentHolderStats(holders: 0, topHolder: nil, topHolderBps: 0, circulatingCoins: 0, poolBps: 0, mintedCoins: 0, scannedTo: 0)
 }
 
 // MARK: - Account history (portfolio)
