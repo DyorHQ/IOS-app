@@ -12,8 +12,11 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 const MIGRATIONS = new URL("../migrations/", import.meta.url);
 const DEFERRED = new URL("../migrations-deferred/", import.meta.url);
 const STUB = new URL("./supabase_stub.sql", import.meta.url);
-// The migrations written for the 2026-09-26 audit, which must be safe to re-run.
-const REAPPLY = ["24_", "25_", "26_", "27_", "28_", "29_"];
+// The migrations written for the 2026-09-26 audit, and the wallet-history cache, which must be safe to re-run.
+const REAPPLY = ["24_", "25_", "26_", "27_", "28_", "29_", "32_"];
+// Migrations that need the platform (pg_cron, pg_net, Vault): moved into migrations/ once applied to the live project,
+// they must refuse on PGlite rather than half-apply (33 is still in migrations-deferred/ until the owner applies it).
+const PLATFORM_ONLY = ["33_"];
 
 const A = "0x" + "a".repeat(40);
 const B = "0x" + "b".repeat(40);
@@ -114,15 +117,20 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
   await db.exec(await Deno.readTextFile(STUB));
   const files = await migrationFiles();
 
-  await t.step("01–29 apply in order on a fresh database", async () => {
+  await t.step("01–32 apply in order on a fresh database", async () => {
     assert(files.includes("29_waitlist.sql"), "expected migrations through 29");
+    assert(files.includes("32_wallet_history.sql"), "expected migration 32");
     for (const name of files) {
+      if (PLATFORM_ONLY.some((p) => name.startsWith(p))) {
+        await assertRejects(() => db.exec(Deno.readTextFileSync(new URL(name, MIGRATIONS))), Error, "requires pg_cron and pg_net", name);
+        continue;
+      }
       try { await db.exec(await Deno.readTextFile(new URL(name, MIGRATIONS))); }
       catch (err) { throw new Error(`${name}: ${(err as Error).message}`); }
     }
   });
 
-  await t.step("24–29 re-apply without error or change", async () => {
+  await t.step("24–29 and 32 re-apply without error or change", async () => {
     const count = async () => ({
       policies: (await one<{ n: number }>(db, "select count(*)::int as n from pg_policies")).n,
       triggers: (await one<{ n: number }>(db, "select count(*)::int as n from pg_trigger where tgrelid = 'storage.objects'::regclass and not tgisinternal")).n,
@@ -136,6 +144,16 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
     assertEquals(before.triggers, 4); // Storage's two, and 26's two
     assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_salt")).n, 1);
     assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.app_config")).n, 1);
+    assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.history_scans")).n, 5);
+    assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.history_indexer_state")).n, 1);
+  });
+
+  await t.step("deferred 33 (the history-indexer schedule): refuses until armed, then without pg_cron and pg_net", async () => {
+    const template = await Deno.readTextFile(new URL("33_history_indexer_schedule.sql", DEFERRED));
+    await assertRejects(() => db.exec(template), Error, "not armed");
+    const armed = template.replace("v_armed constant boolean := false;", "v_armed constant boolean := true;");
+    assert(armed !== template, "the arming placeholder moved");
+    await assertRejects(() => db.exec(armed), Error, "requires pg_cron and pg_net");
   });
 
   await db.exec(`insert into public.profiles (wallet) values ('${A}'), ('${B}')`);
