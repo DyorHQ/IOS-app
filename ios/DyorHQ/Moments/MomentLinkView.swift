@@ -87,9 +87,11 @@ struct MomentShareButton: View {
         }
     }
 
+    /// The artwork the page shows, from memory (the largest size kept, the page header's), or the wordmark.
     private var artwork: Image {
-        if let cached = MomentMediaLoader.shared.cached(MomentArtwork.cacheKey(provenance: info.provenance, creator: info.moment.creator)) {
-            return Image(uiImage: cached)
+        let sources = MomentArtwork.imageSources(provenance: info.provenance, creator: info.moment.creator)
+        if let shown = RemoteImageLoader.shared.memoryImage(sources, bucket: ImageSizeBucket.largest) {
+            return Image(uiImage: UIImage(cgImage: shown.image))
         }
         return Image(.wordmark)
     }

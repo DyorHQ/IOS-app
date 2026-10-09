@@ -26,8 +26,11 @@ public struct RemoteImageSource: Hashable, Sendable {
 /// Anything else — another https host, `http:`, `ar:`, `data:`, `javascript:`, a link over `maxURLBytes` — gives no
 /// source, and the coin shows its letters. All seven launches on chain today use `launch-media`, so no picture users see
 /// goes away. A logo a token list supplies for a coin that isn't DyorHQ's (`listSources`) loads only from the hosts the
-/// app's lists really use (`listHosts`), or else by the rules above. The byte, pixel and decode caps (`RemoteMedia`)
-/// apply to every source, and `RemoteMedia` follows no redirect to another host.
+/// app's lists really use (`listHosts`), or else by the rules above. A list-sized thumbnail of an unchecked picture in
+/// DyorHQ's write-once bucket may come from Storage's resized copy of the same object (`renderURL`), whose query the app
+/// writes.
+/// The byte, pixel and decode caps (`RemoteMedia`) apply to every source, and `RemoteMedia` follows no redirect to
+/// another host.
 public struct ImageSourcePolicy: Hashable, Sendable {
     /// `https://<project>.supabase.co`: the Supabase project whose `launch-media` bucket is DyorHQ's.
     public let supabaseURL: URL
@@ -109,6 +112,121 @@ public struct ImageSourcePolicy: Hashable, Sendable {
             return [url]
         }
         return creatorSources(text)
+    }
+
+    // MARK: Caching and fetching (`ImagePipeline`)
+
+    /// How long a request waits for data from DyorHQ's own Supabase host (`isFirstParty`): it answers within a second
+    /// when it is up (0.4–0.9 s measured), so a quiet one is down and the next source is asked.
+    public static let firstPartyTimeout: TimeInterval = 8
+    /// How long a request waits on one of the app's IPFS gateways (`isGateway`): a gateway may first have to find the
+    /// CID (Pinata's public gateway took 5.4–7.0 s to its first byte).
+    public static let gatewayTimeout: TimeInterval = 12
+    /// How long a request waits on any other host (a list's logo, a news photo, NFT art), as `RemoteMedia` always has.
+    public static let otherTimeout: TimeInterval = 15
+
+    /// Whether `url` is on DyorHQ's own Supabase host (the `launch-media` and `avatars` buckets): https, the exact host,
+    /// no port, no credentials.
+    public func isFirstParty(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false), components.scheme?.lowercased() == "https",
+              components.user == nil, components.password == nil, components.port == nil,
+              let host = components.host?.lowercased(), !host.isEmpty else { return false }
+        return host == supabaseURL.host?.lowercased()
+    }
+
+    /// Whether `url` is a CID (and a clean path inside it) on one of the app's IPFS gateways, as `creatorSources` writes
+    /// them — content-addressed, so what it serves is the CID's bytes or nothing.
+    public func isGateway(_ url: URL) -> Bool {
+        let text = url.absoluteString
+        guard text.utf8.count <= Self.maxURLBytes else { return false }
+        return ipfsGateways.contains { gateway in
+            guard text.hasPrefix(gateway) else { return false }
+            let rest = String(text.dropFirst(gateway.count))
+            return !rest.contains("?") && !rest.contains("#") && Self.ipfsPath(rest) != nil
+        }
+    }
+
+    /// Whether the picture at `url` can never change, so a copy kept on the phone never needs asking about again: an
+    /// object in DyorHQ's write-once `launch-media` bucket (supabase migration 26: no upload over an existing object, no
+    /// move or rename), or a CID on one of the app's gateways. Anything else — an avatar (`avatars/<wallet>/avatar.jpg`
+    /// is uploaded over), a list's logo, a news photo — can.
+    public func isImmutable(_ url: URL) -> Bool {
+        if case .launchMedia = classify(url.absoluteString) { return true }
+        return isGateway(url)
+    }
+
+    /// How long a request for `url` waits for data before the next source is asked (`firstPartyTimeout`,
+    /// `gatewayTimeout`, `otherTimeout`).
+    public func requestTimeout(for url: URL) -> TimeInterval {
+        isFirstParty(url) ? Self.firstPartyTimeout : isGateway(url) ? Self.gatewayTimeout : Self.otherTimeout
+    }
+
+    /// Whether a download from `url` already under way may finish into the image cache once no view waits for it:
+    /// DyorHQ's own host or one of the app's gateways. A host a list, a news item or an NFT named is cancelled as soon
+    /// as nobody looks (security audit 2026-09-26, RI-5), as every download used to be.
+    public func mayFinishUnwatched(_ url: URL) -> Bool { isFirstParty(url) || isGateway(url) }
+
+    /// Whether the sources of one picture may be asked side by side rather than strictly one after another
+    /// (`ImageSourceRace`): only when there are several and every one is DyorHQ's host or one of the app's gateways —
+    /// the same picture by construction (a mirror kept only while it hashes to the on-chain hash, a CID, Storage's resized
+    /// copy of the object after it, `renderURL`), so whichever answers first may be shown, and no source is a host anyone
+    /// else chose.
+    public func mayRace(_ sources: [RemoteImageSource]) -> Bool {
+        sources.count > 1 && sources.allSatisfy { isFirstParty($0.url) || isGateway($0.url) }
+    }
+
+    /// Whether a `status` from `url` says the picture isn't there — the pipeline then forgets every copy it kept, so a
+    /// takedown reaches the phones that kept it (`ImagePipeline`) — decided by who answered. DyorHQ's host: 400 (Storage's
+    /// answer for an object that isn't there, a `not_found` body), 404 or 410. One of the app's gateways: 404, 410, or 451
+    /// for a CID the gateway refuses to serve. Any other host: 404 or 410 only. A 403 says nothing anywhere (bot
+    /// protection, a rate limit, a filtering proxy), and neither does a 400 from a host that isn't DyorHQ's: a picture
+    /// already shown stays.
+    public func saysGone(_ status: Int, from url: URL) -> Bool {
+        if isFirstParty(url) { return [400, 404, 410].contains(status) }
+        if isGateway(url) { return [404, 410, 451].contains(status) }
+        return [404, 410].contains(status)
+    }
+
+    // MARK: Thumbnails (`ImagePipeline`)
+
+    /// Where Storage serves a public object resized (`renderURL`), in place of `/storage/v1/object/public/`.
+    static let renderPath = "/storage/v1/render/image/public/"
+    /// The JPEG quality a resized copy is sent at: the app decodes it at its size bucket and keeps its own copy at 0.85
+    /// (`ImageDiskCache.encode`), so the copy on the wire needs no more.
+    public static let renderQuality = 70
+    /// The widest copy the render endpoint is asked for: its own limit.
+    public static let maxRenderWidth = 2_500
+
+    /// Storage's resized copy of `url` — an unchecked picture (`.jpg`, `.jpeg`, `.png` or `.webp`) in DyorHQ's write-once
+    /// `launch-media` bucket — `width` pixels across, its shape kept and never enlarged:
+    /// `https://<project>.supabase.co/storage/v1/render/image/public/launch-media/<path>?width=<width>&resize=contain&quality=70`.
+    /// A list-sized thumbnail of such a picture comes from it first, the original after it
+    /// (`ImagePipeline.maxRenderedBucket`): measured 2026-10-08, a 269 KB photo is 19 KB at 384 px and 29 KB at 512, a
+    /// 113 KB launch logo 6 KB at 150. It is the same object on the same host, so no new party learns who looked, and the
+    /// app writes the whole query after the picture's URL was classified, so no creator chooses a parameter of it.
+    /// `resize=contain` because with a width alone Storage keeps the original's height and crops a strip out of it (a
+    /// 1571 × 2048 photo asked for at 96 came back 96 × 2048, measured 2026-10-09). Never for a source with a `keccak`:
+    /// resized bytes can't be checked against the hash, and a Moment's mirror is never shown on trust (security audit
+    /// 2026-09-26, PR-2) — the pipeline asks only for unchecked sources (`ImagePipeline.asks`). Never for an avatar:
+    /// `avatars/<wallet>/avatar.jpg` is uploaded over, and a resized copy the CDN kept by its path alone could show the
+    /// last one after the new upload, for an hour (`ImagePipeline.mutableLifetime`) — while an avatar is encoded at most
+    /// 512 px already, so its copy would save next to nothing. Nil for anything else: another host, bucket or kind of
+    /// file, a path that isn't clean, a link with a query or a fragment, or a width outside 1…`maxRenderWidth`.
+    public func renderURL(_ url: URL, width: Int) -> URL? {
+        guard (1...Self.maxRenderWidth).contains(width), url.absoluteString.utf8.count <= Self.maxURLBytes, isFirstParty(url),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false), components.fragment == nil,
+              // Write-once objects, linked as they are (`classify`): a query on one is nothing the app wrote.
+              components.percentEncodedQuery == nil, let host = components.host else { return nil }
+        let path = components.percentEncodedPath
+        guard path.hasPrefix(Self.launchMediaPath), path.count > Self.launchMediaPath.count, Self.isCleanPath(path),
+              ["jpg", "jpeg", "png", "webp"].contains((path as NSString).pathExtension.lowercased()) else { return nil }
+        var render = URLComponents()
+        render.scheme = "https"
+        render.host = host
+        render.percentEncodedPath = Self.renderPath + path.dropFirst("/storage/v1/object/public/".count)
+        render.queryItems = [URLQueryItem(name: "width", value: String(width)), URLQueryItem(name: "resize", value: "contain"),
+                             URLQueryItem(name: "quality", value: String(Self.renderQuality))]
+        return render.url
     }
 
     // MARK: Parsing

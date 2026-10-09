@@ -140,6 +140,7 @@ struct LaunchpadView: View {
                 ForEach(coins) { launch in
                     NavigationLink(value: LaunchPage.launch(launch)) { LaunchCard(launch: launch) }
                         .buttonStyle(.plain)
+                        .onAppear { prefetch(after: launch, in: coins) }
                 }
             }
         }
@@ -171,9 +172,11 @@ struct LaunchpadView: View {
                     }
                 }
                 LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(climbing) { launch in
+                    let coins = climbing
+                    ForEach(coins) { launch in
                         NavigationLink(value: LaunchPage.launch(launch)) { LaunchCard(launch: launch) }
                             .buttonStyle(.plain)
+                            .onAppear { prefetch(after: launch, in: coins) }
                     }
                 }
             }
@@ -195,6 +198,11 @@ struct LaunchpadView: View {
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color(.separator).opacity(0.4), lineWidth: 0.5))
         }
+    }
+
+    /// Warms the artwork of the cards after `launch` in its section, as sorted and searched (`BoardPrefetch`).
+    private func prefetch(after launch: Launch, in coins: [Launch]) {
+        for next in BoardPrefetch.following(launch.id, in: coins) { LaunchArtwork.prefetch(logo: next.logo) }
     }
 
     /// A section's title with its count (none for an empty section), and what it lists.
@@ -400,14 +408,25 @@ struct LaunchArtwork: View {
     let symbol: String
     let logo: String
     /// How wide the artwork is drawn, in points: the thumbnail is decoded for this size.
-    var pointSize: CGFloat = 240
+    var pointSize: CGFloat = LaunchArtwork.cardPointSize
+
+    /// The size a board's card draws it at (`LaunchCard`), and what its next rows are warmed at (`prefetch`).
+    static let cardPointSize: CGFloat = 240
+
+    /// Warms the picture a board's card for `logo` will ask for — the same sources, size bucket and caps as `body` at
+    /// `cardPointSize` — ahead of the board's scroll (`BoardPrefetch`, `ImagePipeline.prefetch`).
+    @MainActor static func prefetch(logo: String) {
+        let bucket = ImageSizeBucket.bucket(points: cardPointSize)
+        RemoteImageLoader.shared.prefetch(ImageSourcePolicy.app.creatorSources(logo).map { RemoteImageSource(url: $0) }, bucket: bucket,
+                                          caps: RemoteMedia.caps(forThumbnail: bucket))
+    }
 
     var body: some View {
         Group {
             let sources = ImageSourcePolicy.app.creatorSources(logo).map { RemoteImageSource(url: $0) }
             if !sources.isEmpty {
                 RemoteImage(sources: sources, pointSize: pointSize) { loading in
-                    if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
+                    if loading { ZStack { Color(.tertiarySystemFill); ImageLoadingSpinner() } } else { placeholder }
                 }
             } else {
                 placeholder
