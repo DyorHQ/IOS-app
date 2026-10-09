@@ -36,6 +36,12 @@ final class AlertCenter {
     private var pendingEndings: [Int: (position: PerpPosition, since: Date, restingClose: Bool)] = [:]
     /// Positions the user closed, or sent an order that closes, from this app — and when.
     private var userCloses = PerpUserCloses()
+    /// Orders the app sent that can grow a position, and the fills they announced themselves (`PerpExpectedFills`): a
+    /// growth an order's own notice explains is quiet, one an order still waiting for its result may explain waits.
+    private var expectedFills = PerpExpectedFills()
+    /// Growths seen while an order there was still expected, by market: decided again when that order's result is in
+    /// (`reconsiderFills`), or at the next check.
+    private var pendingFills: [Int: (position: PerpPosition, growth: Double, since: Date)] = [:]
     /// Price alerts this run fired: never fired twice, even before their removal is read back.
     private var firedPriceAlerts: Set<UUID> = []
     private var lastPerps: Date?
@@ -78,6 +84,29 @@ final class AlertCenter {
     /// A close noted as sent never left the device: the position's ending is news again.
     func forgetUserClose(_ perpId: Int) { userCloses.forget(perpId) }
 
+    /// An order sent from this app can grow `perpId`'s position on `side` by up to `growth`; its result is expected by
+    /// `until`. Until then a growth there waits for the order's own notice rather than racing it.
+    func expectFill(_ id: UUID, perpId: Int, side: PositionSide, growth: Double, until: Date) {
+        expectedFills.expect(id, perpId: perpId, side: side, growth: growth, until: until)
+    }
+
+    /// The order posted its own fill notice for `size` of growth: the watcher stays quiet about that much.
+    func fillAnnounced(_ id: UUID, size: Double) { expectedFills.announced(id, size: size, at: Date()) }
+
+    /// The order's result is in and it posts no fill notice: a growth there is the watcher's to announce.
+    func releaseFill(_ id: UUID) { expectedFills.release(id) }
+
+    /// The watcher announced a fill on that side of the market since `since` (an order's late fill then stays quiet).
+    func watcherAnnounced(perpId: Int, side: PositionSide, since: Date) -> Bool {
+        expectedFills.watcherAnnounced(perpId: perpId, side: side, since: since)
+    }
+
+    /// An order's result just came in: the growths that waited for it are decided at once (no read).
+    func reconsiderFills() {
+        guard !pendingFills.isEmpty, preferences?.postsFills == true, signedIn() != nil else { return }
+        postPendingFills(now: Date())
+    }
+
     private func stopRun() {
         task?.cancel()
         task = nil
@@ -91,6 +120,8 @@ final class AlertCenter {
         restingCloseMarkets = []
         pendingEndings = [:]
         userCloses = PerpUserCloses()
+        expectedFills = PerpExpectedFills()
+        pendingFills = [:]
         firedPriceAlerts = []
         lastPerps = nil
         lastPrices = nil
@@ -200,12 +231,23 @@ final class AlertCenter {
         if let resting { restingCloseMarkets = resting } else if account?.positionPerpIds.isEmpty ?? true { restingCloseMarkets = [] }
 
         if preferences.postsFills {
+            // Growths that waited for an order's own result: past its deadline they are the watcher's to announce.
+            postPendingFills(now: now)
             for position in changes.filled {
+                // One notice per fill: an order sent from this app announces its own (`PerplOrderTracker`).
+                let growth = changes.growth[position.perpId] ?? position.size
+                switch expectedFills.decide(perpId: position.perpId, side: position.side, growth: growth, tolerance: lotTolerance(position.perpId), now: now) {
+                case .quiet: continue
+                case .wait: holdFill(position, growth: growth, now: now); continue
+                case .announce: expectedFills.watcherAnnounced(perpId: position.perpId, side: position.side, at: now)
+                }
                 Notifications.perpOrder(.filled, side: position.side == .long
                                             ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
                                             : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]")),
                                         market: "\(asset(position.perpId, symbol: position.symbol))-PERP", perpId: position.perpId)
             }
+        } else {
+            pendingFills = [:]
         }
 
         for (perpId, ending) in pendingEndings.sorted(by: { $0.key < $1.key }) {
@@ -227,6 +269,42 @@ final class AlertCenter {
             NotificationHub.shared.post(kind: .perp, title: text.title, body: text.body, route: .perps,
                                         reference: PerpAlertText.reference(perpId: notice.position.perpId), owner: owner)
         }
+    }
+
+    /// A growth that waits for an order's own result; a second growth there meanwhile adds to it.
+    private func holdFill(_ position: PerpPosition, growth: Double, now: Date) {
+        if let held = pendingFills[position.perpId], held.position.side == position.side {
+            pendingFills[position.perpId] = (position, held.growth + growth, held.since)
+        } else {
+            pendingFills[position.perpId] = (position, growth, now)
+        }
+    }
+
+    /// Decides the growths that waited again: quiet when the order's own notice explained them, announced once the order
+    /// is no longer expected.
+    private func postPendingFills(now: Date) {
+        for (perpId, pending) in pendingFills.sorted(by: { $0.key < $1.key }) {
+            let side = pending.position.side
+            switch expectedFills.decide(perpId: perpId, side: side, growth: pending.growth, tolerance: lotTolerance(perpId), now: now) {
+            case .wait:
+                continue
+            case .quiet:
+                pendingFills[perpId] = nil
+            case .announce:
+                pendingFills[perpId] = nil
+                expectedFills.watcherAnnounced(perpId: perpId, side: side, at: now)
+                Notifications.perpOrder(.filled, side: side == .long
+                                            ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]"))
+                                            : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]")),
+                                        market: "\(asset(perpId, symbol: pending.position.symbol))-PERP", perpId: perpId)
+            }
+        }
+    }
+
+    /// Half a lot of `perpId`'s market: two sizes closer than this are the same size.
+    private func lotTolerance(_ perpId: Int) -> Double {
+        guard let market = markets.first(where: { $0.id == perpId }) else { return 1e-9 }
+        return 0.5 * pow(10, -Double(market.lotDecimals))
     }
 
     /// The app's markets, plus any market the account holds a position in that Perpl added after this build.

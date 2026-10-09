@@ -110,7 +110,14 @@ public struct TransactionSender: Sendable {
         /// The receipt wait for each sent step (`RPCClient.waitForReceipt`): a number of polls, not a deadline.
         var receiptPolls = 180
         var receiptInterval: Duration = .milliseconds(500)
+        /// On Monad only, the receipt wait first reads this many times `receiptFastInterval` apart (about 3 s at ~7
+        /// reads a second, under the public endpoint's limit): a confirmed step shows within a few hundred milliseconds.
+        var receiptFastPolls = 20
+        var receiptFastInterval: Duration = .milliseconds(150)
     }
+
+    /// The receipt wait's fast first reads for this sender's chain: Monad's only (the Bridge's other chains keep 500 ms).
+    var receiptFastPollCount: Int { chainId == Monad.chainId ? timing.receiptFastPolls : 0 }
 
     public init(rpc: RPCClient, chainId: Int = Monad.chainId) {
         self.rpc = rpc
@@ -388,7 +395,8 @@ public struct TransactionSender: Sendable {
                 hash = possible
             }
             onEvent(.sent(step.label, hash))
-            let receipt = try await rpc.waitForReceipt(hash, polls: timing.receiptPolls, interval: timing.receiptInterval)
+            let receipt = try await rpc.waitForReceipt(hash, polls: timing.receiptPolls, interval: timing.receiptInterval,
+                                                       fastPolls: receiptFastPollCount, fastInterval: timing.receiptFastInterval)
             guard receipt.success else { throw TransactionError.reverted(hash) }
             onEvent(.confirmed(step.label, hash))
             last = hash

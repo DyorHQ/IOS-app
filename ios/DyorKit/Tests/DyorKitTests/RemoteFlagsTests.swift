@@ -47,6 +47,28 @@ final class RemoteFlagsTests: XCTestCase {
         }
     }
 
+    /// The one opt-in switch, the live Perps order outcome: on only when the row says JSON `true`. A missing row, a
+    /// missing key, a string, a number or null leave it off — and the two kill switches keep their default-on reading.
+    func testTheLiveOutcomeSwitchIsOptIn() {
+        XCTAssertFalse(RemoteFlags.on.perpsLiveOutcome)
+        XCTAssertEqual(RemoteFlags.on, RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: false))
+        for body in [#"[]"#, #"[{"value":{"min_build":16}}]"#, #"[{"value":{"flags":{}}}]"#, #"[{"value":{"flags":{"dyorBadges":false}}}]"#, "not json"] {
+            XCTAssertFalse(parse(body).perpsLiveOutcome, body)
+        }
+        for value in [#""true""#, "1", "null", "{}", "[]", #""yes""#, "false"] {
+            let flags = parse(#"[{"value":{"flags":{"perpsLiveOutcome":\#(value)}}}]"#)
+            XCTAssertFalse(flags.perpsLiveOutcome, value)
+            XCTAssertTrue(flags.dyorVenuePrices, value)
+            XCTAssertTrue(flags.dyorBadges, value)
+        }
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"perpsLiveOutcome":true}}}]"#), RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: true))
+        XCTAssertEqual(parse(#"[{"value":{"min_build":16,"flags":{"dyorBadges":false,"perpsLiveOutcome":true}}}]"#),
+                       RemoteFlags(dyorVenuePrices: true, dyorBadges: false, perpsLiveOutcome: true))
+        // The app hands it to the Perps trading model, which reads it once per order, at the tap.
+        let environment = try? DocsLinksTests.appSource("App/AppEnvironment.swift")
+        XCTAssertTrue(environment?.contains("perplTrading.liveOutcomes = flags.perpsLiveOutcome") == true)
+    }
+
     /// The minimum build and the switches come from one read of the row, and a malformed minimum doesn't hide the switches.
     func testOneReadGivesTheMinimumAndTheSwitches() async throws {
         WalletAuthCapture.replies = [(200, #"[{"value":{"min_build":16,"message":"","flags":{"dyorVenuePrices":false}}}]"#)]

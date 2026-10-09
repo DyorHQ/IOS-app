@@ -372,7 +372,15 @@ public actor RPCClient {
     /// of polls (180 × 500 ms, about 90 s of running), not a wall-clock deadline: a run the system suspended (the phone
     /// locked mid-plan) resumes with the polls it had left instead of finding its deadline gone and reporting a mined
     /// transaction as unconfirmed. One last read always follows the final wait.
-    public func waitForReceipt(_ hash: Data, polls: Int = 180, interval: Duration = .milliseconds(500)) async throws -> TransactionReceipt {
+    ///
+    /// `fastPolls` reads come first, `fastInterval` apart (Monad's receipts appear about 300 ms after inclusion, so a
+    /// short first phase shows a result sooner); they are polls like the others, added before the `polls` budget.
+    public func waitForReceipt(_ hash: Data, polls: Int = 180, interval: Duration = .milliseconds(500),
+                               fastPolls: Int = 0, fastInterval: Duration = .milliseconds(150)) async throws -> TransactionReceipt {
+        for _ in 0..<max(0, fastPolls) {
+            if let receipt = try await pollReceipt(hash) { return receipt }
+            try await Task.sleep(for: fastInterval)
+        }
         for _ in 0..<max(1, polls) {
             if let receipt = try await pollReceipt(hash) { return receipt }
             try await Task.sleep(for: interval)

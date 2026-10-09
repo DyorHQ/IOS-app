@@ -53,10 +53,23 @@ enum TriggerStore {
 
     /// Record freshly-accepted triggers. Nothing earlier is dropped: a new entry's take-profit does NOT replace an older
     /// one on Perpl — both stay live, each sized to its own entry — so both echoes stay too (security audit GT-1).
-    static func record(_ new: [PlacedTrigger], owner: Address?) {
-        guard !new.isEmpty else { return }
+    /// Returns what was recorded, so the order that placed them can later remove its own echoes only (`remove(ids:)`).
+    @discardableResult
+    static func record(_ new: [PlacedTrigger], owner: Address?) -> [PlacedTrigger] {
+        guard !new.isEmpty else { return [] }
         // Bounded: the newest 200 are plenty to stand in for a market's triggers while the stream is offline.
         save(Array((all(owner: owner) + new).suffix(200)), owner: owner)
+        return new
+    }
+
+    /// Drop exactly these echoes: one order's own take-profit or stop-loss that will never be live (its own result said
+    /// so, or a live list read after its entry executed nothing). Every other echo of that kind on that side stays: it
+    /// stands for another order's trigger, which is still live on Perpl (GT-1, GT-3).
+    static func remove(ids: Set<UUID>, owner: Address?) {
+        guard !ids.isEmpty else { return }
+        let list = all(owner: owner)
+        let kept = list.filter { !ids.contains($0.id) }
+        if kept.count != list.count { save(kept, owner: owner) }
     }
 
     /// Drop the echoes of one kind on one side of a market, once Perpl admitted the cancel of every live trigger they

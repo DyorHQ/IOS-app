@@ -182,7 +182,8 @@ public actor PerplService {
                 fundingRate: fundingRate,
                 isOpen: config.isOpen,
                 fundingIntervalSeconds: market.fundingIntervalSec ?? 0,
-                fundingIntervalBlocks: market.fundingIntervalBlocks ?? 0
+                fundingIntervalBlocks: market.fundingIntervalBlocks ?? 0,
+                orderTTLBlocks: market.orderTTLBlocks
             )
         }
     }
@@ -234,6 +235,18 @@ public actor PerplService {
     public func accountHistory(key: PerplApiKey, count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplAccountEvent> {
         let (rows, next) = try await signedHistory("/v1/trading/account-history", count: count, cursor: cursor, key: key)
         return PerplHistoryPage(items: rows.compactMap { PerplAccountEvent(event: $0) }, next: next)
+    }
+
+    /// One page of the account's order history (signed), newest first, as order events: what a reconnect or a relaunch
+    /// reads by request id when the stream's own report was missed.
+    public func orderEvents(key: PerplApiKey, count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplOrderEvent> {
+        let (rows, next) = try await signedHistory("/v1/trading/order-history", count: count, cursor: cursor, key: key)
+        return PerplHistoryPage(items: rows.compactMap { PerplOrderEvent(json: $0, snapshot: false) }, next: next)
+    }
+
+    /// What a mined Perpl transaction did, decoded from its receipt (`PerplReceipt`); nil when the receipt never read back.
+    public func receiptRequests(_ hash: Data) async throws -> [PerplReceipt.Request]? {
+        try await PerplReceipt.requests(ofTransaction: hash, rpc: rpc)
     }
 
     /// Signs and fetches one `{d:[…], np:cursor}` history page. `path` is the gateway path with no `/api` prefix.
@@ -396,10 +409,13 @@ private struct ContextMarket: Decodable {
     /// The market's own funding interval, in seconds and in blocks.
     let fundingIntervalSec: Int?
     let fundingIntervalBlocks: Int?
+    /// How many blocks an order sent with `lb: 0` has to execute.
+    let orderTTLBlocks: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, name, config, state, funding
         case fundingIntervalSec = "funding_interval_sec"
         case fundingIntervalBlocks = "funding_interval_blocks"
+        case orderTTLBlocks = "order_ttl_blocks"
     }
 }

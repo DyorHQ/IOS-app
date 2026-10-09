@@ -588,6 +588,8 @@ final class PerplTests: XCTestCase {
         XCTAssertEqual(contexts.map(\.name).prefix(6), ["BTC", "MON", "ETH", "SOL", "HYPE", "ZEC"])
         XCTAssertEqual(contexts[0].priceDecimals, 1)
         XCTAssertEqual(contexts[1].priceDecimals, 6)
+        // Perpl's window for an order sent with `lb: 0`, which the order sheet's outcome deadline counts from.
+        XCTAssertEqual(contexts[0].orderTTLBlocks, 20)
         XCTAssertEqual(PerplMockTransport.contextRequests.count, 1)
         XCTAssertEqual(PerplMockTransport.contextRequests.first?.absoluteString, "https://app.perpl.xyz/api/v1/pub/context")
     }
@@ -611,6 +613,13 @@ final class PerplTests: XCTestCase {
         PerplMockTransport.context = (200, Data("{}".utf8))
         let empty = try? await makeService().context()
         XCTAssertEqual(empty, [])
+
+        // A market without `order_ttl_blocks`: no window (the outcome deadline then counts Perpl's 20 blocks).
+        PerplMockTransport.context = (200, Data(#"{"markets": [{"id": 1, "config": {"price_decimals": 1, "size_decimals": 5, "is_open": true}, "state": {"mrk": 816155}}]}"#.utf8))
+        let windowless = try? await makeService().context()
+        XCTAssertEqual(windowless?.count, 1)
+        XCTAssertNil(windowless?.first?.orderTTLBlocks)
+        XCTAssertEqual(PerplOutcomeDeadline(ackHead: 100, ttlBlocks: windowless?.first?.orderTTLBlocks, ackAt: Date()).block, 125)
 
         PerplMockTransport.context = (200, Data("not json".utf8))
         do {

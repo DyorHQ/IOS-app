@@ -134,11 +134,13 @@ enum ActivityLog {
     /// Mirrors every new record to the backend (installed by the app environment).
     nonisolated(unsafe) static var onRecord: ((ActivityRecord, Address) -> Void)?
 
-    /// Records an action. De-duplicates by tx hash so re-recording the same settled transaction never doubles a row.
+    /// Records an action. De-duplicates by tx hash so re-recording the same settled transaction never doubles a row, and
+    /// by id, so an action written again with what is known now (a Perps order's fill after it rested) replaces its row.
     static func record(_ record: ActivityRecord, owner: Address?) {
         guard let owner else { return }
         var list = all(owner: owner)
         if let hash = record.txHashHex { list.removeAll { $0.txHashHex == hash } }
+        list.removeAll { $0.id == record.id }
         list.insert(record, at: 0)
         if list.count > cap { list = Array(list.prefix(cap)) }
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key(owner))
@@ -197,6 +199,9 @@ enum PendingActivity {
     nonisolated static let confirmedStatus = "confirmed"
     nonisolated static let revertedStatus = "reverted"
     nonisolated static let notFoundStatus = "notFound"
+    /// A Perpl order's transaction that confirmed but executed nothing (an IOC with nothing within its slippage does not
+    /// revert): "confirmed" would read as done.
+    nonisolated static let notFilledStatus = "notFilled"
 
     /// An icon for a row this wrote, by its status: neutral, since the row stands for any kind of step.
     static func symbol(for status: String) -> String {
@@ -204,6 +209,7 @@ enum PendingActivity {
         case pendingStatus: return "clock"
         case confirmedStatus: return "checkmark.circle"
         case revertedStatus: return "xmark.circle"
+        case notFilledStatus: return "minus.circle"
         default: return "questionmark.circle"
         }
     }
@@ -241,6 +247,13 @@ enum PendingActivity {
         resolve(owner: owner, as: revertedStatus) { $0.txHashHex == hash.hexString }
     }
 
+    /// A Perpl order's transaction that confirmed and filled nothing (read from its receipt): a row this wrote for it,
+    /// pending or already marked confirmed, says so.
+    static func notFilled(_ hash: Data, owner: Address?) {
+        guard let owner else { return }
+        resolve(owner: owner, as: notFilledStatus, from: [pendingStatus, confirmedStatus]) { $0.txHashHex == hash.hexString }
+    }
+
     /// Re-checks every pending row of `owner`, a few at a time: a receipt settles it as confirmed or reverted; a
     /// transaction the network doesn't know half an hour after it was sent is not found (it never landed); anything else
     /// stays pending for the next check. Each row is rewritten as soon as its own reads answer.
@@ -261,10 +274,17 @@ enum PendingActivity {
     }
 
     /// A sent transaction's outcome: confirmed or reverted by its receipt, not found when the network doesn't know it
-    /// half an hour after it was sent; nil while it is still pending, or when a read failed.
+    /// half an hour after it was sent; nil while it is still pending, or when a read failed. A confirmed Perpl order whose
+    /// every order request matched nothing (and changed no position of the account) is "not filled", not confirmed.
     private nonisolated static func outcome(of hash: Data, sentAt: Date, rpc: RPCClient) async -> String? {
         do {
-            if let receipt = try await rpc.transactionReceipt(hash) { return receipt.success ? confirmedStatus : revertedStatus }
+            if let receipt = try await rpc.transactionReceipt(hash) {
+                guard receipt.success else { return revertedStatus }
+                if let requests = try? await PerplReceipt.requests(ofTransaction: hash, rpc: rpc, attempts: 1), PerplReceipt.allOrdersNotFilled(requests) {
+                    return notFilledStatus
+                }
+                return confirmedStatus
+            }
         } catch {
             return nil
         }
@@ -272,12 +292,14 @@ enum PendingActivity {
         return nil
     }
 
-    /// Rewrites the pending rows `matching` with `outcome`, keeping each row's id, title and time.
-    private static func resolve(owner: Address, as outcome: String, matching: (ActivityRecord) -> Bool) {
+    /// Rewrites the rows `matching` whose status is one of `from` (pending, by default) with `outcome`, keeping each
+    /// row's id, title and time.
+    private static func resolve(owner: Address, as outcome: String, from: Set<String> = [pendingStatus], matching: (ActivityRecord) -> Bool) {
         ActivityLog.update(owner: owner) { list in
-            for i in list.indices where list[i].status == pendingStatus && matching(list[i]) {
+            for i in list.indices where list[i].status.map(from.contains) == true && matching(list[i]) {
                 let subtitle = outcome == revertedStatus ? tr("Reverted — only the network fee was spent")
-                    : outcome == notFoundStatus ? tr("Not found on the network — it never confirmed") : tr("Confirmed")
+                    : outcome == notFoundStatus ? tr("Not found on the network — it never confirmed")
+                    : outcome == notFilledStatus ? PerpOnChainCopy.nothingFilled : tr("Confirmed")
                 var row = ActivityRecord(kind: list[i].kind, title: list[i].title, subtitle: subtitle, hash: list[i].txHash, time: list[i].time, section: list[i].section)
                 row.id = list[i].id
                 row.status = outcome

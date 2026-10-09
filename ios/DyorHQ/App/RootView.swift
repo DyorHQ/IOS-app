@@ -104,7 +104,15 @@ struct RootView: View {
                 // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
-                Task { await env.perplTrading.ensureConnected() }
+                Task {
+                    await env.perplTrading.ensureConnected()
+                    // Orders sent before the app left the foreground (or before it was closed) whose result never came:
+                    // read from the stream, Perpl's history and the chain, with no notice.
+                    await env.perplTrading.reconcileLoadedOrders()
+                }
+                // Wallet-signed Perps orders whose receipt wasn't read before the app left (or was killed): read now, so
+                // their row says what they did (no notice, no socket needed).
+                Task { await env.perplTrading.redecodeOnChainOrders() }
                 // On a return from the background only: a log scan that was running while iOS suspended the app measures
                 // an outage from now, not from its last answer before, and the venue list reads on if its last run ended
                 // short (`VenueTokenList.resume`). Face ID, a passkey sheet or Control Center only make the scene
@@ -124,6 +132,8 @@ struct RootView: View {
             // Perpl trading and the notification center follow the account at once, not after the backend sign-in's
             // round-trip below, so nothing meanwhile trades for or is filed under the previous account (RS-9).
             env.perplTrading.refresh(account: session.account)
+            // Its wallet-signed Perps orders an earlier run never read the receipt of (a kill right after it confirmed).
+            Task { await env.perplTrading.redecodeOnChainOrders() }
             NotificationHub.shared.bind(owner: session.address)
             // The one alert watcher follows the account with the notification center: started for it, kept while it stays
             // signed in, stopped on a sign-out or a switch (`AlertCenter`). A watched wallet gets its alerts too, worded

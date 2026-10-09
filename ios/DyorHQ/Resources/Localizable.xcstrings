@@ -420,6 +420,41 @@
         }
       }
     },
+    "%@ closed at %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Closed BTC': the values are the amount closed (“0.001 BTC”) and the average price it closed at.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ closed at %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cierre de %1$@ a %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clôture de %1$@ à %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@에 종료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已平仓，价格 %2$@"
+          }
+        }
+      }
+    },
     "%@ confirmed" : {
       "localizations" : {
         "es" : {
@@ -556,6 +591,111 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "创作者收益 %@ · 往期批次"
+          }
+        }
+      }
+    },
+    "%@ filled at %@ · %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': the order filled. The values: the amount filled (“0.001 BTC”), the average fill price, the order type ('Market' or 'Limit').",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ filled at %2$@ · %3$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecución de %1$@ a %2$@ · %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécution de %1$@ à %2$@ · %3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@에 체결 · %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已成交，价格 %2$@ · %3$@"
+          }
+        }
+      }
+    },
+    "%@ filled at about %@ · %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': Perpl's own report is missing, but the position on Monad grew by this much, which only this order can explain. The values: the amount (“0.001 BTC”), the price the growth implies, the order type ('Market' or 'Limit').",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ filled at about %2$@ · %3$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecución de %1$@ a unos %2$@ · %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécution de %1$@ à environ %2$@ · %3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 약 %2$@에 체결 · %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已成交，价格约 %2$@ · %3$@"
+          }
+        }
+      }
+    },
+    "%@ filled · %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': the order filled (price unknown). The values: the amount filled (“0.001 BTC”), the order type ('Market' or 'Limit').",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ filled · %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecución de %1$@ · %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécution de %1$@ · %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 체결 · %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 已成交 · %2$@"
           }
         }
       }
@@ -862,6 +1002,111 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@ / %2$@"
+          }
+        }
+      }
+    },
+    "%@ of %@ closed at %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Partly closed BTC': the values are the amount closed (“0.001 BTC”), the amount the close was for, and the average price it closed at.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@ closed at %3$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cierre de %1$@ de %2$@ a %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clôture de %1$@ sur %2$@ à %3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ 중 %1$@ %3$@에 종료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ 中已平仓 %1$@，价格 %3$@"
+          }
+        }
+      }
+    },
+    "%@ of %@ filled at %@ · %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': part of the order filled. The values: the amount filled (“0.001 BTC”), the amount ordered, the average fill price, the order type ('Market' or 'Limit').",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@ filled at %3$@ · %4$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecución de %1$@ de %2$@ a %3$@ · %4$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécution de %1$@ sur %2$@ à %3$@ · %4$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ 중 %1$@ %3$@에 체결 · %4$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ 中已成交 %1$@，价格 %3$@ · %4$@"
+          }
+        }
+      }
+    },
+    "%@ of %@ filled · %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': part of the order filled (price unknown). The values: the amount filled (“0.001 BTC”), the amount ordered, the order type ('Market' or 'Limit').",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@ filled · %3$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecución de %1$@ de %2$@ · %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécution de %1$@ sur %2$@ · %3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ 중 %1$@ 체결 · %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@ 中已成交 %1$@ · %3$@"
           }
         }
       }
@@ -2104,6 +2349,105 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@ · 平仓 %2$@ %3$@"
+          }
+        }
+      }
+    },
+    "%@ · limit placed at %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': a limit order was placed on the order book (a past event: still true after it fills or is cancelled). The values: the amount ordered (“0.001 BTC”), the limit price.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · limit placed at %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · orden límite colocada a %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · ordre limite placé à %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@ 지정가 주문 접수됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 限价单已挂于 %2$@"
+          }
+        }
+      }
+    },
+    "%@ · nothing filled · %@" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': Perpl reported that none of the order executed, after the position on Monad had first looked like it grew from it. The values: the amount ordered (“0.001 BTC”), the order type ('Market' or 'Limit').",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · nothing filled · %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · no se ejecutó nada · %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · rien n'a été exécuté · %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 체결 없음 · %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 未成交 · %2$@"
+          }
+        }
+      }
+    },
+    "%@ · result not confirmed — check Positions" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': the order was sent, but its result couldn't be confirmed. The value: the amount ordered (“0.001 BTC”). Positions is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · resultado sin confirmar — revisa Posiciones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · résultat non confirmé — vérifiez Positions"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 결과 미확인 — 포지션을 확인하세요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 结果未确认 — 查看“仓位”"
           }
         }
       }
@@ -5279,6 +5623,35 @@
         }
       }
     },
+    "Added %@ AUSD margin." : {
+      "comment" : "The Add Margin sheet's result line: the position received this much collateral, read from the transaction. The value: the amount (“25.5”); AUSD is the collateral token's symbol.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se añadieron %@ AUSD de margen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ AUSD de marge ajoutés."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "증거금 %@ AUSD를 추가했어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已追加 %@ AUSD 保证金。"
+          }
+        }
+      }
+    },
     "Added %@ margin" : {
       "localizations" : {
         "es" : {
@@ -8375,6 +8748,7 @@
       }
     },
     "Cancel sent for the stop-loss at %@. It leaves the list when Perpl confirms." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -8431,6 +8805,7 @@
       }
     },
     "Cancel sent for the take-profit at %@. It leaves the list when Perpl confirms." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -8634,6 +9009,71 @@
         }
       }
     },
+    "Cancelled %lld TP/SL." : {
+      "comment" : "The TP/SL cancel sheet's result: Perpl's live list confirms this many take-profit / stop-loss orders were cancelled. The value: their count.",
+      "localizations" : {
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Se canceló %lld TP/SL."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Se cancelaron %lld TP/SL."
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld TP/SL annulé."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld TP/SL annulés."
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "익절/손절 %lld건을 취소했어요."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "已取消 %lld 个止盈/止损。"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Cancelled TP/SL" : {
       "localizations" : {
         "es" : {
@@ -8719,6 +9159,77 @@
         }
       }
     },
+    "Cancelling %lld TP/SL on %@…" : {
+      "comment" : "The Perps screen's note while cancels are on their way to Perpl for take-profit / stop-loss orders left with no position to close. The first value: their count; the second: the market's asset (BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancelling %1$lld TP/SL on %2$@…"
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Cancelando %1$lld TP/SL en %2$@…"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Cancelando %1$lld TP/SL en %2$@…"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Annulation de %1$lld TP/SL sur %2$@…"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Annulation de %1$lld TP/SL sur %2$@…"
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%2$@의 익절/손절 %1$lld건을 취소하는 중…"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "正在取消 %2$@ 上的 %1$lld 个止盈/止损…"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Cancelling orders and closing positions" : {
       "localizations" : {
         "es" : {
@@ -8743,6 +9254,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "取消订单和平仓"
+          }
+        }
+      }
+    },
+    "Cancelling the old stop-loss…" : {
+      "comment" : "The position's TP/SL sheet, while it works: the cancel of the stop-loss being replaced or removed is on its way to Perpl.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelando el stop loss anterior…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Annulation de l'ancien stop loss…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기존 손절 주문 취소 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取消旧的止损…"
+          }
+        }
+      }
+    },
+    "Cancelling the old take-profit…" : {
+      "comment" : "The position's TP/SL sheet, while it works: the cancel of the take-profit being replaced or removed is on its way to Perpl.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelando el take profit anterior…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Annulation de l'ancien take profit…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기존 익절 주문 취소 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取消旧的止盈…"
           }
         }
       }
@@ -9084,6 +9653,93 @@
         }
       }
     },
+    "Check Orders: its stop-loss may still be armed." : {
+      "comment" : "A Perps order sheet's warning under an order that executed nothing: it isn't confirmed that Perpl cancelled the order's stop-loss with it, so it may still be active and act on a later position. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revisa Órdenes: su stop loss podría seguir activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifiez Ordres : son stop loss est peut-être toujours actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "손절 주문이 아직 활성 상태일 수 있습니다. 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看“委托”：其止损可能仍有效。"
+          }
+        }
+      }
+    },
+    "Check Orders: its take-profit and stop-loss may still be armed." : {
+      "comment" : "A Perps order sheet's warning under an order that executed nothing: it isn't confirmed that Perpl cancelled the order's take-profit and stop-loss with it, so they may still be active and act on a later position. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revisa Órdenes: su take profit y su stop loss podrían seguir activos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifiez Ordres : ses take profit et stop loss sont peut-être toujours actifs."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 및 손절 주문이 아직 활성 상태일 수 있습니다. 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看“委托”：其止盈和止损可能仍有效。"
+          }
+        }
+      }
+    },
+    "Check Orders: its take-profit may still be armed." : {
+      "comment" : "A Perps order sheet's warning under an order that executed nothing: it isn't confirmed that Perpl cancelled the order's take-profit with it, so it may still be active and act on a later position. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revisa Órdenes: su take profit podría seguir activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérifiez Ordres : son take profit est peut-être toujours actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 주문이 아직 활성 상태일 수 있습니다. 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看“委托”：其止盈可能仍有效。"
+          }
+        }
+      }
+    },
     "Check for an Older Account" : {
       "localizations" : {
         "es" : {
@@ -9136,6 +9792,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "导入前，确认这是你预期的地址。"
+          }
+        }
+      }
+    },
+    "Checking the stop-loss…" : {
+      "comment" : "A Perps order sheet's line while Perpl's answer about the order's stop-loss is awaited.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comprobando el stop loss…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérification du stop loss…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "손절 주문 확인 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在确认止损…"
+          }
+        }
+      }
+    },
+    "Checking the take-profit…" : {
+      "comment" : "A Perps order sheet's line while Perpl's answer about the order's take-profit is awaited.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comprobando el take profit…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vérification du take profit…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 주문 확인 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在确认止盈…"
           }
         }
       }
@@ -10074,6 +10788,35 @@
         }
       }
     },
+    "Close %@" : {
+      "comment" : "A Perps Activity row's title: a close sent for the position on that market, its result not read yet or nothing filled. The value: the market's symbol (“BTC”).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cierre de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clôture de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 종료 주문"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "平仓 %@"
+          }
+        }
+      }
+    },
     "Close Position" : {
       "localizations" : {
         "es" : {
@@ -10210,6 +10953,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已挂平仓单"
+          }
+        }
+      }
+    },
+    "Close sent · result not read" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Close BTC': the close's transaction confirmed on Monad, but how much of the position it closed hasn't been read from it yet.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cierre enviado · resultado sin leer"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clôture envoyée · résultat non lu"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종료 주문 전송됨 · 결과 아직 읽지 않음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "平仓已发送 · 结果未读取"
           }
         }
       }
@@ -11710,6 +12482,93 @@
         }
       }
     },
+    "Confirmed on Monad, but nothing filled" : {
+      "comment" : "A Perps Activity row's subtitle, also a sent transaction's status in Recent Activity: the order's transaction confirmed on Monad, but none of the order executed (nothing on the order book within its slippage). Only the network fee was spent.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transacción confirmada en Monad, pero no se ejecutó nada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transaction confirmée sur Monad, mais rien n'a été exécuté"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 확인됐지만 아무것도 체결되지 않음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在 Monad 上确认，但没有成交"
+          }
+        }
+      }
+    },
+    "Confirmed on Monad, but the result couldn't be read. Check the position." : {
+      "comment" : "The Add Margin sheet's result line: the transaction confirmed on Monad, but the margin it added couldn't be read from it. The position card shows its margin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transacción confirmada en Monad, pero no se pudo leer el resultado. Revisa la posición."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transaction confirmée sur Monad, mais le résultat n'a pas pu être lu. Vérifiez la position."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 확인되었지만 결과를 읽을 수 없습니다. 포지션을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在 Monad 上确认，但无法读取结果。查看该仓位。"
+          }
+        }
+      }
+    },
+    "Confirmed on Monad. The result couldn't be read — check Positions." : {
+      "comment" : "A Perps sheet's result line: the order's transaction confirmed on Monad, but what it did (filled or not) couldn't be read from it. Positions is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transacción confirmada en Monad. No se pudo leer el resultado: revisa Posiciones."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transaction confirmée sur Monad. Le résultat n'a pas pu être lu — vérifiez Positions."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 확인되었습니다. 결과를 읽을 수 없습니다. 포지션을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在 Monad 上确认。无法读取结果 — 查看“仓位”。"
+          }
+        }
+      }
+    },
     "Confirming your deposit…" : {
       "localizations" : {
         "es" : {
@@ -12409,6 +13268,76 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法从该视频中读取画面。"
+          }
+        }
+      }
+    },
+    "Couldn't cancel the stop-loss at %@ (%@): %@ It is still live." : {
+      "comment" : "The TP/SL cancel sheet: Perpl refused to cancel a stop-loss, which stays active. The first value: its trigger price; the second: the size it closes with the asset (0.001 BTC); the third: Perpl's reason, one or two whole sentences.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't cancel the stop-loss at %1$@ (%2$@): %3$@ It is still live."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo cancelar el stop loss a %1$@ (%2$@): %3$@ Sigue activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d'annuler le stop loss à %1$@ (%2$@) : %3$@ Il est toujours actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@(%2$@) 손절 주문을 취소하지 못했습니다: %3$@ 주문은 아직 활성 상태입니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法取消价格为 %1$@（%2$@）的止损：%3$@ 它仍然有效。"
+          }
+        }
+      }
+    },
+    "Couldn't cancel the take-profit at %@ (%@): %@ It is still live." : {
+      "comment" : "The TP/SL cancel sheet: Perpl refused to cancel a take-profit, which stays active. The first value: its trigger price; the second: the size it closes with the asset (0.001 BTC); the third: Perpl's reason, one or two whole sentences.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't cancel the take-profit at %1$@ (%2$@): %3$@ It is still live."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo cancelar el take profit a %1$@ (%2$@): %3$@ Sigue activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d'annuler le take profit à %1$@ (%2$@) : %3$@ Il est toujours actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@(%2$@) 익절 주문을 취소하지 못했습니다: %3$@ 주문은 아직 활성 상태입니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法取消价格为 %1$@（%2$@）的止盈：%3$@ 它仍然有效。"
           }
         }
       }
@@ -19720,6 +20649,64 @@
         }
       }
     },
+    "Its stop-loss is still armed with no position to close. Cancel it so it can't act on a later position." : {
+      "comment" : "A Perps order sheet's warning under an order that executed nothing: Perpl still has its stop-loss armed. A Cancel button follows.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su stop loss sigue activo sin ninguna posición que cerrar. Cancélalo para que no actúe sobre una posición posterior."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Son stop loss est toujours actif sans position à clôturer. Annulez-le pour qu'il ne puisse pas agir sur une position ultérieure."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "손절 주문이 종료할 포지션 없이 아직 활성 상태입니다. 이후 포지션에 작동하지 않도록 취소하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其止损仍有效，但没有可平的仓位。取消它，以免它作用于之后的仓位。"
+          }
+        }
+      }
+    },
+    "Its stop-loss was cancelled with it." : {
+      "comment" : "A Perps order sheet's line under an order that executed nothing: Perpl cancelled the order's stop-loss too.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su stop loss se canceló con ella."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Son stop loss a été annulé avec lui."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "손절 주문도 함께 취소되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其止损也已一并取消。"
+          }
+        }
+      }
+    },
     "Its stop-loss was not sent: if the order is open, set it with TP/SL on the position." : {
       "localizations" : {
         "es" : {
@@ -19748,6 +20735,64 @@
         }
       }
     },
+    "Its take-profit and stop-loss are still armed with no position to close. Cancel them so they can't act on a later position." : {
+      "comment" : "A Perps order sheet's warning under an order that executed nothing: Perpl still has its take-profit and stop-loss armed. A Cancel button follows.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su take profit y su stop loss siguen activos sin ninguna posición que cerrar. Cancélalos para que no actúen sobre una posición posterior."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ses take profit et stop loss sont toujours actifs sans position à clôturer. Annulez-les pour qu'ils ne puissent pas agir sur une position ultérieure."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 및 손절 주문이 종료할 포지션 없이 아직 활성 상태입니다. 이후 포지션에 작동하지 않도록 취소하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其止盈和止损仍有效，但没有可平的仓位。取消它们，以免它们作用于之后的仓位。"
+          }
+        }
+      }
+    },
+    "Its take-profit and stop-loss were cancelled with it." : {
+      "comment" : "A Perps order sheet's line under an order that executed nothing: Perpl cancelled the order's take-profit and stop-loss too.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su take profit y su stop loss se cancelaron con ella."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ses take profit et stop loss ont été annulés avec lui."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 및 손절 주문도 함께 취소되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其止盈和止损也已一并取消。"
+          }
+        }
+      }
+    },
     "Its take-profit and stop-loss were not sent: if the order is open, set them with TP/SL on the position." : {
       "localizations" : {
         "es" : {
@@ -19772,6 +20817,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "它的止盈和止损未发送：如果该订单已生效，在仓位上通过“止盈/止损”进行设置。"
+          }
+        }
+      }
+    },
+    "Its take-profit is still armed with no position to close. Cancel it so it can't act on a later position." : {
+      "comment" : "A Perps order sheet's warning under an order that executed nothing: Perpl still has its take-profit armed. A Cancel button follows.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su take profit sigue activo sin ninguna posición que cerrar. Cancélalo para que no actúe sobre una posición posterior."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Son take profit est toujours actif sans position à clôturer. Annulez-le pour qu'il ne puisse pas agir sur une position ultérieure."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 주문이 종료할 포지션 없이 아직 활성 상태입니다. 이후 포지션에 작동하지 않도록 취소하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其止盈仍有效，但没有可平的仓位。取消它，以免它作用于之后的仓位。"
+          }
+        }
+      }
+    },
+    "Its take-profit was cancelled with it." : {
+      "comment" : "A Perps order sheet's line under an order that executed nothing: Perpl cancelled the order's take-profit too.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su take profit se canceló con ella."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Son take profit a été annulé avec lui."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 주문도 함께 취소되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其止盈也已一并取消。"
           }
         }
       }
@@ -25921,6 +27024,76 @@
         }
       }
     },
+    "Not confirmed yet: Perpl hasn't removed the stop-loss at %@ (%@). Check Orders: it may still be live." : {
+      "comment" : "The TP/SL cancel sheet: the cancel was sent but Perpl's live list didn't confirm it in time, so the stop-loss may still be active. Orders is a tab of the Perps screen. The first value: its trigger price; the second: the size it closes with the asset (0.001 BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not confirmed yet: Perpl hasn't removed the stop-loss at %1$@ (%2$@). Check Orders: it may still be live."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún sin confirmar: Perpl no ha retirado el stop loss a %1$@ (%2$@). Revisa Órdenes: puede que siga activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas encore confirmé : Perpl n'a pas retiré le stop loss à %1$@ (%2$@). Vérifiez l'onglet Ordres : il est peut-être encore actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 확인되지 않았습니다. Perpl이 %1$@(%2$@) 손절 주문을 아직 제거하지 않았습니다. ‘주문’ 탭을 확인하십시오. 주문이 아직 활성 상태일 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未确认：Perpl 尚未移除价格为 %1$@（%2$@）的止损。查看“委托”：它可能仍然有效。"
+          }
+        }
+      }
+    },
+    "Not confirmed yet: Perpl hasn't removed the take-profit at %@ (%@). Check Orders: it may still be live." : {
+      "comment" : "The TP/SL cancel sheet: the cancel was sent but Perpl's live list didn't confirm it in time, so the take-profit may still be active. Orders is a tab of the Perps screen. The first value: its trigger price; the second: the size it closes with the asset (0.001 BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not confirmed yet: Perpl hasn't removed the take-profit at %1$@ (%2$@). Check Orders: it may still be live."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún sin confirmar: Perpl no ha retirado el take profit a %1$@ (%2$@). Revisa Órdenes: puede que siga activo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas encore confirmé : Perpl n'a pas retiré le take profit à %1$@ (%2$@). Vérifiez l'onglet Ordres : il est peut-être encore actif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 확인되지 않았습니다. Perpl이 %1$@(%2$@) 익절 주문을 아직 제거하지 않았습니다. ‘주문’ 탭을 확인하십시오. 주문이 아직 활성 상태일 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未确认：Perpl 尚未移除价格为 %1$@（%2$@）的止盈。查看“委托”：它可能仍然有效。"
+          }
+        }
+      }
+    },
     "Not connected" : {
       "localizations" : {
         "es" : {
@@ -27813,6 +28986,35 @@
         }
       }
     },
+    "Order sent on Monad · result not read" : {
+      "comment" : "A Perps Activity row's subtitle, under 'Long BTC-PERP': the order's transaction confirmed on Monad, but what it did (filled or not) hasn't been read from it yet.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Orden enviada en Monad · resultado sin leer"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordre envoyé sur Monad · résultat non lu"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 주문 전송됨 · 결과 아직 읽지 않음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订单已在 Monad 上发送 · 结果未读取"
+          }
+        }
+      }
+    },
     "Order sent to Perpl." : {
       "localizations" : {
         "es" : {
@@ -28634,6 +29836,35 @@
         }
       }
     },
+    "Partly closed %@" : {
+      "comment" : "A Perps Activity row's title: a close reduced part of the position on that market; the rest is still open. The value: the market's symbol (“BTC”).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cerraste en parte %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Position %@ clôturée en partie"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 일부 종료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已部分平仓 %@"
+          }
+        }
+      }
+    },
     "Passkey" : {
       "localizations" : {
         "es" : {
@@ -29451,6 +30682,122 @@
         }
       }
     },
+    "Perpl accepted the new stop-loss but hasn't listed it yet. Check Orders before placing it again." : {
+      "comment" : "The position's TP/SL sheet: Perpl took the new stop-loss, but its live list didn't show it in time, so it may or may not be active. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl aceptó el nuevo stop loss, pero aún no lo ha listado. Revisa Órdenes antes de volver a colocarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl a accepté le nouveau stop loss, mais ne l'a pas encore listé. Vérifiez Ordres avant de le placer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 새 손절 주문을 접수했지만 아직 목록에 올리지 않았습니다. 다시 넣기 전에 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 已接受新的止损，但尚未列出。再次下单前，先查看“委托”。"
+          }
+        }
+      }
+    },
+    "Perpl accepted the new stop-loss but hasn't listed it yet. The old one was cancelled. Check Orders before placing it again." : {
+      "comment" : "The position's TP/SL sheet: the old stop-loss was cancelled; Perpl took the new one, but its live list didn't show it in time, so it may or may not be active. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl aceptó el nuevo stop loss, pero aún no lo ha listado. El anterior se canceló. Revisa Órdenes antes de volver a colocarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl a accepté le nouveau stop loss, mais ne l'a pas encore listé. L'ancien a été annulé. Vérifiez Ordres avant de le placer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 새 손절 주문을 접수했지만 아직 목록에 올리지 않았습니다. 기존 손절 주문은 취소되었습니다. 다시 넣기 전에 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 已接受新的止损，但尚未列出。旧的止损已取消。再次下单前，先查看“委托”。"
+          }
+        }
+      }
+    },
+    "Perpl accepted the new take-profit but hasn't listed it yet. Check Orders before placing it again." : {
+      "comment" : "The position's TP/SL sheet: Perpl took the new take-profit, but its live list didn't show it in time, so it may or may not be active. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl aceptó el nuevo take profit, pero aún no lo ha listado. Revisa Órdenes antes de volver a colocarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl a accepté le nouveau take profit, mais ne l'a pas encore listé. Vérifiez Ordres avant de le placer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 새 익절 주문을 접수했지만 아직 목록에 올리지 않았습니다. 다시 넣기 전에 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 已接受新的止盈，但尚未列出。再次下单前，先查看“委托”。"
+          }
+        }
+      }
+    },
+    "Perpl accepted the new take-profit but hasn't listed it yet. The old one was cancelled. Check Orders before placing it again." : {
+      "comment" : "The position's TP/SL sheet: the old take-profit was cancelled; Perpl took the new one, but its live list didn't show it in time, so it may or may not be active. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl aceptó el nuevo take profit, pero aún no lo ha listado. El anterior se canceló. Revisa Órdenes antes de volver a colocarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl a accepté le nouveau take profit, mais ne l'a pas encore listé. L'ancien a été annulé. Vérifiez Ordres avant de le placer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 새 익절 주문을 접수했지만 아직 목록에 올리지 않았습니다. 기존 익절 주문은 취소되었습니다. 다시 넣기 전에 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 已接受新的止盈，但尚未列出。旧的止盈已取消。再次下单前，先查看“委托”。"
+          }
+        }
+      }
+    },
     "Perpl collateral and open positions" : {
       "localizations" : {
         "es" : {
@@ -29475,6 +30822,93 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Perpl 抵押品和未平仓位"
+          }
+        }
+      }
+    },
+    "Perpl didn't accept the stop-loss. If the order fills, set it with TP/SL on the position." : {
+      "comment" : "A Perps order sheet's and trade screen's warning while the order's result isn't in yet: Perpl refused its stop-loss. TP/SL is the position's button for setting it.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl no aceptó el stop loss. Si la orden se ejecuta, configúralo con TP/SL en la posición."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl n'a pas accepté le stop loss. Si l'ordre est exécuté, définissez-le avec « TP/SL » sur la position."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 손절 주문을 받아들이지 않았습니다. 주문이 체결되면 포지션의 익절/손절에서 설정하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 未接受止损。如果订单成交，在仓位上通过“止盈/止损”设置止损。"
+          }
+        }
+      }
+    },
+    "Perpl didn't accept the take-profit and stop-loss. If the order fills, set them with TP/SL on the position." : {
+      "comment" : "A Perps order sheet's and trade screen's warning while the order's result isn't in yet: Perpl refused its take-profit and stop-loss. TP/SL is the position's button for setting them.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl no aceptó el take profit ni el stop loss. Si la orden se ejecuta, configúralos con TP/SL en la posición."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl n'a pas accepté le take profit et le stop loss. Si l'ordre est exécuté, définissez-les avec « TP/SL » sur la position."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 익절 및 손절 주문을 받아들이지 않았습니다. 주문이 체결되면 포지션의 익절/손절에서 설정하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 未接受止盈和止损。如果订单成交，在仓位上通过“止盈/止损”进行设置。"
+          }
+        }
+      }
+    },
+    "Perpl didn't accept the take-profit. If the order fills, set it with TP/SL on the position." : {
+      "comment" : "A Perps order sheet's and trade screen's warning while the order's result isn't in yet: Perpl refused its take-profit. TP/SL is the position's button for setting it.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl no aceptó el take profit. Si la orden se ejecuta, configúralo con TP/SL en la posición."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl n'a pas accepté le take profit. Si l'ordre est exécuté, définissez-le avec « TP/SL » sur la position."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 익절 주문을 받아들이지 않았습니다. 주문이 체결되면 포지션의 익절/손절에서 설정하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 未接受止盈。如果订单成交，在仓位上通过“止盈/止损”设置止盈。"
           }
         }
       }
@@ -29536,6 +30970,7 @@
       }
     },
     "Perpl didn't confirm cancelling the stop-loss at %@. Check Orders before trying again." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -29564,6 +30999,7 @@
       }
     },
     "Perpl didn't confirm cancelling the take-profit at %@. Check Orders before trying again." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -29615,6 +31051,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Perpl 暂无此市场的 K 线历史。"
+          }
+        }
+      }
+    },
+    "Perpl hasn't listed the stop-loss yet. Check Orders before placing it again." : {
+      "comment" : "A Perps order sheet's warning: Perpl took the order's stop-loss but its answer didn't arrive in time. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl aún no ha listado el stop loss. Revisa Órdenes antes de volver a colocarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl n'a pas encore listé le stop loss. Vérifiez Ordres avant de le placer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 아직 손절 주문을 목록에 올리지 않았습니다. 다시 넣기 전에 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 尚未列出该止损。再次下单前，先查看“委托”。"
+          }
+        }
+      }
+    },
+    "Perpl hasn't listed the take-profit yet. Check Orders before placing it again." : {
+      "comment" : "A Perps order sheet's warning: Perpl took the order's take-profit but its answer didn't arrive in time. Orders is a tab of the Perps screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl aún no ha listado el take profit. Revisa Órdenes antes de volver a colocarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl n'a pas encore listé le take profit. Vérifiez Ordres avant de le placer à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl이 아직 익절 주문을 목록에 올리지 않았습니다. 다시 넣기 전에 주문을 확인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl 尚未列出该止盈。再次下单前，先查看“委托”。"
           }
         }
       }
@@ -29816,6 +31310,7 @@
       }
     },
     "Perpl refused to cancel the stop-loss at %@: %@. It is still live." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -29850,6 +31345,7 @@
       }
     },
     "Perpl refused to cancel the take-profit at %@: %@. It is still live." : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -30480,6 +31976,64 @@
         }
       }
     },
+    "Placing the new stop-loss…" : {
+      "comment" : "The position's TP/SL sheet, while it works: the new stop-loss is being sent to Perpl and its answer awaited.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colocando el nuevo stop loss…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placement du nouveau stop loss…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 손절 주문 넣는 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在设置新的止损…"
+          }
+        }
+      }
+    },
+    "Placing the new take-profit…" : {
+      "comment" : "The position's TP/SL sheet, while it works: the new take-profit is being sent to Perpl and its answer awaited.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colocando el nuevo take profit…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placement du nouveau take profit…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 익절 주문 넣는 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在设置新的止盈…"
+          }
+        }
+      }
+    },
     "Platform pool fees" : {
       "localizations" : {
         "es" : {
@@ -31068,6 +32622,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "只做 Maker"
+          }
+        }
+      }
+    },
+    "Post-only limit at %@" : {
+      "comment" : "A Perps order review's Type row: a limit order that only rests on the book as a maker (post-only), never fills at once. The value: the limit price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Límite solo maker a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite post-only à %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "포스트 온리 지정가 %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只做 Maker 限价 %@"
+          }
+        }
+      }
+    },
+    "Post-only, reduce-only limit at %@" : {
+      "comment" : "A Perps order review's Type row: a limit order that only rests on the book (post-only, maker) and can only shrink the position (reduce-only). The value: the limit price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Límite solo maker y solo reducir a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite post-only en réduction seule à %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "포스트 온리·리듀스 온리 지정가 %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只做 Maker、只减仓限价 %@"
           }
         }
       }
@@ -32114,6 +33726,35 @@
         }
       }
     },
+    "Reading the result…" : {
+      "comment" : "A Perps sheet's status: the order's (or close's, or margin's) transaction confirmed on Monad and the app reads what it did from it (filled, partly filled, not filled).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leyendo el resultado…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lecture du résultat…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "결과를 읽는 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取结果…"
+          }
+        }
+      }
+    },
     "Reading the wallet…" : {
       "localizations" : {
         "es" : {
@@ -32757,6 +34398,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "只减仓"
+          }
+        }
+      }
+    },
+    "Reduce-only limit at %@" : {
+      "comment" : "A Perps order review's Type row: a limit order that can only shrink the position (reduce-only). The value: the limit price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Límite solo reducir a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limite en réduction seule à %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "리듀스 온리 지정가 %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只减仓限价 %@"
           }
         }
       }
@@ -34774,6 +36444,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "发送或转移代币"
+          }
+        }
+      }
+    },
+    "Sending to Perpl…" : {
+      "comment" : "The Perps order sheet's status while the order's frames go out to Perpl over the trading connection.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviando a Perpl…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoi à Perpl…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl로 보내는 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在发送到 Perpl…"
           }
         }
       }
@@ -37350,6 +39049,35 @@
         }
       }
     },
+    "Still listening for Perpl…" : {
+      "comment" : "The Perps order sheet's status: Perpl hasn't answered the order yet; a late answer is still read.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguimos esperando a Perpl…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toujours à l'écoute de Perpl…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl의 응답을 계속 기다리는 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍在等待 Perpl 的回复…"
+          }
+        }
+      }
+    },
     "Still needed" : {
       "localizations" : {
         "es" : {
@@ -37599,6 +39327,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "停止观察此地址？"
+          }
+        }
+      }
+    },
+    "Stop-loss accepted at %@. It activates when the order fills." : {
+      "comment" : "A Perps order sheet's line: Perpl took the order's stop-loss; it waits for the order to fill before it protects anything. The value: the trigger price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop loss aceptado a %@. Se activa cuando se ejecute la orden."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop loss accepté à %@. Il s'active une fois l'ordre exécuté."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "손절 주문이 %@에 접수되었어요. 주문이 체결되면 활성화돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "止损已接受，价格 %@。订单成交后生效。"
+          }
+        }
+      }
+    },
+    "Stop-loss cancelled." : {
+      "comment" : "A Perps order sheet's line: the order's stop-loss was cancelled some time after it was placed (from Orders, or by Perpl after the take-profit fired). The position may no longer be protected by it.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop loss cancelado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop loss annulé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "손절 주문이 취소되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "止损已取消。"
           }
         }
       }
@@ -38711,6 +40497,35 @@
         }
       }
     },
+    "TP/SL may be out of date: some updates from Perpl may have been missed. Reconnect in Profile → Perpl Trading to refresh them." : {
+      "comment" : "The Perps Orders tab's warning: the trading connection is up, but a gap in Perpl's heartbeat means some order updates may have been missed, so the take-profit / stop-loss rows may be out of date. Profile → Perpl Trading is where the connection is managed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puede que los TP/SL estén desactualizados: es posible que se hayan perdido algunas actualizaciones de Perpl. Vuelve a conectarte en Perfil → Trading en Perpl para actualizarlos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les TP/SL ne sont peut-être pas à jour : certaines mises à jour de Perpl ont pu être manquées. Reconnectez-vous dans Profil → Trading Perpl pour les actualiser."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절/손절 정보가 최신이 아닐 수 있습니다. Perpl의 일부 업데이트를 놓쳤을 수 있습니다. 새로 고치려면 프로필 → Perpl 거래에서 다시 연결하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "止盈/止损可能已过时：可能漏掉了 Perpl 的部分更新。在“个人资料”→“Perpl 交易”中重新连接以刷新。"
+          }
+        }
+      }
+    },
     "TP/SL updated" : {
       "localizations" : {
         "es" : {
@@ -38907,6 +40722,35 @@
         }
       }
     },
+    "Take-profit accepted at %@. It activates when the order fills." : {
+      "comment" : "A Perps order sheet's line: Perpl took the order's take-profit; it waits for the order to fill before it protects anything. The value: the trigger price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take profit aceptado a %@. Se activa cuando se ejecute la orden."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take profit accepté à %@. Il s'active une fois l'ordre exécuté."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 주문이 %@에 접수되었어요. 주문이 체결되면 활성화돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "止盈已接受，价格 %@。订单成交后生效。"
+          }
+        }
+      }
+    },
     "Take-profit and stop-loss left from an earlier %@ long can't be checked while Perpl trading is offline. If you had any, check Orders first: they would act on this position." : {
       "localizations" : {
         "es" : {
@@ -38959,6 +40803,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Perpl 交易离线期间，无法检查此前 %@ 做空仓位残留的止盈和止损。如果你有残留订单，先查看“委托”：它们会作用于此仓位。"
+          }
+        }
+      }
+    },
+    "Take-profit cancelled." : {
+      "comment" : "A Perps order sheet's line: the order's take-profit was cancelled some time after it was placed (from Orders, or by Perpl after the stop-loss fired).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take profit cancelado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take profit annulé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "익절 주문이 취소되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "止盈已取消。"
           }
         }
       }
@@ -40595,6 +42468,64 @@
         }
       }
     },
+    "The new stop-loss at %@ triggered at once." : {
+      "comment" : "The position's TP/SL sheet: the new stop-loss fired as soon as Perpl armed it, so Perpl is closing the position at its price. The value: its trigger price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El nuevo stop loss a %@ se activó de inmediato."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le nouveau stop loss à %@ s'est déclenché immédiatement."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 새 손절 주문이 즉시 트리거되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %@ 的新止损立即触发了。"
+          }
+        }
+      }
+    },
+    "The new take-profit at %@ triggered at once." : {
+      "comment" : "The position's TP/SL sheet: the new take-profit fired as soon as Perpl armed it, so Perpl is closing the position at its price. The value: its trigger price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El nuevo take profit a %@ se activó de inmediato."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le nouveau take profit à %@ s'est déclenché immédiatement."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 새 익절 주문이 즉시 트리거되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %@ 的新止盈立即触发了。"
+          }
+        }
+      }
+    },
     "The news feeds could not be reached." : {
       "localizations" : {
         "es" : {
@@ -40703,6 +42634,93 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "旧的止盈已取消，但 Perpl 拒绝了新的止盈（%@）。该仓位现在没有止盈。"
+          }
+        }
+      }
+    },
+    "The order is on the book, but Perpl didn't accept the stop-loss. Set it with TP/SL on the position once the order fills." : {
+      "comment" : "A Perps order sheet's warning: the limit order rests on the order book; Perpl refused its stop-loss.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La orden está en el libro de órdenes, pero Perpl no aceptó el stop loss. Configúralo con TP/SL en la posición cuando se ejecute la orden."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ordre est dans le carnet, mais Perpl n'a pas accepté le stop loss. Définissez-le avec « TP/SL » sur la position une fois l'ordre exécuté."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주문이 호가창에 접수되었지만 Perpl이 손절 주문을 받아들이지 않았습니다. 주문이 체결되면 포지션의 익절/손절에서 설정하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订单已挂单，但 Perpl 未接受止损。订单成交后，在仓位上通过“止盈/止损”设置止损。"
+          }
+        }
+      }
+    },
+    "The order is on the book, but Perpl didn't accept the take-profit and stop-loss. Set them with TP/SL on the position once the order fills." : {
+      "comment" : "A Perps order sheet's warning: the limit order rests on the order book; Perpl refused its take-profit and stop-loss.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La orden está en el libro de órdenes, pero Perpl no aceptó el take profit ni el stop loss. Configúralos con TP/SL en la posición cuando se ejecute la orden."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ordre est dans le carnet, mais Perpl n'a pas accepté le take profit et le stop loss. Définissez-les avec « TP/SL » sur la position une fois l'ordre exécuté."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주문이 호가창에 접수되었지만 Perpl이 익절 및 손절 주문을 받아들이지 않았습니다. 주문이 체결되면 포지션의 익절/손절에서 설정하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订单已挂单，但 Perpl 未接受止盈和止损。订单成交后，在仓位上通过“止盈/止损”进行设置。"
+          }
+        }
+      }
+    },
+    "The order is on the book, but Perpl didn't accept the take-profit. Set it with TP/SL on the position once the order fills." : {
+      "comment" : "A Perps order sheet's warning: the limit order rests on the order book; Perpl refused its take-profit.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La orden está en el libro de órdenes, pero Perpl no aceptó el take profit. Configúralo con TP/SL en la posición cuando se ejecute la orden."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'ordre est dans le carnet, mais Perpl n'a pas accepté le take profit. Définissez-le avec « TP/SL » sur la position une fois l'ordre exécuté."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주문이 호가창에 접수되었지만 Perpl이 익절 주문을 받아들이지 않았습니다. 주문이 체결되면 포지션의 익절/손절에서 설정하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "订单已挂单，但 Perpl 未接受止盈。订单成交后，在仓位上通过“止盈/止损”设置止盈。"
           }
         }
       }
@@ -40905,6 +42923,274 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "服务器在删除任何内容前会验证这是你的钱包，而该登录未完成：%@"
+          }
+        }
+      }
+    },
+    "The stop-loss at %@ (%@) had already expired." : {
+      "comment" : "The TP/SL cancel sheet: the stop-loss had expired before Perpl processed the cancel. The first value: its trigger price; the second: the size it closed with the asset (0.001 BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The stop-loss at %1$@ (%2$@) had already expired."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El stop loss a %1$@ (%2$@) ya había expirado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le stop loss à %1$@ (%2$@) avait déjà expiré."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@(%2$@) 손절 주문은 이미 만료되었어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %1$@（%2$@）的止损已过期。"
+          }
+        }
+      }
+    },
+    "The stop-loss at %@ (%@) triggered before the cancel landed." : {
+      "comment" : "The TP/SL cancel sheet: the stop-loss triggered (Perpl started closing the position at its price) before Perpl processed the cancel. The first value: its trigger price; the second: the size it closes with the asset (0.001 BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The stop-loss at %1$@ (%2$@) triggered before the cancel landed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El stop loss a %1$@ (%2$@) se activó antes de que se procesara la cancelación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le stop loss à %1$@ (%2$@) s'est déclenché avant que l'annulation ne soit traitée."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "취소가 처리되기 전에 %1$@(%2$@) 손절 주문이 트리거되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %1$@（%2$@）的止损在取消生效前已触发。"
+          }
+        }
+      }
+    },
+    "The stop-loss at %@ (%@) was already gone." : {
+      "comment" : "The TP/SL cancel sheet: the stop-loss was no longer on Perpl when the cancel arrived, so there was nothing to cancel. The first value: its trigger price; the second: the size it closed with the asset (0.001 BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The stop-loss at %1$@ (%2$@) was already gone."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El stop loss a %1$@ (%2$@) ya no existía."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le stop loss à %1$@ (%2$@) n'existait déjà plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@(%2$@) 손절 주문은 이미 없어진 상태였어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %1$@（%2$@）的止损已不存在。"
+          }
+        }
+      }
+    },
+    "The stop-loss at %@ triggered at once." : {
+      "comment" : "A Perps order sheet's line: the order's stop-loss fired as soon as it was active. The value: the trigger price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El stop loss a %@ se activó de inmediato."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le stop loss à %@ s'est déclenché immédiatement."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 손절 주문이 즉시 트리거되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %@ 的止损立即触发了。"
+          }
+        }
+      }
+    },
+    "The take-profit at %@ (%@) had already expired." : {
+      "comment" : "The TP/SL cancel sheet: the take-profit had expired before Perpl processed the cancel. The first value: its trigger price; the second: the size it closed with the asset (0.001 BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The take-profit at %1$@ (%2$@) had already expired."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El take profit a %1$@ (%2$@) ya había expirado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le take profit à %1$@ (%2$@) avait déjà expiré."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@(%2$@) 익절 주문은 이미 만료되었어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %1$@（%2$@）的止盈已过期。"
+          }
+        }
+      }
+    },
+    "The take-profit at %@ (%@) triggered before the cancel landed." : {
+      "comment" : "The TP/SL cancel sheet: the take-profit triggered (Perpl started closing the position at its price) before Perpl processed the cancel. The first value: its trigger price; the second: the size it closes with the asset (0.001 BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The take-profit at %1$@ (%2$@) triggered before the cancel landed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El take profit a %1$@ (%2$@) se activó antes de que se procesara la cancelación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le take profit à %1$@ (%2$@) s'est déclenché avant que l'annulation ne soit traitée."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "취소가 처리되기 전에 %1$@(%2$@) 익절 주문이 트리거되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %1$@（%2$@）的止盈在取消生效前已触发。"
+          }
+        }
+      }
+    },
+    "The take-profit at %@ (%@) was already gone." : {
+      "comment" : "The TP/SL cancel sheet: the take-profit was no longer on Perpl when the cancel arrived, so there was nothing to cancel. The first value: its trigger price; the second: the size it closed with the asset (0.001 BTC).",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The take-profit at %1$@ (%2$@) was already gone."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El take profit a %1$@ (%2$@) ya no existía."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le take profit à %1$@ (%2$@) n'existait déjà plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@(%2$@) 익절 주문은 이미 없어진 상태였어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %1$@（%2$@）的止盈已不存在。"
+          }
+        }
+      }
+    },
+    "The take-profit at %@ triggered at once." : {
+      "comment" : "A Perps order sheet's line: the order's take-profit fired as soon as it was active. The value: the trigger price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El take profit a %@ se activó de inmediato."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le take profit à %@ s'est déclenché immédiatement."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 익절 주문이 즉시 트리거되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格为 %@ 的止盈立即触发了。"
           }
         }
       }
@@ -43583,6 +45869,35 @@
         }
       }
     },
+    "Transaction confirmed on Monad" : {
+      "comment" : "A Perps sheet's progress row: the transaction confirmed on the Monad network. What it did (filled, not filled) is said under it, so this says only that it ran.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transacción confirmada en Monad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transaction confirmée sur Monad"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 트랜잭션 확인됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交易已在 Monad 上确认"
+          }
+        }
+      }
+    },
     "Transactions" : {
       "comment" : "A notification center filter [tight]",
       "localizations" : {
@@ -45369,6 +47684,35 @@
         }
       }
     },
+    "Waiting for Perpl…" : {
+      "comment" : "The Perps order sheet's status: Perpl took the order (market or limit) for forwarding and the app waits for its result. Not 'placed': nothing is known to be on the order book yet.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando a Perpl…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En attente de Perpl…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perpl을 기다리는 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在等待 Perpl…"
+          }
+        }
+      }
+    },
     "Waiting for a sweep" : {
       "localizations" : {
         "es" : {
@@ -47089,6 +49433,35 @@
         }
       }
     },
+    "You can close this. The result will show on the %@ screen." : {
+      "comment" : "Under the Perps order sheet's waiting status. The value: the market's name (“BTC-PERP”), whose trade screen shows the order's result.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puedes cerrar esto. El resultado aparecerá en la pantalla de %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous pouvez fermer ceci. Le résultat s'affichera sur l'écran %@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 창을 닫아도 돼요. 결과는 %@ 화면에 표시돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你可以关闭此页面。结果将显示在 %@ 页面上。"
+          }
+        }
+      }
+    },
     "You exported and confirmed the recovery phrase." : {
       "localizations" : {
         "es" : {
@@ -48697,6 +51070,35 @@
         }
       }
     },
+    "Your order is still in the ticket." : {
+      "comment" : "Under a Perps order's result when nothing executed: the size and TP/SL typed are kept in the order ticket, ready to send again.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu orden sigue en el formulario de órdenes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre ordre est toujours dans le ticket d'ordre."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주문 내용은 주문 입력란에 그대로 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的订单仍保留在下单面板中。"
+          }
+        }
+      }
+    },
     "Your passkey is this account's lock: signing asks for it whenever the session is locked, so App Lock doesn't add a second %@ prompt." : {
       "localizations" : {
         "es" : {
@@ -49335,6 +51737,258 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已在钱包中"
+          }
+        }
+      }
+    },
+    "cancelRow.alreadyGone" : {
+      "comment" : "[tight] A take-profit / stop-loss row's state in the TP/SL cancel sheet: the order was no longer on Perpl when the cancel arrived, so there was nothing to cancel.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Already gone"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya no existía"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déjà disparu"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미 없음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已不存在"
+          }
+        }
+      }
+    },
+    "cancelRow.cancelled" : {
+      "comment" : "[tight] A take-profit / stop-loss row's state in the TP/SL cancel sheet: Perpl's live list confirms it was cancelled (an adjective).",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancelled"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Annulé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "취소됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消"
+          }
+        }
+      }
+    },
+    "cancelRow.cancelling" : {
+      "comment" : "[tight] A take-profit / stop-loss row's state while its cancel is on its way to Perpl: in the TP/SL cancel sheet, and on the Orders tab's TP/SL card in place of its Cancel button.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancelling…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelando…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Annulation…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "취소 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取消…"
+          }
+        }
+      }
+    },
+    "cancelRow.expiredFirst" : {
+      "comment" : "[tight] A take-profit / stop-loss row's state in the TP/SL cancel sheet: it had expired before the cancel arrived.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Expired first"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expiró antes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expiré avant"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 만료됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已先过期"
+          }
+        }
+      }
+    },
+    "cancelRow.firedFirst" : {
+      "comment" : "[tight] A take-profit / stop-loss row's state in the TP/SL cancel sheet: it triggered (Perpl started closing the position at its price) before the cancel arrived.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Triggered first"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se activó antes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déclenché avant"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 트리거됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已先触发"
+          }
+        }
+      }
+    },
+    "cancelRow.notConfirmed" : {
+      "comment" : "[tight] A take-profit / stop-loss row's state in the TP/SL cancel sheet: Perpl hasn't confirmed the cancel in time, so the order may still be active.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not confirmed"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin confirmar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non confirmé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인 안 됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未确认"
+          }
+        }
+      }
+    },
+    "cancelRow.stillLive" : {
+      "comment" : "[tight] A take-profit / stop-loss row's state in the TP/SL cancel sheet: Perpl refused the cancel, so the order is still active.",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Still live"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sigue activo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toujours actif"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 활성"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍有效"
           }
         }
       }
@@ -50077,6 +52731,7 @@
     },
     "no reason given" : {
       "comment" : "Stands in for Perpl's reason when it gave none, completing “Perpl refused to cancel the take-profit at %@: <this>.”",
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {

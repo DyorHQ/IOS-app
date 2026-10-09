@@ -180,6 +180,24 @@ final class AppEnvironment {
             }
             return positions
         }
+        // An order's outcome and the app-wide watcher: one notice per fill, the order's own or the watcher's, never two
+        // (`PerpExpectedFills`); a close that executed nothing makes the position's ending news again.
+        perplTrading.notifyFills = { [settings] in settings.notificationsEnabled && settings.notifyFills }
+        perplTrading.expectFill = { [alerts] id, perpId, side, growth, until in alerts.expectFill(id, perpId: perpId, side: side, growth: growth, until: until) }
+        perplTrading.fillAnnounced = { [alerts] id, size in alerts.fillAnnounced(id, size: size) }
+        perplTrading.releaseFill = { [alerts] id in alerts.releaseFill(id) }
+        perplTrading.watcherAnnounced = { [alerts] perpId, side, since in alerts.watcherAnnounced(perpId: perpId, side: side, since: since) }
+        perplTrading.wakeWatcher = { [alerts] in alerts.reconsiderFills() }
+        perplTrading.userCloseVoided = { [alerts] perpId in alerts.forgetUserClose(perpId) }
+        // What a wallet-signed order's transaction did, from its receipt (up to three reads while it reads back null).
+        perplTrading.receiptRequests = { [perpl] hash in try await perpl.receiptRequests(hash) }
+        // The signed order history, two pages at most: what an order whose stream report was missed is read from.
+        perplTrading.orderHistory = { [perpl] key in
+            let first = try await perpl.orderEvents(key: key)
+            guard let next = first.next else { return first.items }
+            let second = try await perpl.orderEvents(key: key, cursor: next)
+            return first.items + second.items
+        }
         sync = BackendSync(social: social)
         sync.install(settings: settings, address: { [weak session] in session?.address })
         // The owner's remote switches, read with the minimum build: each on until the row turns it off.
@@ -190,10 +208,12 @@ final class AppEnvironment {
     @ObservationIgnored private var venueSwitch: Task<Void, Never>?
 
     /// Applies the owner's remote switches (`RemoteFlags`, from `UpdateGate`'s read of `app_config` 'ios'): DyorHQ venue
-    /// prices on the price service (off: priced like any token, as build 16 did), and the DyorHQ labels on the coins model
-    /// (off: build 16's labels). Nothing is written anywhere; the next check applies the row again.
+    /// prices on the price service (off: priced like any token, as build 16 did), the DyorHQ labels on the coins model
+    /// (off: build 16's labels), and the opt-in live order outcome on Perps (off: today's one-click sheet; an order
+    /// already sent keeps the mode of its tap). Nothing is written anywhere; the next check applies the row again.
     func apply(_ flags: RemoteFlags) {
         dyorCoins.showsDyorBadges = flags.dyorBadges
+        perplTrading.liveOutcomes = flags.perpsLiveOutcome
         let previous = venueSwitch
         venueSwitch = Task { [prices] in
             await previous?.value

@@ -101,6 +101,38 @@ final class KoreanParagraphsTests: XCTestCase {
         XCTAssertEqual(Self.footers(in: "Section { A } footer: { Text(\"x\") { y } }"), [" Text(\"x\") { y } "])
     }
 
+    /// An order's result wraps by word in Korean (real-time spec I28): the outcome views' every line is a `Paragraph` in
+    /// a label made for one (`ParagraphLabel`), never a label with a `String` or `Text` title, and the order sheet's
+    /// warnings are paragraphs too.
+    func testTheOrderResultWrapsByWord() throws {
+        let outcome = try DocsLinksTests.appSource("Perps/PerpOrderOutcomeView.swift")
+        XCTAssertNil(outcome.range(of: #"(?<![\w.])Label\(\s*(Text\(|"|[a-z]\w*\s*,)"#, options: .regularExpression), "no label with a String or Text title")
+        XCTAssertGreaterThanOrEqual(outcome.components(separatedBy: "Paragraph(verbatim:").count - 1, 6)
+        XCTAssertGreaterThanOrEqual(outcome.components(separatedBy: ".modifier(ParagraphLabel())").count - 1, 2)
+        // A line limit or a scale factor turns a Paragraph back into plain Text (Korean breaks inside words, I28) and can
+        // cut off what to check: none anywhere in the order's result views (the status bar, the receipt bar, the row).
+        XCTAssertFalse(outcome.contains(".lineLimit("), "no line limit on an order result")
+        XCTAssertFalse(outcome.contains(".minimumScaleFactor("), "no scale factor on an order result")
+        let trade = try DocsLinksTests.appSource("Perps/PerpTradeView.swift")
+        let sheet = String(trade[try XCTUnwrap(trade.range(of: "struct AuthedOrderSheet: View {")).lowerBound...])
+        XCTAssertFalse(sheet.contains("Label(message, systemImage:"), "the sheet's warnings are paragraphs")
+        XCTAssertTrue(sheet.contains("Label { Paragraph(verbatim: message) } icon: { Image(systemName: \"exclamationmark.triangle.fill\") }"))
+    }
+
+    /// The TP/SL sheets' outcome and progress lines, and the Orders tab's TP/SL warnings, wrap by word in Korean (real-time
+    /// spec I28): a paragraph in a label made for one, never a label with a `String` title.
+    func testTheTPSLLinesWrapByWord() throws {
+        let sheets = try DocsLinksTests.appSource("Perps/PerpTriggerSheets.swift")
+        XCTAssertFalse(sheets.contains("Label(line.text"), "an outcome line is a paragraph")
+        XCTAssertTrue(sheets.contains("Label { Paragraph(verbatim: line.text) } icon: {"))
+        XCTAssertTrue(sheets.contains("Label { Paragraph(verbatim: PerpTriggerCopy.step(kind, step)) } icon: { ProgressView().controlSize(.mini) }"))
+        let trade = try DocsLinksTests.appSource("Perps/PerpTradeView.swift")
+        XCTAssertFalse(trade.contains(#"Label("\(orphans.count) TP/SL on"#), "the leftover banner is a paragraph")
+        XCTAssertTrue(trade.contains(#"Paragraph("\(orphans.count) TP/SL on \(market.asset) have no position to close."#))
+        XCTAssertFalse(trade.contains(#"Label("TP/SL can't be verified right now"#))
+        XCTAssertTrue(trade.contains(#"freshnessNote(Paragraph("TP/SL can't be verified right now"#))
+    }
+
     /// `Paragraph` lays out word by word only in Korean, with no line limit or minimum scale, and only up to its limit;
     /// otherwise it is the `Text` it always was. A key's markdown is drawn as `Text` draws it.
     func testParagraphIsTextOutsideKorean() throws {
