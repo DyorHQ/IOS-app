@@ -1,15 +1,23 @@
 // deno test --no-config --node-modules-dir=none -A supabase/functions/history-indexer/
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { DEFAULT_ENDPOINTS, type Endpoint } from "./endpoints.ts";
-import { ByteBudget, EndpointState, minSpanFor, pickEndpoint, SIDELINE_MS } from "./pacing.ts";
+import { alchemyEndpoint, DEFAULT_ENDPOINTS, type Endpoint } from "./endpoints.ts";
+import { ByteBudget, EndpointState, followRank, minSpanFor, pickEndpoint, SIDELINE_MS } from "./pacing.ts";
 
 const T0 = Date.parse("2026-10-08T12:00:00Z");
 const ep = (label: string, over: Partial<Endpoint> = {}): Endpoint => ({ ...DEFAULT_ENDPOINTS.find((e) => e.label === label)!, ...over });
 const H = 111_000_000;
 const piece = (to: number, priority: 0 | 1 | 2 | 3 = 1, from = to - 99) => ({ from, to, priority });
+// rpc2 at its measured pace (4 requests/s, 8 in flight), for the tests of the mechanisms; the default is the launch pace.
+const MEASURED = { rps: 4, inFlight: 8 };
 
 Deno.test("pace: never more than rps starts in any 1 s window, never past the in-flight cap", () => {
-  const s = new EndpointState(ep("rpc2"), undefined, T0);
+  const launch = new EndpointState(ep("rpc2"), undefined, T0); // the launch pace: 2 requests/s
+  const launched: number[] = [];
+  for (let t = T0; t < T0 + 10_000; t += 10) {
+    if (launch.ready(t, piece(H - 5_000), H)) { launch.started(t); launched.push(t); launch.finished(t + 5, { kind: "answered" }); }
+  }
+  assert(launched.length >= 19 && launched.length <= 21, `${launched.length} starts in 10 s at the launch pace`);
+  const s = new EndpointState(ep("rpc2", MEASURED), undefined, T0);
   const starts: number[] = [];
   for (let t = T0; t < T0 + 10_000; t += 10) {
     if (s.ready(t, piece(H - 5_000), H)) { s.started(t); starts.push(t); s.finished(t + 5, { kind: "answered" }); }
@@ -25,7 +33,7 @@ Deno.test("pace: never more than rps starts in any 1 s window, never past the in
 });
 
 Deno.test("AIMD: halve on a 429 (floor 0.25), +0.5 per minute without one, up to the configured rate", () => {
-  const s = new EndpointState(ep("rpc2"), undefined, T0);
+  const s = new EndpointState(ep("rpc2", MEASURED), undefined, T0);
   assertEquals(s.currentRps(T0), 4);
   for (let k = 0; k < 6; k++) { s.started(T0); s.finished(T0, { kind: "throttled" }); }
   assertEquals(s.currentRps(T0), 0.25);
@@ -87,18 +95,18 @@ Deno.test("memory round-trip: rest, pace, 429 ratio, daily count, clamps", () =>
   s.started(T0); s.finished(T0, { kind: "throttled", retryAfterMs: 20_000 });
   s.markClamps(T0);
   const m = s.memory(T0 + 1_000);
-  assertEquals(m.rps, 2);
+  assertEquals(m.rps, 1); // the launch pace (2) halved
   assertEquals(m.used, 1);
   assertEquals(m.restUntil, T0 + 20_000);
   assertEquals(m.clampsUntil, T0 + 86_400_000);
   assert(m.r429! > 0.04 && m.r429! <= 0.05);
   assertEquals(JSON.stringify(m).includes("monad.xyz"), false);
   const n = new EndpointState(ep("rpc2"), JSON.parse(JSON.stringify(m)), T0 + 2_000);
-  assertEquals([n.currentRps(T0 + 2_000), n.usedToday(T0 + 2_000), n.straddle(T0 + 2_000), n.restUntil], [2, 1, "clamps", T0 + 20_000]);
+  assertEquals([n.currentRps(T0 + 2_000), n.usedToday(T0 + 2_000), n.straddle(T0 + 2_000), n.restUntil], [1, 1, "clamps", T0 + 20_000]);
   // A UTC day later the count starts again; garbage memory is ignored.
   assertEquals(new EndpointState(ep("rpc2"), m, T0 + 86_400_000).usedToday(T0 + 86_400_000), 0);
   const junk = new EndpointState(ep("rpc2"), { rps: Number.NaN, span: -5, used: -1 } as never, T0);
-  assertEquals([junk.currentRps(T0), junk.currentSpan(), junk.usedToday(T0)], [4, 10_000, 0]);
+  assertEquals([junk.currentRps(T0), junk.currentSpan(), junk.usedToday(T0)], [2, 10_000, 0]);
 });
 
 Deno.test("the straddle rule: a clamping endpoint is never ready for a piece ending above head − lag", () => {
@@ -135,14 +143,14 @@ Deno.test("pickEndpoint: priority order, spans, straddle, waits and nothing", ()
   assertEquals("state" in deep! && deep.state.label, "rpc2");
   rpc2.started(T0);
   const busy = pickEndpoint(states, { from: 1_000_000, to: 1_009_999, priority: 3 }, T0, H, T0 + 60_000);
-  assertEquals(busy, { waitUntil: T0 + 250 });
+  assertEquals(busy, { waitUntil: T0 + 500 }); // 2 requests/s
   // A window piece goes to rpc4 meanwhile; a follow piece at the head goes to rpc4 only up to head − lag.
   const window = pickEndpoint(states, { from: H - 20_000, to: H - 10_001, priority: 2 }, T0, H, T0 + 60_000);
   assertEquals("state" in window! && [window.state.label, window.upTo], ["rpc4", H - 10_001]);
   const follow = pickEndpoint(states, { from: H - 1_199, to: H, priority: 0 }, T0, H, T0 + 60_000);
   assertEquals("state" in follow! && [follow.state.label, follow.upTo], ["rpc4", H - 600]);
   // Entirely above head − lag: only rpc2, which is pacing — wait for it; past the deadline → nothing this run.
-  assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 60_000), { waitUntil: T0 + 250 });
+  assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 60_000), { waitUntil: T0 + 500 });
   assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 100), null);
   rpc2.markClamps(T0);
   assertEquals(pickEndpoint(states, { from: H - 100, to: H, priority: 0 }, T0, H, T0 + 60_000), null);
@@ -240,4 +248,80 @@ Deno.test("bytes in flight: reservations ≤ 12 MiB, at most one single block (8
   b.release(single, true);
   assert(b.tryReserve("window", false)! > 0);
   assert(b.inUse() <= 12 * 1_048_576);
+});
+
+// ── The keyed endpoint "alchemy" ─────────────────────────────────────────────────────────────────────────────────
+
+const ALCHEMY = alchemyEndpoint("https://monad-mainnet.g.alchemy.test/v2/fAkEaLcHeMyKeY-0123456789").endpoint!;
+
+Deno.test("alchemy: first for backfill (global gaps, windows, deep), last for the follow; clamping, so never at the head", () => {
+  const states = [ALCHEMY, ...DEFAULT_ENDPOINTS].map((e) => new EndpointState({ ...e }, undefined, T0));
+  const [alchemy, rpc2] = states;
+  assertEquals([followRank(ALCHEMY), followRank(DEFAULT_ENDPOINTS[0])], [50, 10]);
+  const label = (r: ReturnType<typeof pickEndpoint>) => (r && "state" in r ? [r.state.label, r.upTo] : r);
+  assertEquals(label(pickEndpoint(states, { from: 0, to: 4_999_999, priority: 3 }, T0, H, T0 + 60_000)), ["alchemy", 4_999_999]);
+  assertEquals(label(pickEndpoint(states, { from: H - 5_000_000, to: H - 10_000, priority: 2 }, T0, H, T0 + 60_000)), ["alchemy", H - 10_000]);
+  assertEquals(label(pickEndpoint(states, { from: H - 5_000_000, to: H - 10_000, priority: 1 }, T0, H, T0 + 60_000)), ["alchemy", H - 10_000]);
+  // A window piece reaching the head: alchemy reads it up to head − 600 (the lag rule); the rest waits for rpc2.
+  assertEquals(label(pickEndpoint(states, { from: H - 20_000, to: H, priority: 2 }, T0, H, T0 + 60_000)), ["alchemy", H - 600]);
+  // The follow goes to rpc2 (whole, to the head), and to alchemy only when no public endpoint can take it.
+  assertEquals(label(pickEndpoint(states, { from: H - 1_199, to: H, priority: 0 }, T0, H, T0 + 60_000)), ["rpc2", H]);
+  for (let k = 0; k < 4; k++) rpc2.started(T0);  // rpc2's in-flight cap (4) full: the clamping public endpoints first
+  assertEquals(label(pickEndpoint(states, { from: H - 1_199, to: H, priority: 0 }, T0, H, T0 + 60_000)), ["rpc4", H - 600]);
+  for (const s of states.slice(2)) { s.started(T0); s.started(T0); }
+  assertEquals(label(pickEndpoint(states, { from: H - 1_199, to: H, priority: 0 }, T0, H, T0 + 60_000)), ["alchemy", H - 600]);
+  void alchemy;
+});
+
+Deno.test("alchemy: a span refusal from 5,000,000 halves to the key's cap in ~16 requests, remembered for a day", () => {
+  const s = new EndpointState({ ...ALCHEMY }, undefined, T0);
+  let refusals = 0;
+  while (s.currentSpan() > 100 && refusals < 30) { s.finished(T0, { kind: "span", tried: s.currentSpan() }); refusals++; }
+  assertEquals(s.currentSpan(), 100);
+  assert(refusals <= 16, `${refusals} refusals`);
+  assertEquals(new EndpointState({ ...ALCHEMY }, s.memory(T0), T0 + 1_000).currentSpan(), 100);
+  // Below 1,000 blocks it takes no backfill at all (minSpanFor), only the follow.
+  const states = [s, ...DEFAULT_ENDPOINTS.map((e) => new EndpointState({ ...e }, undefined, T0))];
+  const deep = pickEndpoint(states, { from: 0, to: 9_999, priority: 3 }, T0, H, T0 + 60_000);
+  assertEquals(deep && "state" in deep && deep.state.label, "rpc2");
+});
+
+Deno.test("keyed refusals: sidelined at once (401/403), off until the next UTC day (spent), no log reads for a day (plan)", () => {
+  const now = Date.parse("2026-10-09T17:30:00Z");
+  const midnight = Date.parse("2026-10-10T00:00:00Z");
+  const a = new EndpointState({ ...ALCHEMY }, undefined, now);
+  a.finished(now, { kind: "sideline" });
+  assertEquals([a.sidelined(now), a.sidelined(now + SIDELINE_MS - 1), a.sidelined(now + SIDELINE_MS)], [true, true, false]);
+  const back = new EndpointState({ ...ALCHEMY }, a.memory(now + 1_000), now + SIDELINE_MS);
+  back.finished(now + SIDELINE_MS, { kind: "refused" }); // back from the sideline: the next refusal sidelines it again
+  assertEquals(back.sidelined(now + SIDELINE_MS), true);
+
+  const spent = new EndpointState({ ...ALCHEMY }, undefined, now);
+  spent.finished(now, { kind: "spent" });
+  assertEquals([spent.sidelined(midnight - 1), spent.sidelined(midnight)], [true, false]);
+  const m = spent.memory(now + 1_000);
+  assertEquals(m.offUntil, midnight);
+  const next = new EndpointState({ ...ALCHEMY }, JSON.parse(JSON.stringify(m)), now + 30_000);
+  assertEquals([next.sidelined(now + 30_000), next.sidelined(midnight)], [true, false]); // a next run keeps it off
+  assertEquals(new EndpointState({ ...ALCHEMY }, { offUntil: now + 10 * 86_400_000 }, now).sidelined(now + 86_400_000), false); // ≤ a day
+
+  const free = new EndpointState({ ...ALCHEMY }, undefined, now);
+  free.finished(now, { kind: "noLogs" });
+  assertEquals([free.logsOff(now), free.sidelined(now), free.logsOff(now + 86_400_000)], [true, false, false]);
+  const kept = new EndpointState({ ...ALCHEMY }, free.memory(now + 1_000), now + 60_000);
+  assertEquals(kept.logsOff(now + 60_000), true);
+  const states = [kept, ...DEFAULT_ENDPOINTS.map((e) => new EndpointState({ ...e }, undefined, now))];
+  const deep = pickEndpoint(states, { from: 0, to: 9_999, priority: 3 }, now + 60_000, H, now + 120_000);
+  assertEquals(deep && "state" in deep && deep.state.label, "rpc2", "no log piece for an endpoint without log reads");
+  assertEquals(JSON.stringify(kept.memory(now + 60_000)).includes("alchemy.test"), false);
+});
+
+Deno.test("bytes in flight: an endpoint's own response cap (8 MiB) bounds its reservation, the 12 MiB total still holds", () => {
+  const b = new ByteBudget();
+  b.observe("deep@alchemy", 6_300_000);
+  assertEquals(b.reservation("deep@alchemy", false, 8 * 1_048_576), 8 * 1_048_576);
+  assertEquals(b.reservation("deep@alchemy", false), 3 * 1_048_576); // without its cap: the run's
+  assertEquals(b.tryReserve("deep@alchemy", false, 8 * 1_048_576), 8 * 1_048_576);
+  assertEquals(b.tryReserve("deep@alchemy", false, 8 * 1_048_576), null); // a second would pass 12 MiB
+  assert(b.tryReserve("window", false)! > 0);
 });

@@ -26,7 +26,9 @@
 --
 -- Access: every table has RLS on, no policies, and no privileges for anon, authenticated or service_role. The indexer
 -- (service role) uses only history_lease / history_state / history_commit / history_mark_hole / history_set_first_tx /
--- history_release. The app (anon or authenticated) uses only history_read(): one exact wallet, index-bound, paged
+-- history_release, and history_cron_digest, the SHA-256 of the Vault secret history_cron_secret it checks the cron
+-- tick's header against (migration 33 generates the secret inside Postgres; no function returns it). The app (anon or
+-- authenticated) uses only history_read(): one exact wallet, index-bound, paged
 -- under ~1.5 MB. The owner (postgres, SQL editor) has history_health / history_reset / history_redefine_scan /
 -- history_housekeeping, and two switches on history_indexer_state: `paused` (the indexer stops at its next call) and
 -- `serving` (history_read answers serving:false and the app discards it). Enrolment is by trigger on profiles
@@ -51,7 +53,8 @@
 --               public.history_apply_cap(text, text), public.history_require_lease(uuid, text), public.history_ranges(int8multirange),
 --               public.history_redefine_scan(text, bytea[], bytea[], bigint, bigint), public.history_reset(text, boolean),
 --               public.history_health(bigint), public.history_housekeeping(),
---               public.history_enrol_profile(), public.history_forget_profile(), public.history_octets(bytea[], integer);
+--               public.history_enrol_profile(), public.history_forget_profile(), public.history_octets(bytea[], integer),
+--               public.history_cron_digest();
 --          drop table public.history_logs, public.history_wallet_scans, public.history_wallets, public.history_scans,
 --               public.history_subject_caps, public.history_indexer_state, public.history_indexer_runs;
 --          (unschedule the cron jobs of 33 first; the app falls back to reading the chain itself)
@@ -60,6 +63,9 @@
 --          has_function_privilege('anon', 'public.history_commit(uuid,text,integer,bigint,bigint,bigint,bigint,text[],jsonb)', 'execute'), -- false
 --          has_function_privilege('service_role', 'public.history_commit(uuid,text,integer,bigint,bigint,bigint,bigint,text[],jsonb)', 'execute'), -- true
 --          has_function_privilege('service_role', 'public.history_reset(text,boolean)', 'execute'),                            -- false
+--          has_function_privilege('anon', 'public.history_cron_digest()', 'execute'),                                        -- false
+--          has_function_privilege('authenticated', 'public.history_cron_digest()', 'execute'),                               -- false
+--          has_function_privilege('service_role', 'public.history_cron_digest()', 'execute'),                                -- true
 --          has_table_privilege('service_role', 'public.history_logs', 'select'),                                              -- false
 --          (select count(*) from public.history_wallets) = (select count(*) from public.profiles);                            -- true
 --   select proconfig from pg_proc where oid = 'public.history_enrol_profile()'::regprocedure;        -- {search_path="",lock_timeout=200ms}
@@ -1003,6 +1009,39 @@ begin
 end;
 $function$;
 
+-- ── The cron tick's credential ───────────────────────────────────────────────────────────────────────────────────────
+
+-- The SHA-256 of the Vault secret history_cron_secret, as 64 lowercase hex characters: what the history-indexer Edge
+-- Function compares each x-history-cron header's SHA-256 with (auth.ts), so no header ever reaches the database and no
+-- caller can make the function query it per request. Migration 33 generates the secret inside Postgres (32 random
+-- bytes as 64 hex characters) and pg_cron's job sends it: no person, file or Edge secret ever holds it.
+-- service_role only. Never returns, raises or logs the secret itself; its digest is useless as a header (the header
+-- must be the preimage, 256 random bits). Null when Vault cannot be read (no vault schema, no privilege), when the secret
+-- is missing, and when it is not 32–512 visible ASCII characters (the Edge Function's own rule for a header, so a
+-- secret it would refuse to send is never served: migration 33 refuses one).
+create or replace function public.history_cron_digest()
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $function$
+declare
+  v_secret text;
+begin
+  begin
+    select s.decrypted_secret into v_secret from vault.decrypted_secrets s where s.name = 'history_cron_secret' limit 1;
+  exception when undefined_table or invalid_schema_name or undefined_column or insufficient_privilege then
+    return null;
+  end;
+  -- [!-~] is 0x21–0x7e by code point (the regex engine's ranges are), as in auth.ts; {32,512} would exceed its 255 bound.
+  if v_secret is null or pg_catalog.length(v_secret) < 32 or pg_catalog.length(v_secret) > 512 or v_secret !~ '^[!-~]+$' then
+    return null;
+  end if;
+  return pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(v_secret, 'UTF8')), 'hex');
+end;
+$function$;
+
 -- ── The app's read ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 -- One wallet's cached history, in pages (supabase/README.md "Wallet history cache" for the contract). The first page
@@ -1254,13 +1293,15 @@ revoke all on function public.history_lease(uuid, integer, text), public.history
                        public.history_commit(uuid, text, integer, bigint, bigint, bigint, bigint, text[], jsonb),
                        public.history_mark_hole(uuid, text, integer, text, bigint, bigint),
                        public.history_set_first_tx(uuid, text, text, bigint, bigint, text),
+                       public.history_cron_digest(),
                        public.history_read(text, text, bigint, bigint, boolean)
   from public, anon, authenticated;
 grant execute on function public.history_lease(uuid, integer, text), public.history_release(uuid, bigint, bigint, jsonb, jsonb, text),
                           public.history_state(uuid, integer, timestamptz),
                           public.history_commit(uuid, text, integer, bigint, bigint, bigint, bigint, text[], jsonb),
                           public.history_mark_hole(uuid, text, integer, text, bigint, bigint),
-                          public.history_set_first_tx(uuid, text, text, bigint, bigint, text)
+                          public.history_set_first_tx(uuid, text, text, bigint, bigint, text),
+                          public.history_cron_digest()
   to service_role;
 grant execute on function public.history_read(text, text, bigint, bigint, boolean) to anon, authenticated, service_role;
 
@@ -1281,7 +1322,7 @@ declare
     'public.history_state(uuid, integer, timestamptz)',
     'public.history_commit(uuid, text, integer, bigint, bigint, bigint, bigint, text[], jsonb)',
     'public.history_mark_hole(uuid, text, integer, text, bigint, bigint)',
-    'public.history_set_first_tx(uuid, text, text, bigint, bigint, text)'];
+    'public.history_set_first_tx(uuid, text, text, bigint, bigint, text)', 'public.history_cron_digest()'];
 begin
   foreach t in array array['history_scans', 'history_wallets', 'history_wallet_scans', 'history_logs', 'history_subject_caps',
                            'history_indexer_state', 'history_indexer_runs'] loop

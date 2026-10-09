@@ -9,7 +9,8 @@
 //   deno test -A --no-config --node-modules-dir=none supabase/tests/history_indexer_run_test.ts   (10–15 minutes)
 import type { PGlite } from "npm:@electric-sql/pglite@0.5.8";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import type { Endpoint } from "../functions/history-indexer/endpoints.ts";
+import { alchemyEndpoint, type Endpoint } from "../functions/history-indexer/endpoints.ts";
+import { redactor } from "../functions/history-indexer/redact.ts";
 import { SIDELINE_AFTER, STRIKES_TO_REFUSAL } from "../functions/history-indexer/pacing.ts";
 import { type Deps, runIndexer } from "../functions/history-indexer/run.ts";
 import { merge, type Range, subtract } from "../functions/history-indexer/ranges.ts";
@@ -654,5 +655,159 @@ Deno.test({ name: "history-indexer: broken endpoints — resting at the start, r
       clock.stop();
       await db.close();
     }
+  });
+});
+
+// ── A keyed Alchemy endpoint (ALCHEMY_MONAD_RPC) ────────────────────────────────────────────────────────────────
+
+const ALCHEMY_KEY = "fAkEaLcHeMyKeY-must-never-be-logged-0123";   // a test value
+const ALCHEMY_URL = `https://monad-mainnet.g.alchemy.test/v2/${ALCHEMY_KEY}`;
+const ALCHEMY_PAYG: FakeBehaviour = {
+  url: ALCHEMY_URL, span: 10_000_000, spanMessage: "block range too large", straddle: "clamps", archive: true, arrays: "403",
+  maxLogs: 10, latency: latency(150),
+};
+const FREE_TIER = "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Based on your parameters, " +
+  "this block range should work: [0x0, 0x9]. Upgrade to PAYG for expanded block range.";
+
+Deno.test({ name: "history-indexer: a keyed Alchemy endpoint — wide backfill, the follow on rpc2, its refusals, and never its URL", sanitizeOps: false, sanitizeResources: false }, async (t) => {
+  violations.length = 0;
+  committed.length = 0;
+  const T0 = Date.parse("2026-10-09T12:00:00Z");
+  const alchemy = alchemyEndpoint(ALCHEMY_URL).endpoint!;
+  const endpoints = () => [alchemy, ...ENDPOINTS].map((e) => ({ ...e }));
+  const redact = redactor([{ url: ALCHEMY_URL, label: "alchemy" }]); // as index.ts builds it
+  const lines: string[] = [];
+  const outputs: string[] = [];   // every summary, log line, run row and endpoint memory written
+  const leaks = (text: string) => text.includes(ALCHEMY_KEY) || text.includes("alchemy.test") || text.includes("/v2/");
+  const run = async (db: PGlite, clock: VirtualClock, net: FakeNetwork, chain: FakeChain) => {
+    const summary: Any = await runIndexer(deps(db, clock, net, chain, { endpoints: endpoints(), redact, log: (l: string) => { lines.push(l); } }), {});
+    outputs.push(JSON.stringify(summary));
+    assertEquals(violations, [], "the invariant after every commit");
+    assert(["done", "deadline", "budget"].includes(String(summary.stop)), `${summary.stop} ${JSON.stringify(summary.errors)}`);
+    return summary;
+  };
+  const memory = async (db: PGlite) => (await one<Any>(db, "select endpoints from public.history_indexer_state")).endpoints;
+  const stored = async (db: PGlite) => {
+    outputs.push(JSON.stringify(await memory(db)));
+    for (const r of (await db.query<Any>("select stop, summary, version from public.history_indexer_runs")).rows) outputs.push(JSON.stringify(r));
+  };
+  const getLogs = (r: { methods: string[]; pieces: { nothing: boolean }[] }) => r.methods.includes("eth_getLogs") && r.pieces.some((p) => !p.nothing);
+
+  await t.step("Pay As You Go: backfill in wide ranges (split at Alchemy's suggested range), the follow and the head read on rpc2", async () => {
+    const world = smallWorld(true);
+    const { chain } = world;
+    const db = await setUp(world);
+    const clock = new VirtualClock(T0);
+    const net = new FakeNetwork(chain, clock, { ...BEHAVIOUR, alchemy: ALCHEMY_PAYG });
+    try {
+      const sums: Any[] = [];
+      for (let k = 0; k < 6; k++) {
+        const s = await run(db, clock, net, chain);
+        sums.push(s);
+        if (s.stop === "done") break;
+        clock.t += 30_000;
+      }
+      assertEquals(sums[sums.length - 1].stop, "done", "the backlog drains");
+      assertEquals(sums[0].align, 5_000_000, "the run planned pieces as wide as alchemy's span");
+      await assertServedMatchesChain(db, chain, world.enrolled);
+      const a = net.records.filter((r) => r.label === "alchemy");
+      const wide = a.filter(getLogs).filter((r) => r.pieces.some((p) => p.to - p.from + 1 > 10_000));
+      assert(wide.length > 0, "alchemy read ranges wider than rpc2's 10,000 blocks");
+      for (const r of a) for (const p of r.pieces) if (!p.nothing) assert(p.to <= H - LAG, `alchemy clamps: a piece ending at ${p.to}`);
+      assert(a.every((r) => !r.array), "bare objects only");
+      assert(!a.some((r) => r.methods.includes("eth_getBlockByNumber")), "the head is read on the public endpoints");
+      assert(sums.reduce((n, s) => n + s.counts.dense, 0) > 0, "Alchemy's 10K-log cap was met and split at its suggested range");
+      // Everything above head − lag (the follow's top) was read by the refusing endpoint only.
+      const top = net.records.filter((r) => r.pieces.some((p) => !p.nothing && p.to > H - LAG));
+      assertEquals([...new Set(top.map((r) => r.label))], ["wide"]);
+      // The backfill's blocks: most of them read by alchemy, in a few wide requests.
+      const blocks = (label: string) => net.records.filter((r) => r.label === label && getLogs(r))
+        .reduce((n, r) => n + r.pieces.reduce((m, p) => m + (p.nothing ? 0 : p.to - p.from + 1), 0), 0);
+      const all = ["alchemy", ...Object.keys(BEHAVIOUR)].reduce((n, l) => n + blocks(l), 0);
+      assert(blocks("alchemy") > all / 2, `alchemy read ${blocks("alchemy")} of ${all} blocks`);
+      console.log(`  alchemy: ${a.length} requests (${wide.length} wider than 10,000 blocks), ${blocks("alchemy")} of ${all} blocks; ` +
+                  `others: ${JSON.stringify(Object.fromEntries(Object.keys(BEHAVIOUR).map((l) => [l, net.records.filter((r) => r.label === l).length])))}`);
+      await stored(db);
+    } finally {
+      clock.stop();
+      await db.close();
+    }
+  });
+
+  await t.step("the Free tier: one refused request, then no log reads for a day; the others carry the backfill; no hole", async () => {
+    const world = smallWorld();
+    const { chain } = world;
+    const db = await setUp(world);
+    const clock = new VirtualClock(T0);
+    const net = new FakeNetwork(chain, clock, { ...BEHAVIOUR, alchemy: { ...ALCHEMY_PAYG, span: 10, spanMessage: FREE_TIER, spanStatus: 400 } });
+    try {
+      const first = await run(db, clock, net, chain);
+      assertEquals(net.records.filter((r) => r.label === "alchemy" && getLogs(r)).length, 1);
+      assert(first.errors.some((e: string) => e.startsWith("alchemy: its plan refuses eth_getLogs ranges (HTTP 400")), JSON.stringify(first.errors));
+      const m = await memory(db);
+      assert(m.alchemy.logsOffUntil >= T0 + 86_000_000, JSON.stringify(m.alchemy));
+      assertEquals(m.alchemy.span, undefined, "not mistaken for a 10-block span");
+      clock.t += 30_000;
+      const second = await run(db, clock, net, chain);
+      assertEquals(second.straddle.alchemy, "nologs");
+      assertEquals(net.records.filter((r) => r.label === "alchemy" && getLogs(r)).length, 1, "no further log request this day");
+      assertEquals(first.counts.holesMarked + second.counts.holesMarked, 0);
+      await stored(db);
+    } finally {
+      clock.stop();
+      await db.close();
+    }
+  });
+
+  await t.step("a bad key (401), a spent month (429), a failing fetch, errors quoting the URL: sidelined or off, never quoted", async () => {
+    const world = smallWorld();
+    const { chain } = world;
+    const db = await setUp(world);
+    const clock = new VirtualClock(T0);
+    const cases: { name: string; behaviour: Partial<FakeBehaviour>; expect: (m: Any, requests: number, s: Any) => void }[] = [
+      { name: "401", behaviour: { refuse: { status: 401, body: `{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Must be authenticated! ${ALCHEMY_URL}"}}` } },
+        expect: (m, n, s) => {
+          assertEquals(n, 1, "one request, then sidelined");
+          assert(m.alchemy.sidelinedUntil > clock.now(), JSON.stringify(m.alchemy));
+          assert(s.errors.includes("alchemy: HTTP 401: sidelined for 15 min (the key, or Monad not enabled for it?)"), JSON.stringify(s.errors));
+          assert(s.counts.sidelined.includes("alchemy"));
+        } },
+      { name: "403 text", behaviour: { refuse: { status: 403, body: `Monad is not enabled for this app. Visit https://dashboard.alchemy.test/apps/x?key=${ALCHEMY_KEY}` } },
+        expect: (m, n) => { assertEquals(n, 1); assert(m.alchemy.sidelinedUntil > clock.now()); } },
+      { name: "spent", behaviour: { refuse: { status: 429, body: "Monthly capacity limit exceeded." } },
+        expect: (m, n, s) => {
+          assertEquals(n, 1);
+          assertEquals(m.alchemy.offUntil, Date.parse("2026-10-10T00:00:00Z"));
+          assert(s.errors.some((e: string) => e.startsWith("alchemy: monthly capacity spent (HTTP 429)")), JSON.stringify(s.errors));
+        } },
+      { name: "fetch throws", behaviour: { throwFetch: `error sending request for url (${ALCHEMY_URL}): client error (Connect)` },
+        expect: (_m, n) => assert(n >= 1) },
+      { name: "call errors", behaviour: { callError: { code: -32000, message: `invalid api key ${ALCHEMY_KEY} for ${ALCHEMY_URL}` } },
+        expect: (m, n) => { assert(n >= 1); assert(m.alchemy.sidelinedUntil > clock.now() || (m.alchemy.strikes ?? 0) > 0, JSON.stringify(m.alchemy)); } },
+    ];
+    try {
+      for (const c of cases) {
+        // A fresh start for alchemy's memory each time; the chain moves on, so there is new work to hand it.
+        await db.query("update public.history_indexer_state set endpoints = endpoints - 'alchemy' where id");
+        await db.exec("delete from public.history_wallet_scans; delete from public.history_logs");
+        await db.query(`update public.history_scans set covered = '{}', holes = '{}', head_block = null where true`);
+        const net = new FakeNetwork(chain, clock, { ...BEHAVIOUR, alchemy: { ...ALCHEMY_PAYG, ...c.behaviour } });
+        await db.query("insert into public.history_wallet_scans (wallet, scan) select w.wallet, s.id from public.history_wallets w, public.history_scans s where s.kind = 'wallet' on conflict do nothing");
+        const s = await run(db, clock, net, chain);
+        const requests = net.records.filter((r) => r.label === "alchemy").length;
+        c.expect(await memory(db), requests, s);
+        assertEquals(s.counts.holesMarked, 0, `${c.name}: an endpoint's refusal never makes a hole`);
+        await stored(db);
+        clock.t += 30_000;
+      }
+    } finally {
+      clock.stop();
+      await db.close();
+    }
+  });
+
+  await t.step("nowhere: the key, the host or the path in a log line, an error, a summary, a run row or the endpoint memory", () => {
+    assert(lines.length > 0 && outputs.length > 0);
+    for (const text of [...lines, ...outputs]) assert(!leaks(text), `leaked: ${text.slice(0, 300)}`);
   });
 });

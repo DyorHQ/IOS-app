@@ -52,8 +52,11 @@ wait for an app build AND for every older build to be expired in App Store Conne
 which build; each refuses to run until armed): `30_activity_primary_key_wallet_id.sql` (the build that upserts
 activity with `on_conflict=wallet,id`) and `31_launch_media_strict_write_once.sql` (the build that uploads launch-media
 with `x-upsert: false`); and one that needs the platform (pg_cron, pg_net, Vault) and a deployed function:
-`33_history_indexer_schedule.sql` (it refuses until armed, and on any database without pg_cron and pg_net; once
-applied it moves into `migrations/`, where `tests/migrations_test.ts` lists it as platform-only). 01–07 and 11 were
+`33_history_indexer_schedule.sql` (it refuses until armed, on any database without pg_cron and pg_net, and without
+32's `history_cron_digest`; it creates the Vault secrets it needs when they are missing — the cron secret from
+random bytes generated inside Postgres — and refuses an existing cron secret that is not 32–512 visible ASCII
+characters; once applied it moves into `migrations/`, where `tests/migrations_test.ts`
+lists it as platform-only). 01–07 and 11 were
 restored on 2026-09-26 from the project's own migration history (`supabase_migrations.schema_migrations.statements`),
 byte-for-byte — each file's md5 equals the recorded statements' md5. Two out-of-band changes are NOT in any
 migration: the Strategies tables below were dropped directly (2026-09-18), and 18's revokes supersede 11's
@@ -77,13 +80,15 @@ root (the CLI bundles `functions/_shared/`). Never run `supabase config push` fr
 | `pin-media` | true | a wallet session, verified in code too | `edge_rate_gate` per wallet, network and overall; 20 s budget |
 | `aurora-proxy` | true | a wallet session, verified in code too; quotes only to and from that wallet | `edge_rate_gate` per wallet and network |
 | `waitlist` (not deployed) | false | nothing (CORS: dyorhq.fun, www.dyorhq.fun; honeypot) | `edge_rate_gate` per network (IPv6 /48) and overall |
-| `history-indexer` (not deployed) | false | the `x-history-cron` header equal to `HISTORY_CRON_SECRET` (constant-time); called only by pg_cron → pg_net | one run at a time (a database lease); ≤ 240 s per run; ≤ 4 requests/s per RPC endpoint |
+| `history-indexer` (not deployed) | false | the `x-history-cron` header equal to the Vault secret `history_cron_secret` (its SHA-256 compared in constant time with `history_cron_digest()`, fetched at most once a minute per isolate; or the optional `HISTORY_CRON_SECRET`); called only by pg_cron → pg_net | one run at a time (a database lease); ≤ 240 s per run; per RPC endpoint ≤ 4 requests/s (`rpc2` 2 at launch); a header never reaches the database, so callers without it cost no query |
 
 Secrets (names only): `APP_JWT_SECRET` or `APP_JWT_SIGNING_JWK` (wallet-auth; pin-media and aurora-proxy read
 `APP_JWT_SECRET` to verify HS256 sessions — secrets are project-wide), `PRIVY_APP_SECRET` (+ optional `PRIVY_APP_ID`),
 `PINATA_JWT` (+ optional `PINATA_GATEWAY`), `AURORA_API_KEY` (+ optional `AURORA_FEE_RECIPIENT`, `AURORA_FEE_BPS`),
-`HISTORY_CRON_SECRET` (+ optional `MONAD_LOGS_ENDPOINTS`). Vault (read by migration 33's cron job): `history_cron_secret`
-(the same value as `HISTORY_CRON_SECRET`), `history_indexer_url`, optional `history_indexer_region`.
+history-indexer's, all optional: `ALCHEMY_MONAD_RPC` (a keyed Alchemy Monad URL: adds the endpoint `alchemy`),
+`MONAD_LOGS_ENDPOINTS` (JSON tuning the endpoints), `HISTORY_CRON_SECRET` (a second accepted header value). Vault (read
+by migration 33's cron job, created by 33 when missing): `history_cron_secret` (generated inside Postgres; nobody holds
+it), `history_indexer_url`, and optional `history_indexer_region` (created by hand).
 `SUPABASE_URL`, the service-role key and the publishable key are injected by the platform.
 
 Switches (unset = the behaviour the builds in use need; each header says when to flip it):
@@ -142,6 +147,7 @@ Every table has RLS on, no policies, and no privileges for anon, authenticated o
 | `history_lease` | service_role (the indexer) | takes or renews the lease; answers `{"ok": false, "paused": …}` (HTTP 200, not an error) while the indexer is paused or another run holds a live lease |
 | `history_release` | service_role (the indexer) | ends a run (its stop and summary); idempotent, and releases the lease (head, endpoint memory) only for its holder |
 | `history_state`, `history_commit`, `history_mark_hole`, `history_set_first_tx` | service_role (the indexer) | refuse with `PT409` (HTTP 409) unless the caller holds the lease and the indexer is not paused; `history_commit` and `history_mark_hole` also refuse a stale definition with `PT412`; bad arguments or answers `22023` |
+| `history_cron_digest()` | service_role (the indexer) | the SHA-256 (64 hex characters) of the Vault secret `history_cron_secret`, which the indexer compares each cron header's SHA-256 with; never the secret; null when the secret is missing, not 32–512 visible ASCII characters, or Vault is unreadable |
 | `history_health()`, `history_reset(scan, first_tx)`, `history_redefine_scan(…)`, `history_housekeeping()` | postgres only (SQL editor, migrations) | the dashboard, the repair after bad data, a scan change, the daily prune |
 
 **Reading** (`POST /rest/v1/rpc/history_read` with `{"p_wallet": "0x…"}`, the publishable key or the wallet session):
@@ -164,23 +170,39 @@ removes the wallet's per-wallet cache. Global-scan rows naming a deleted wallet 
 address and are kept on purpose; run summaries hold counts only.
 
 **The indexer** (`functions/history-indexer/`): pg_cron → pg_net calls it every 30 s (migration 33) with the
-`x-history-cron` header; it answers 202 at once and works ≤ 240 s in `EdgeRuntime.waitUntil` under the lease: reads the
+`x-history-cron` header. The header's value exists only in Vault: migration 33 generates it (32 random bytes, 64 hex
+characters) and the job reads it at each tick; the function refuses an absent or implausible header itself (403: not
+32–512 visible ASCII characters), then compares the header's SHA-256 in constant time with the secret's
+(`history_cron_digest()`, fetched at most once a minute per isolate, one fetch at a time; a header never reaches the
+database, so a flood of wrong headers costs no query and cannot lock the tick out), and answers 503 while it cannot
+fetch the digest (retried every 5 s). A rotated secret (migration 33's header) takes effect within a minute. It answers 202 at once and works ≤ 240 s in `EdgeRuntime.waitUntil` under the lease: reads the
 finalized head, self-tests that each `refuses` endpoint refuses a range past its head, follows the head (overlap 1,200
 blocks), then backfills newest first — global gaps, wallets' 30-day windows (new wallets first), then deep history —
 in aligned 10,000-block pieces shared by up to 100 wallets per filter, and finds each wallet's first transaction by
 nonce bisection confirmed on a second archive endpoint. Endpoints: the public `rpc2` (10,000 blocks × 6 per request,
-refuses straddling ranges), `rpc4`, `rpc3` (1,000 × 1) and `rpc1` (100, bare objects: it refuses any JSON-RPC array),
-≤ 4 requests/s each with AIMD pacing, Retry-After and back-off; a clamping endpoint only reads pieces ending at least
-600 blocks below the head. Work waiting for a busy or resting endpoint is parked while the others go on (the follow
+refuses straddling ranges; 2 requests/s and 4 in flight at launch), `rpc4`, `rpc3` (1,000 × 1) and `rpc1` (100, bare
+objects: it refuses any JSON-RPC array), ≤ 4 requests/s each with AIMD pacing, Retry-After and back-off; a clamping
+endpoint only reads pieces ending at least 600 blocks below the head. With `ALCHEMY_MONAD_RPC` set (an `https` URL;
+otherwise one log line and the public endpoints only), `alchemy` joins them: first for backfill (global gaps, windows,
+deep history), last for the follow and the head read (which keep preferring `rpc2`), clamping (the lag rule), archive
+(nonce reads), bare objects at 4 requests/s and 2 in flight, at most 12,000 requests a UTC day, answers up to 8 MiB, and
+an initial span of 5,000,000 blocks — so each run plans its backfill in pieces as wide as the widest span on hand (up
+to 5,000,000 blocks; `rpc2` still cuts them to 10,000), Alchemy's 10,000-log cap answers with a range that fits and
+the piece is split there, and a key capped at fewer blocks halves its span to the cap (remembered for a day). Its Free
+tier's 10-block refusal turns its log reads off for a day, a spent month turns it off until 00:00 UTC, and an HTTP
+401/403 sidelines it at once; its own error texts are never stored. No keyed URL is ever logged, stored or put in an
+error: log lines, error lines and run summaries pass through `redact.ts`, and no Error object reaches `console.*`. Work waiting for a busy or resting endpoint is parked while the others go on (the follow
 continues on the clamping endpoints while `rpc2` rests), and an endpoint that refuses every request (a revoked key, a
 spent quota, a firewall) is sidelined for 15 minutes without turning its pieces into holes. `MONAD_LOGS_ENDPOINTS`
 (optional JSON) replaces them (an array) or adds to them (`{"mode": "append", "endpoints": [...], "overrides":
-{"rpc2": {"rps": 2}}}`), e.g. a keyed provider later; an invalid value falls back to the defaults with a log line
-naming the field, never the URL. Too dense is split (range, then
+{"rpc2": {"rps": 4, "inFlight": 8}, "alchemy": {"span": 10000}}}`; an override of `alchemy` without
+`ALCHEMY_MONAD_RPC` is ignored); an invalid value falls back to the defaults (with `alchemy`) and a log line naming the
+field, never the URL. Too dense is split (range, then
 wallets, then single blocks) and finally a hole — never a cap. Each run writes one summary line (counts only) and a
 `history_indexer_runs` row. `index.ts` is the only file touching the runtime; `run.ts` is the loop; every other module
 is pure, with a `*_test.ts` beside it. `print_scans.ts` prints the bundled definitions in the format of migration 32's
-"Verify after apply" query.
+"Verify after apply" query. `version.ts` holds a placeholder that the deployed copy replaces with the commit's short SHA
+(every run row records it).
 
 Owner procedures (applying 32 and 33, the secrets, the deploy, the 24-hour watch, the repair runbook and the switches)
 are in DyorHQ/internal: `ios-app/supabase/owner-procedures.md`.
@@ -193,8 +215,9 @@ are in DyorHQ/internal: `ios-app/supabase/owner-procedures.md`.
 `--no-config` keeps the repository's Node `package.json`/`tsconfig.json` out of Deno's way. `tests/supabase_stub.sql`
 stands in for the platform (roles, auth/storage/vault stubs, default privileges); nothing touches the live project.
 `tests/history_cache_test.ts` covers migration 32 role by role (about 3 minutes); `tests/history_indexer_run_test.ts`
-runs the whole indexer loop on a virtual clock against fake endpoints (broken ones included) and a PGlite database
-(10–15 minutes). Two
+runs the whole indexer loop on a virtual clock against fake endpoints (broken ones and a fake keyed Alchemy included)
+and a PGlite database (10–15 minutes); `tests/migrations_test.ts` also applies migration 33 to a stand-in for pg_cron
+and pg_net (the guards, the generated cron secret, the header the job sends). Two
 opt-in suites are skipped unless asked for:
 
     HISTORY_LIVE=1 deno test -A --no-config --node-modules-dir=none supabase/tests/history_live_test.ts

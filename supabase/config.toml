@@ -33,6 +33,7 @@ verify_jwt = true
 verify_jwt = true
 
 # Called only by pg_cron → pg_net every 30 s (migrations-deferred/33_history_indexer_schedule.sql), with no Supabase
-# session: the function checks the x-history-cron header against HISTORY_CRON_SECRET itself, in constant time.
+# session: the function checks the x-history-cron header itself, in constant time, against the Vault secret
+# history_cron_secret's SHA-256 (history_cron_digest(), migration 32) or the optional Edge secret HISTORY_CRON_SECRET.
 [functions.history-indexer]
 verify_jwt = false

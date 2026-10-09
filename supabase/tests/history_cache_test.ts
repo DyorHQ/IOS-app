@@ -145,6 +145,54 @@ Deno.test("migration 32: the wallet-history cache", async (t) => {
     assertEquals((await one<Any>(db, "select count(*)::int n from pg_policies where tablename like 'history%'")).n, 0);
   });
 
+  await t.step("3b. history_cron_digest: service_role only; the Vault secret's SHA-256, never the secret; null when it is missing, malformed or unreadable", async () => {
+    const digestOf = (role: "service_role" | "anon" | "authenticated" = "service_role") =>
+      as<Any>(db, role, null, "select public.history_cron_digest() r").then((r) => r[0].r as string | null);
+    const sha = async (v: string) =>
+      Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v))), (b) => b.toString(16).padStart(2, "0")).join("");
+    const setSecret = (v: string) => db.query("update vault.secrets set secret = $1 where name = 'history_cron_secret'", [v]);
+    const secret = "0123456789abcdef".repeat(4); // 64 hex characters, the shape migration 33 generates (a test value)
+    // No secret yet: null.
+    assertEquals(await digestOf(), null);
+    await db.query("select vault.create_secret($1, 'history_cron_secret', 'test')", [secret]);
+    try {
+      // The same digest the Edge Function computes for the header (auth.ts: SHA-256 of the UTF-8 bytes), never the secret.
+      assertEquals(await digestOf(), await sha(secret));
+      assert(!(await digestOf())!.includes(secret));
+      // anon and authenticated cannot even call it (42501), and nothing about the secret is in the error.
+      for (const role of ["anon", "authenticated"] as const) {
+        const err = await code(digestOf(role));
+        assert(err.startsWith("42501"), `${role}: ${err}`);
+        assert(!err.includes(secret) && !err.includes(await sha(secret)), "the error never quotes the secret or its digest");
+      }
+      for (const [role, want] of [["anon", false], ["authenticated", false], ["service_role", true]] as const) {
+        assertEquals((await one<Any>(db, "select has_function_privilege($1, 'public.history_cron_digest()', 'execute') r", [role])).r, want, role);
+      }
+      assertEquals((await one<Any>(db, "select has_function_privilege('public', 'public.history_cron_digest()', 'execute') r")).r, false);
+      const fn = await one<Any>(db, `select prosecdef d, proconfig c, provolatile v from pg_proc where oid = 'public.history_cron_digest()'::regprocedure`);
+      assertEquals([fn.d, fn.c, fn.v], [true, ['search_path=""'], "s"]);
+      // Vault unreadable (no vault schema): null, never an error.
+      await db.exec("alter schema vault rename to vault_away");
+      try { assertEquals(await digestOf(), null); } finally { await db.exec("alter schema vault_away rename to vault"); }
+      assertEquals(await digestOf(), await sha(secret));
+      // A secret the Edge Function would never accept as a header serves nothing: shorter than 32 or longer than 512
+      // characters, or anything outside visible ASCII (a space, a tab, a newline, é).
+      for (const bad of ["short-secret", "z".repeat(31), "x".repeat(513), "correct horse battery staple and more words",
+                         "a".repeat(40) + "\t", "a".repeat(40) + "\n", "é".repeat(40), "a".repeat(39) + "é"]) {
+        await setSecret(bad);
+        assertEquals(await digestOf(), null, JSON.stringify(bad.slice(-12)));
+      }
+      // The edges of the rule: 32 and 512 characters, any visible ASCII.
+      for (const ok of ["a".repeat(32), "x".repeat(512), "!~" + "A+/=".repeat(10)]) {
+        await setSecret(ok);
+        assertEquals(await digestOf(), await sha(ok), ok.slice(0, 12));
+      }
+    } finally {
+      await db.exec("delete from vault.secrets where name = 'history_cron_secret'");
+    }
+    assertEquals(await digestOf(), null);
+  });
+
   await t.step("4. the lease, the switches, run rows and the endpoint memory", async () => {
     const r = (await svc("select public.history_lease($1, 300, 'abc1234') r", [owner]))[0].r;
     assertEquals([r.ok, r.started, r.paused], [true, true, false]);

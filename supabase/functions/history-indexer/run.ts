@@ -7,11 +7,12 @@
 // not answered — throttled, timed out, too dense, refused past the head — is re-queued, split, recorded as a hole, or
 // left as a gap for the next run; it is never claimed.
 import { type CommitArgs, CommitSlow, DbDown, DefsChanged, type HistoryDb, LeaseLost, Refused, Retryable, type RunSummary } from "./db.ts";
-import { classifyCallError, classifyHttp, type Endpoint } from "./endpoints.ts";
+import { classifyCallError, classifyHttp, type Endpoint, endpointRefusal, isKeyed } from "./endpoints.ts";
 import { locateFirstTx, type NonceSource, reverifyFirstTx } from "./firsttx.ts";
 import { checkAnswer, type CompactLog, compactBytes, fillTimestamps, splitForCommit } from "./logs.ts";
-import { ByteBudget, EndpointState, minSpanFor, type Outcome, pickEndpoint, type Priority } from "./pacing.ts";
+import { ByteBudget, EndpointState, followRank, minSpanFor, type Outcome, pickEndpoint, type Priority } from "./pacing.ts";
 import { DEFAULT_PLAN, type IndexerState, type PlanOptions, Planner, type WalletState, type WorkItem } from "./planner.ts";
+import { type Redact, scrubUrls } from "./redact.ts";
 import { type Call, type CallResult, exchange, type Exchange } from "./rpc.ts";
 import { bundledDefs, defsDrift, defsFromState, filterFor, GLOBAL_SCANS, type ScanDef, type ScanId } from "./scans.ts";
 
@@ -45,6 +46,9 @@ export type Deps = {
   isolateStartedAt: number; version: string;
   onLease?: (owner: string) => void; onRelease?: (stop: string) => void;
   setTimer?: (ms: number, fn: () => void) => () => void;    // a cancellable timer (default: from `sleep`)
+  // Applied to every error line, log line and the run summary (redact.ts: the keyed endpoints' URLs → their labels);
+  // default: only the paths and queries cut off any URL.
+  redact?: Redact;
   options?: Partial<Omit<RunOptions, "plan">> & { plan?: Partial<PlanOptions> };
 };
 
@@ -52,6 +56,7 @@ type ItemCounts = { follow: number; global: number; window: number; deep: number
 
 // The run's counters, turned into the summary at release (§10): counts only, no wallet address, no URL.
 class Counters {
+  constructor(private readonly redact: Redact) {}
   requests: Record<string, number> = {};
   throttled: Record<string, number> = {};
   refused: Record<string, number> = {};
@@ -63,7 +68,7 @@ class Counters {
   straddle: Record<string, string> = {};
   globalHoles: { scan: string; from: number; to: number }[] = [];
   errors: string[] = [];
-  error(line: string) { if (this.errors.length < 5) this.errors.push(line.replace(/0x[0-9a-fA-F]{40,}/g, "0x…").slice(0, 120)); }
+  error(line: string) { if (this.errors.length < 5) this.errors.push(this.redact(line).replace(/0x[0-9a-fA-F]{40,}/g, "0x…").slice(0, 120)); }
 }
 
 type Pending = { scan: ScanId; defVersion: number; wallets: string[] | null; from: number; to: number; logs: CompactLog[];
@@ -88,7 +93,13 @@ class Run {
   private readonly o: RunOptions;
   private readonly owner = crypto.randomUUID();
   private readonly started: number;
-  private readonly c = new Counters();
+  private readonly redact: Redact;
+  private readonly c: Counters;
+  // Labels of the endpoints whose URL may hold a key (endpoints.ts isKeyed): their error texts are never stored, an
+  // HTTP 401/403 sidelines them at once, and their texts are read for a spent quota or a plan refusal.
+  private readonly keyed: Set<string>;
+  private readonly offNoted = new Set<string>();
+  private align = 0;
   private stop: string | null = null;
   private states: EndpointState[] = [];
   private planner: Planner | null = null;
@@ -128,6 +139,9 @@ class Run {
     const { plan, ...rest } = deps.options ?? {};
     this.o = { ...DEFAULT_RUN_OPTIONS, ...rest, plan: { ...DEFAULT_PLAN, ...(plan ?? {}) } };
     this.started = deps.now();
+    this.redact = deps.redact ?? scrubUrls;
+    this.c = new Counters(this.redact);
+    this.keyed = new Set(deps.endpoints.filter(isKeyed).map((e) => e.label));
     this.bytes = new ByteBudget(this.o.inFlightReserve, this.o.responseCap, this.o.singleBlockCap);
     this.commitLogs = this.o.commitLogs;
   }
@@ -175,8 +189,8 @@ class Run {
       lease = await deps.db.lease(this.owner, o.leaseSeconds, deps.version);
     } catch (err) {
       this.setStop("db");
-      this.c.error(`lease: ${(err as Error).message}`);
-      const summary = this.summary();
+      this.c.error(`lease: ${(err as Error)?.message ?? err}`);
+      const summary = this.redacted(this.summary());
       deps.log(`history-indexer: ${JSON.stringify(summary)}`);
       return summary;
     }
@@ -192,7 +206,19 @@ class Run {
     } finally {
       await this.finish();
     }
-    return this.summary();
+    return this.final ?? this.redacted(this.summary());
+  }
+
+  private final: RunSummary | null = null;
+
+  // The summary as it is stored and logged: through the redactor (a summary is counts and labels, so this is a second
+  // line of defence). Should a replacement ever break the JSON, only the stop is kept.
+  private redacted(summary: RunSummary): RunSummary {
+    try {
+      return JSON.parse(this.redact(JSON.stringify(summary))) as RunSummary;
+    } catch {
+      return { v: 2, version: this.deps.version, stop: summary.stop, redacted: true };
+    }
   }
 
   private fail(err: unknown) {
@@ -200,7 +226,7 @@ class Run {
     else if (err instanceof LeaseLost) this.setStop(err.paused ? "paused" : "lease");
     else if (err instanceof DefsChanged) this.setStop("defs");
     else if (err instanceof DbDown) { this.setStop("db"); this.c.error(`db: ${err.message}`); }
-    else { this.setStop("error"); this.c.error(`error: ${String((err as Error)?.message ?? err)}`); }
+    else { this.setStop("error"); this.c.error(`error: ${String((err as Error)?.message ?? err)}`); } // redacted by c.error
   }
 
   private async execute() {
@@ -225,25 +251,43 @@ class Run {
     [this.head, this.headTimestamp] = head;
     await this.selfTest();
 
-    this.planner = this.sync(() => new Planner(state, this.head!, defs, o.plan, state.now));
+    this.align = this.planAlign();
+    this.planner = this.sync(() => new Planner(state, this.head!, defs, { ...o.plan, align: this.align }, state.now));
     this.firstTxWorker = this.firstTransactions(state.wallets);
     await this.loop();
   }
 
+  // The backfill's piece size this run (PlanOptions.align): the widest span of an endpoint able to take backfill now
+  // (not sidelined, log reads on, its daily budget below 100 %), up to maxAlign, in whole multiples of the base align;
+  // the base align when none is wider. Endpoints with a narrower span cut each piece to their own (dispatch).
+  private planAlign(): number {
+    const { align, maxAlign } = this.o.plan;
+    const now = this.now();
+    let widest = 0;
+    for (const s of this.states) {
+      if (s.sidelined(now) || s.logsOff(now) || !s.budgetAllows(now, 2)) continue;
+      widest = Math.max(widest, s.currentSpan());
+    }
+    const wide = Math.min(maxAlign, widest);
+    return wide > align ? Math.floor(wide / align) * align : align;
+  }
+
   // ── Head (finalized), with a second opinion when it jumped implausibly far ──────────────────────────────────────
 
-  // Endpoints in priority order, ≤ 2 tries each; one resting (a Retry-After the last run remembered) is passed over
-  // for the next one ready within `headReadyMs`, and waited for only when none is (a lower finalized head from a
-  // clamping endpoint is safe: the follow simply starts lower).
+  // Endpoints in the follow's order (followRank: rpc2 first, a metered provider last), ≤ 2 tries each; one resting (a
+  // Retry-After the last run remembered) is passed over for the next one ready within `headReadyMs`, and waited for only
+  // when none is (a lower finalized head from a clamping endpoint is safe: the follow simply starts lower).
   private async readHead(stored: number | null): Promise<[number, number] | null> {
     const tries = new Map<EndpointState, number>();
     let first: [number, number] | null = null;
     for (;;) {
       const now = this.now();
-      const left = this.states.filter((s) => !s.sidelined(now) && (tries.get(s) ?? 0) < 2);
+      // An endpoint whose daily budget is spent (a metered provider's maxPerDay) is not asked either.
+      const left = this.states.filter((s) => !s.sidelined(now) && s.budgetAllows(now, 0) && (tries.get(s) ?? 0) < 2);
       if (left.length === 0) return first;
-      const soon = left.filter((s) => s.nextStartAt(now) <= now + this.o.headReadyMs).sort((a, b) => a.endpoint.priority - b.endpoint.priority);
-      const s = soon[0] ?? [...left].sort((a, b) => a.nextStartAt(now) - b.nextStartAt(now) || a.endpoint.priority - b.endpoint.priority)[0];
+      const rank = (x: EndpointState) => followRank(x.endpoint);
+      const soon = left.filter((s) => s.nextStartAt(now) <= now + this.o.headReadyMs).sort((a, b) => rank(a) - rank(b));
+      const s = soon[0] ?? [...left].sort((a, b) => a.nextStartAt(now) - b.nextStartAt(now) || rank(a) - rank(b))[0];
       tries.set(s, (tries.get(s) ?? 0) + 1);
       const got = await this.headFrom(s);
       if (!got) continue;
@@ -322,14 +366,35 @@ class Run {
     }
   }
 
-  // Reports an endpoint the moment it is sidelined (once per run): it refused SIDELINE_AFTER requests in a row.
+  // Reports an endpoint the moment it is sidelined (once per run): it refused SIDELINE_AFTER requests in a row (or, as
+  // noteOff already said, a keyed one answered 401/403, or its monthly capacity is spent).
   private noteSidelined(s: EndpointState) {
     if (!s.sidelined(this.now()) || this.c.sidelined.includes(s.label)) return;
     this.c.sidelined.push(s.label);
-    this.c.error(`sidelined ${s.label}: it refused every request (a key, a quota or a firewall?)`);
+    if (!this.offNoted.has(s.label)) this.c.error(`sidelined ${s.label}: it refused every request (a key, a quota or a firewall?)`);
+  }
+
+  // One error line per endpoint and run for what turned it off, by label and HTTP status only: a provider's own text
+  // (which can carry a dashboard link or the URL) is never kept.
+  private noteOff(s: EndpointState, line: string) {
+    if (this.offNoted.has(s.label)) return;
+    this.offNoted.add(s.label);
+    this.c.error(line);
+  }
+
+  // A keyed endpoint's spent quota, or a plan refusing eth_getLogs ranges.
+  private offOutcome(s: EndpointState, kind: "spent" | "plan", status: number): Outcome {
+    this.c.refused[s.label] = (this.c.refused[s.label] ?? 0) + 1;
+    if (kind === "spent") {
+      this.noteOff(s, `${s.label}: monthly capacity spent (HTTP ${status}): off until 00:00 UTC`);
+      return { kind: "spent" };
+    }
+    this.noteOff(s, `${s.label}: its plan refuses eth_getLogs ranges (HTTP ${status}; the Free tier?): no log reads for 24 h`);
+    return { kind: "noLogs" };
   }
 
   private async send(s: EndpointState, calls: Call[], maxBytes: number): Promise<Exchange> {
+    // exchange() never throws for the network and never puts the URL in what it returns.
     const ex = await exchange(this.deps.fetch, s.endpoint.url, calls, {
       timeoutMs: this.o.requestTimeoutMs, maxBytes, bare: s.bare() && calls.length === 1, cpuNow: this.deps.cpuNow,
       setTimer: (ms, fn) => this.timer(ms, fn),
@@ -340,18 +405,30 @@ class Run {
 
   // What a request's answer says about the endpoint. An HTTP 4xx (not 429, not the batch refusal) without a JSON-RPC
   // body, or a non-2xx JSON-RPC body refusing every call, is a refusal of the endpoint (a revoked key, a spent quota, a
-  // firewall): it rests 2 → 8 → 30 s and the fourth in a row sidelines it (pacing.ts).
+  // firewall): it rests 2 → 8 → 30 s and the fourth in a row sidelines it (pacing.ts). A keyed endpoint is sidelined by
+  // its first HTTP 401/403, off until the next UTC day once its monthly capacity is spent, and without log reads for a
+  // day when its plan refuses eth_getLogs ranges (Alchemy's Free tier).
   private outcomeOf(s: EndpointState, ex: Exchange): Outcome {
+    const keyed = this.keyed.has(s.label);
     if (ex.kind === "unanswered") return ex.reason === "timeout" ? { kind: "timeout" } : ex.reason === "tooLarge" ? { kind: "answered" } : { kind: "unanswered" };
     if (ex.kind === "http") {
-      const v = classifyHttp(ex.status, ex.headers, ex.body, Date.now());
+      const v = classifyHttp(ex.status, ex.headers, ex.body, Date.now(), keyed);
       if (v.kind === "throttled") { this.c.throttled[s.label] = (this.c.throttled[s.label] ?? 0) + 1; return v; }
       if (v.kind === "batchRefused") return s.bare() ? { kind: "unanswered" } : { kind: "batchRefused" };
       if (v.kind === "unanswered") return { kind: "unanswered" };
+      if (v.kind === "spent" || v.kind === "plan") return this.offOutcome(s, v.kind, ex.status);
       this.c.refused[s.label] = (this.c.refused[s.label] ?? 0) + 1;
+      if (v.kind === "auth" && keyed) {
+        this.noteOff(s, `${s.label}: HTTP ${ex.status}: sidelined for 15 min (the key, or Monad not enabled for it?)`);
+        return { kind: "sideline" };
+      }
       return { kind: "refused" };
     }
     const errors = ex.results.filter((r) => !r.ok) as Extract<CallResult, { ok: false }>[];
+    if (keyed) {
+      const refusal = errors.map((e) => endpointRefusal(e.message)).find((r) => r !== null);
+      if (refusal) return this.offOutcome(s, refusal, ex.status);
+    }
     if (errors.some(throttleError)) {
       this.c.throttled[s.label] = (this.c.throttled[s.label] ?? 0) + 1;
       return { kind: "throttled" };
@@ -361,6 +438,10 @@ class Run {
     }
     if (errors.length === ex.results.length && ex.status >= 400) {
       this.c.refused[s.label] = (this.c.refused[s.label] ?? 0) + 1;
+      if (keyed && (ex.status === 401 || ex.status === 403)) {
+        this.noteOff(s, `${s.label}: HTTP ${ex.status}: sidelined for 15 min (the key, or Monad not enabled for it?)`);
+        return { kind: "sideline" };
+      }
       return { kind: "refused" };
     }
     return { kind: "answered", anyOk: errors.length < ex.results.length };
@@ -381,6 +462,7 @@ class Run {
     for (const s of this.states) {
       const now = this.now();
       if (s.sidelined(now)) { this.c.straddle[s.label] = "sidelined"; continue; }
+      if (s.logsOff(now)) { this.c.straddle[s.label] = "nologs"; continue; }
       if (s.straddle(now) !== "refuses") { this.c.straddle[s.label] = "clamps"; continue; }
       if (s.nextStartAt(now) > now + this.o.headReadyMs) {
         s.deferProbe();
@@ -399,7 +481,7 @@ class Run {
       const ex = await this.call(s, [{ method: "eth_getLogs", params: [{ fromBlock: hex(from), toBlock: hex(H + 200), topics: [NOTHING_TOPIC] }] }], 65_536);
       const r = ex.kind === "answered" ? ex.results[0] : null;
       if (r?.ok && Array.isArray(r.result)) return "clamps";
-      if (r && !r.ok && classifyCallError(r, { from, to: H + 200 }, H).kind === "pastHead") return "refuses";
+      if (r && !r.ok && classifyCallError(r, { from, to: H + 200 }, H, this.keyed.has(s.label)).kind === "pastHead") return "refuses";
     } catch (err) {
       if (!(err instanceof Stop)) throw err;
     }
@@ -413,6 +495,10 @@ class Run {
       s.markVerified();
       s.markClamps(this.now());
       this.c.error(`straddle: ${s.label} answered past its head; treated as clamping for 24 h`);
+    } else if (s.logsOff(this.now())) {           // its plan refused the probe's range: no log reads, nothing to test
+      s.markUnverified();
+      this.c.straddle[s.label] = "nologs";
+      return;
     } else if ((this.probes.get(s) ?? 0) < this.o.probeAttempts && !s.sidelined(this.now()) && !this.stop) {
       s.deferProbe();
       this.c.straddle[s.label] = "deferred";
@@ -427,7 +513,7 @@ class Run {
   private startProbes() {
     const now = this.now();
     for (const s of this.states) {
-      if (!s.verifying || this.probing.has(s) || s.sidelined(now) || s.nextStartAt(now) > now) continue;
+      if (!s.verifying || this.probing.has(s) || s.sidelined(now) || s.logsOff(now) || s.nextStartAt(now) > now) continue;
       if (this.requestsInFlight >= this.o.maxInFlightTotal) return;
       this.probing.add(s);
       this.probe(s)
@@ -547,12 +633,21 @@ class Run {
   private maxLag() { return Math.max(0, ...this.states.map((s) => s.endpoint.lag)); }
 
   private kindOf(item: WorkItem): string { return item.single ? "single" : item.kind; }
+  // The byte budget's running averages: per endpoint for one with its own response cap (a wide provider's answers are
+  // not the size of rpc2's 10,000-block ones).
+  private byteKind(item: WorkItem, s: EndpointState): string {
+    return s.endpoint.responseCap && !item.single ? `${this.kindOf(item)}@${s.label}` : this.kindOf(item);
+  }
+  private responseCap(item: WorkItem, s: EndpointState): number {
+    return item.single ? this.o.singleBlockCap : Math.min(s.endpoint.responseCap ?? this.o.responseCap, this.o.inFlightReserve);
+  }
 
   // Cuts `item` to what `s` may read, fills a batch from the look-ahead, reserves bytes, and sends it (asynchronously).
   // False (and nothing changed) when the bytes cannot be reserved now.
   private dispatch(first: WorkItem, s: EndpointState, upTo: number): boolean {
     const planner = this.planner!;
-    const reserved = this.bytes.tryReserve(this.kindOf(first), !!first.single);
+    const maxBytes = this.responseCap(first, s);
+    const reserved = this.bytes.tryReserve(this.byteKind(first, s), !!first.single, maxBytes);
     if (reserved === null) return false;
     const pieces: WorkItem[] = [];
     const take = (item: WorkItem, top: number) => {
@@ -589,7 +684,6 @@ class Run {
         take(next, Math.min(next.to, top));
       }
     }
-    const maxBytes = first.single ? this.o.singleBlockCap : this.o.responseCap;
     const calls = this.sync(() => pieces.map((p) => ({ method: "eth_getLogs", params: [filterFor(this.defs.get(p.scan)!, p.from, p.to, p.wallets)] })));
     s.started(this.now());
     this.c.requests[s.label] = (this.c.requests[s.label] ?? 0) + 1;
@@ -617,8 +711,13 @@ class Run {
     const again = (p: WorkItem, front = true) => planner.requeue(p, front);
     const batch = pieces.length > 1;
     // The endpoint refused the whole request: its pieces go back unchanged and uncounted (a refusing endpoint never
-    // turns a piece into a hole); the endpoint rests, and is sidelined after four refusals in a row.
-    if (outcome.kind === "refused") { for (const p of pieces) again(p); return; }
+    // turns a piece into a hole); the endpoint rests, and is sidelined after four refusals in a row (a keyed one at
+    // once on HTTP 401/403), is off for the day (spent), or takes no more log pieces (its plan).
+    if (outcome.kind === "refused" || outcome.kind === "sideline" || outcome.kind === "spent" || outcome.kind === "noLogs") {
+      for (const p of pieces) again(p);
+      return;
+    }
+    const keyed = this.keyed.has(s.label);
     if (ex.kind === "http") {
       // Throttled or a refused batch: re-queued as they are. A 5xx without JSON-RPC: a batch's pieces each alone; a
       // piece already alone counts an attempt (3, then dropped, or a hole at its minimum size).
@@ -645,7 +744,7 @@ class Run {
     }
     // Every call failed with an error that says nothing about the piece: a strike against the endpoint (pacing.ts). Only
     // the first strike in a row counts an attempt for its pieces.
-    const verdicts = pieces.map((p, k) => { const r = ex.results[k]; return r.ok ? null : classifyCallError(r, p, H); });
+    const verdicts = pieces.map((p, k) => { const r = ex.results[k]; return r.ok ? null : classifyCallError(r, p, H, keyed); });
     const endpointAtFault = verdicts.every((v) => v?.kind === "failed") && s.strike(now);
     this.noteSidelined(s);
     for (let k = 0; k < pieces.length; k++) {
@@ -654,7 +753,7 @@ class Run {
       if (!r.ok) {
         const v = verdicts[k]!;
         switch (v.kind) {
-          case "throttled": again(p); break;
+          case "throttled": case "plan": case "spent": again(p); break;
           case "span":
             s.note(now, { kind: "span", span: v.span, tried: p.to - p.from + 1 });
             again(p);
@@ -673,7 +772,8 @@ class Run {
           }
           case "failed":
             if (endpointAtFault) again(p);
-            else this.failedPiece(p, `${s.label}: ${r.message.slice(0, 60)}`);
+            // A keyed provider's text is never kept (it can quote the URL or a dashboard link): its code only.
+            else this.failedPiece(p, keyed ? `${s.label}: error ${r.code ?? "without a code"}` : `${s.label}: ${r.message.slice(0, 60)}`);
             break;
         }
         continue;
@@ -702,7 +802,7 @@ class Run {
       }
       this.logsSeen += checked.logs.length;
       this.c.logs += checked.logs.length;
-      this.bytes.observe(this.kindOf(p), ex.bytes / pieces.length);
+      this.bytes.observe(this.byteKind(p, s), ex.bytes / pieces.length);
       this.coalesce(p, checked.logs);
     }
   }
@@ -987,9 +1087,10 @@ class Run {
     }
   }
 
-  // The archive endpoints in the order nonce reads try them: the wide logs endpoints (span ≥ 10,000) last.
+  // The archive endpoints in the order nonce reads try them: the wide logs endpoints (span ≥ 10,000) last; one whose
+  // log reads are off (its plan) still answers nonces, one whose daily budget is spent does not.
   private nonceSources(wallet: string): NonceSource[] {
-    const archive = this.states.filter((s) => s.endpoint.archive && !s.sidelined(this.now()))
+    const archive = this.states.filter((s) => s.endpoint.archive && !s.sidelined(this.now()) && s.budgetAllows(this.now(), 0))
       .sort((a, b) => (a.endpoint.span >= 10_000 ? 1 : 0) - (b.endpoint.span >= 10_000 ? 1 : 0) || a.endpoint.priority - b.endpoint.priority);
     return archive.map((s) => ({
       label: s.label,
@@ -1060,7 +1161,8 @@ class Run {
     if (this.stop === "deadline" && this.planner && this.parked.length === 0 && this.planner.next(true) === null) this.stop = "done";
     const stop = this.stop ?? "done";
     deps.onRelease?.(stop);
-    const summary = this.summary();
+    const summary = this.redacted(this.summary());
+    this.final = summary;
     try {
       await deps.db.release(this.owner, this.head, this.headTimestamp, summary,
                             Object.fromEntries(this.states.map((s) => [s.label, s.memory(this.now())])), stop);
@@ -1080,7 +1182,7 @@ class Run {
     for (const s of this.states) { r429[s.label] = Math.round(s.ratio429() * 10_000) / 10_000; usedToday[s.label] = s.usedToday(now); }
     return {
       v: 2, version: this.deps.version, head: this.head, ms: now - this.started, syncMs: Math.round(this.syncMs),
-      stop: this.stop ?? "done",
+      stop: this.stop ?? "done", align: this.align || this.o.plan.align,
       counts: {
         requests: c.requests, throttled: c.throttled, refused: c.refused, sidelined: c.sidelined, r429, usedToday,
         failed: c.failed, invalid: c.invalid, dense: c.dense,

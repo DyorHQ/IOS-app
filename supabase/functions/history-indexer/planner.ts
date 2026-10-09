@@ -34,14 +34,17 @@ export type WorkItem = {
   pastHead?: number;      // past-head refusals of this piece this run (≤ 3, then it waits for the next run)
 };
 
+// `align`: the backfill's piece size (10,000 blocks: rpc2's span). run.ts raises it for a run, up to `maxAlign`, to the
+// widest span an endpoint able to take backfill has (a keyed provider answering millions of blocks per request); an
+// endpoint with a narrower span cuts each piece to its own span (run.ts dispatch), so the requests to rpc2 stay the same.
 export type PlanOptions = {
-  overlap: number; lag: number; followMax: number; window: number; align: number; maxWallets: number; holeRetryMs: number;
+  overlap: number; lag: number; followMax: number; window: number; align: number; maxAlign: number; maxWallets: number; holeRetryMs: number;
   tiers: { hotMs: number; warmMs: number; warmLag: number; coldLag: number };
   floorOverride?: Partial<Record<ScanId, number>>;
 };
 
 export const DEFAULT_PLAN: PlanOptions = {
-  overlap: 1_200, lag: 600, followMax: 60_000, window: 8_574_264, align: 10_000, maxWallets: 100, holeRetryMs: 6 * 3_600_000,
+  overlap: 1_200, lag: 600, followMax: 60_000, window: 8_574_264, align: 10_000, maxAlign: 5_000_000, maxWallets: 100, holeRetryMs: 6 * 3_600_000,
   tiers: { hotMs: 3_600_000, warmMs: 86_400_000, warmLag: 1_000, coldLag: 6_000 },
 };
 

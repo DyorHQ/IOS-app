@@ -24,6 +24,19 @@ const hex64 = (n: number) => n.toString(16).padStart(64, "0");
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
 const wallet = (n: number) => "0x" + n.toString(16).padStart(40, "0");
 
+// Migration 33 armed as the deployer arms it: v_armed true and, optionally, the function URL.
+const URL33 = "https://abcdefghijklmnopqrst.supabase.co/functions/v1/history-indexer";
+function arm33(template: string, url: string | null): string {
+  let armed = template.replace("v_armed constant boolean := false;", "v_armed constant boolean := true;");
+  assert(armed !== template, "the arming placeholder moved");
+  if (url !== null) {
+    const withUrl = armed.replace("v_indexer_url constant text := null;", `v_indexer_url constant text := '${url}';`);
+    assert(withUrl !== armed, "the URL placeholder moved");
+    armed = withUrl;
+  }
+  return armed;
+}
+
 async function migrationFiles(): Promise<string[]> {
   const names: string[] = [];
   for await (const entry of Deno.readDir(MIGRATIONS)) if (entry.isFile && entry.name.endsWith(".sql")) names.push(entry.name);
@@ -151,9 +164,9 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
   await t.step("deferred 33 (the history-indexer schedule): refuses until armed, then without pg_cron and pg_net", async () => {
     const template = await Deno.readTextFile(new URL("33_history_indexer_schedule.sql", DEFERRED));
     await assertRejects(() => db.exec(template), Error, "not armed");
-    const armed = template.replace("v_armed constant boolean := false;", "v_armed constant boolean := true;");
-    assert(armed !== template, "the arming placeholder moved");
+    const armed = arm33(template, URL33);
     await assertRejects(() => db.exec(armed), Error, "requires pg_cron and pg_net");
+    assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from vault.secrets where name like 'history%'")).n, 0, "a refused apply leaves no secret");
   });
 
   await db.exec(`insert into public.profiles (wallet) values ('${A}'), ('${B}')`);
@@ -475,6 +488,128 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
     await as(db, "service_role", null, "insert into public.waitlist (email, source) values ('Person@Example.com', 'site') on conflict (email) do nothing");
     await as(db, "service_role", null, "insert into public.waitlist (email, source) values ('person@example.COM', 'hero') on conflict (email) do nothing");
     assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.waitlist")).n, 1);
+  });
+
+  await db.close();
+});
+
+// Migration 33 on a stand-in for the platform: pg_cron and pg_net listed as extensions, with a cron.job table and
+// cron.schedule / cron.unschedule / net.http_post that only record what they are given. What it proves: the guards,
+// that a refused apply leaves nothing behind, that the cron secret is generated inside Postgres (64 hex characters,
+// kept on re-apply, never in a job's text), that the URL comes from the arming constant, and that the header the job
+// sends is the one whose SHA-256 history_cron_digest (migration 32) serves to service_role.
+const PLATFORM_STAND_IN = `
+  insert into pg_catalog.pg_extension (oid, extname, extowner, extnamespace, extrelocatable, extversion)
+    values (900001, 'pg_cron', 10, 'pg_catalog'::regnamespace, false, 'stand-in'),
+           (900002, 'pg_net', 10, 'pg_catalog'::regnamespace, false, 'stand-in');
+  create schema cron;
+  create table cron.job (jobid bigserial primary key, jobname text unique, schedule text not null, command text not null,
+                         username text not null default current_user, active boolean not null default true);
+  create function cron.schedule(job_name text, schedule text, command text) returns bigint language sql as
+    $$ insert into cron.job (jobname, schedule, command) values (job_name, schedule, command)
+       on conflict (jobname) do update set schedule = excluded.schedule, command = excluded.command returning jobid $$;
+  create function cron.unschedule(job_id bigint) returns boolean language sql as
+    $$ with d as (delete from cron.job where jobid = job_id returning 1) select exists (select 1 from d) $$;
+  create table cron.job_run_details (start_time timestamptz);
+  create schema net;
+  create table net.sent (id bigserial primary key, url text, headers jsonb, body jsonb, timeout_milliseconds integer);
+  create function net.http_post(url text, body jsonb default '{}', params jsonb default '{}',
+                                headers jsonb default '{"Content-Type": "application/json"}', timeout_milliseconds integer default 5000)
+    returns bigint language sql as
+    $$ insert into net.sent (url, headers, body, timeout_milliseconds) values (url, headers, body, timeout_milliseconds) returning id $$;`;
+
+Deno.test("deferred 33 on a stand-in platform: guards, the cron secret generated inside Postgres, the job's header accepted", async (t) => {
+  const db = await PGlite.create({ extensions: { pgcrypto, citext } });
+  await db.exec(await Deno.readTextFile(STUB));
+  for (const name of await migrationFiles()) {
+    if (PLATFORM_ONLY.some((p) => name.startsWith(p))) continue;
+    await db.exec(await Deno.readTextFile(new URL(name, MIGRATIONS)));
+  }
+  await db.exec(PLATFORM_STAND_IN);
+  const template = await Deno.readTextFile(new URL("33_history_indexer_schedule.sql", DEFERRED));
+  const secrets = async () => (await db.query<{ name: string }>("select name from vault.secrets where name like 'history%' order by name")).rows.map((r) => r.name);
+  const jobs = async () => (await db.query<{ jobname: string; schedule: string; command: string }>(
+    "select jobname, schedule, command from cron.job order by jobname")).rows;
+  const cronSecret = async () => (await one<{ v: string }>(db, "select decrypted_secret as v from vault.decrypted_secrets where name = 'history_cron_secret'")).v;
+  const sha = async (v: string) =>
+    Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v))), (b) => b.toString(16).padStart(2, "0")).join("");
+  // What the Edge Function does with a header (auth.ts): its SHA-256 compared with history_cron_digest(), as service_role.
+  const authorized = async (token: string) =>
+    (await as<{ r: string | null }>(db, "service_role", null, "select public.history_cron_digest() as r"))[0].r === await sha(token);
+
+  await t.step("still refused until armed; armed without a URL (and no URL secret): refused, and nothing is left behind", async () => {
+    await assertRejects(() => db.exec(template), Error, "not armed");
+    await assertRejects(() => db.exec(arm33(template, null)), Error, "set v_indexer_url");
+    assertEquals(await secrets(), [], "the cron secret generated before the refusal was rolled back with it");
+    assertEquals(await jobs(), []);
+    await assertRejects(() => db.exec(arm33(template, "http://insecure.example/functions/v1/history-indexer")), Error, "set v_indexer_url");
+    assertEquals(await secrets(), []);
+  });
+
+  await t.step("refused without migration 32's history_cron_digest", async () => {
+    await db.exec("alter function public.history_cron_digest() rename to history_cron_digest_away");
+    try {
+      await assertRejects(() => db.exec(arm33(template, URL33)), Error, "apply migration 32");
+      assertEquals(await secrets(), []);
+    } finally {
+      await db.exec("alter function public.history_cron_digest_away() rename to history_cron_digest");
+    }
+  });
+
+  let generated = "";
+  await t.step("armed: generates the cron secret (64 hex) and the URL secret, schedules both jobs", async () => {
+    await db.exec(arm33(template, URL33));
+    assertEquals(await secrets(), ["history_cron_secret", "history_indexer_url"]);
+    generated = await cronSecret();
+    assert(/^[0-9a-f]{64}$/.test(generated), "32 random bytes as hex");
+    assertEquals((await one<{ v: string }>(db, "select decrypted_secret as v from vault.decrypted_secrets where name = 'history_indexer_url'")).v, URL33);
+    const js = await jobs();
+    assertEquals(js.map((j) => [j.jobname, j.schedule]), [["history-indexer", "30 seconds"], ["history-indexer-housekeeping", "17 3 * * *"]]);
+    for (const j of js) assert(!j.command.includes(generated), "a job's text never holds the secret");
+    assertEquals(await authorized(generated), true);
+    assertEquals(await authorized(generated.slice(0, 63) + (generated[63] === "0" ? "1" : "0")), false);
+  });
+
+  await t.step("the tick: the header the job sends is the one the Edge Function accepts; no x-region without its secret", async () => {
+    const tick = (await jobs()).find((j) => j.jobname === "history-indexer")!;
+    await db.exec(tick.command);
+    const sent = await one<{ url: string; headers: Record<string, string>; body: unknown; timeout_milliseconds: number }>(db,
+      "select url, headers, body, timeout_milliseconds from net.sent order by id desc limit 1");
+    assertEquals([sent.url, sent.body, sent.timeout_milliseconds], [URL33, {}, 10_000]);
+    assertEquals(Object.keys(sent.headers).sort(), ["Content-Type", "x-history-cron"]);
+    assertEquals(await authorized(sent.headers["x-history-cron"]), true);
+    await db.exec((await jobs()).find((j) => j.jobname === "history-indexer-housekeeping")!.command);
+  });
+
+  await t.step("re-applied: the same secret, the same two jobs", async () => {
+    await db.exec(arm33(template, URL33));
+    await db.exec(arm33(template, null)); // the URL secret exists: the constant is not needed
+    assertEquals(await cronSecret(), generated);
+    assertEquals((await jobs()).length, 2);
+  });
+
+  await t.step("an owner-made secret is kept only in the Edge Function's header shape; a malformed URL secret is refused", async () => {
+    const own = "o".repeat(40) + "-owner-made-test-value";
+    await db.exec("delete from vault.secrets where name = 'history_cron_secret'");
+    await db.query("select vault.create_secret($1, 'history_cron_secret')", [own]);
+    await db.exec(arm33(template, null));
+    assertEquals(await cronSecret(), own);
+    assertEquals(await authorized(own), true);
+    // Too short, too long, or anything the Edge Function refuses as a header before any comparison (a space — a
+    // password-manager word phrase —, a tab, non-ASCII): refused, kept as it was, no job replaced with a dead one.
+    const jobsBefore = await jobs();
+    for (const bad of ["s".repeat(31), "x".repeat(513), "correct horse battery staple plus four more words",
+                       "o".repeat(40) + "\t", "é".repeat(40)]) {
+      await db.exec("delete from vault.secrets where name = 'history_cron_secret'");
+      await db.query("select vault.create_secret($1, 'history_cron_secret')", [bad]);
+      await assertRejects(() => db.exec(arm33(template, null)), Error, "32–512 visible ASCII characters", JSON.stringify(bad.slice(-12)));
+      assertEquals(await cronSecret(), bad, "a refused apply changes nothing");
+      assertEquals(await jobs(), jobsBefore);
+    }
+    await db.exec("delete from vault.secrets where name = 'history_cron_secret'");
+    await db.exec("update vault.secrets set secret = 'https://elsewhere.example/functions/v1/other' where name = 'history_indexer_url'");
+    await assertRejects(() => db.exec(arm33(template, URL33)), Error, "history_indexer_url must be");
+    assertEquals(await secrets(), ["history_indexer_url"], "the refused apply generated nothing");
   });
 
   await db.close();

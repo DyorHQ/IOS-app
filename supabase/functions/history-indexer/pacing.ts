@@ -1,8 +1,9 @@
 // Per-endpoint pacing and the state that outlives a run (§10.3): each endpoint's AIMD request rate, its rests after
 // throttling, failures or refusals, the span and batch it taught us, its 429 ratio, its requests this UTC day, whether
-// its straddle self-test failed, and whether it is sidelined (it refused everything: a revoked key, a spent quota, a
-// firewall). history_release stores it (`history_indexer_state.endpoints`, by label — never a URL) and history_lease
-// hands it to the next run.
+// its straddle self-test failed, whether it is sidelined (it refused everything: a revoked key, a firewall), off until
+// the next UTC day (its monthly capacity is spent), or without log reads for a day (its plan refuses eth_getLogs
+// ranges: Alchemy's Free tier). history_release stores it (`history_indexer_state.endpoints`, by label — never a URL)
+// and history_lease hands it to the next run.
 import type { Endpoint, Straddle } from "./endpoints.ts";
 
 export type Priority = 0 | 1 | 2 | 3; // follow, global gaps, wallet window, wallet deep
@@ -10,6 +11,7 @@ export type Priority = 0 | 1 | 2 | 3; // follow, global gaps, wallet window, wal
 export type EndpointMemory = {
   restUntil?: number; span?: number; spanUntil?: number; batch?: number; batchUntil?: number; rps?: number; r429?: number;
   day?: string; used?: number; clampsUntil?: number; sidelinedUntil?: number; refusals?: number; strikes?: number;
+  offUntil?: number; logsOffUntil?: number;
 };
 
 export type Outcome =
@@ -21,7 +23,10 @@ export type Outcome =
   | { kind: "timeout" }
   | { kind: "pastHead" }
   | { kind: "invalid" }      // an answer checkAnswer rejected
-  | { kind: "refused" };     // the endpoint refused the whole request: an HTTP 4xx, or a run of failed calls (strike)
+  | { kind: "refused" }      // the endpoint refused the whole request: an HTTP 4xx, or a run of failed calls (strike)
+  | { kind: "sideline" }     // a keyed endpoint answered HTTP 401/403 (a bad key, the network not enabled): sidelined now
+  | { kind: "spent" }        // its monthly capacity is spent: off (no request of any kind) until the next UTC day
+  | { kind: "noLogs" };      // its plan refuses eth_getLogs ranges: no log reads for a day (head and nonce reads go on)
 
 const DAY_MS = 86_400_000;
 const MINUTE = 60_000;
@@ -35,6 +40,7 @@ export const SIDELINE_MS = 15 * MINUTE;
 export const STRIKES_TO_REFUSAL = 3;            // exchanges in a row whose every call failed
 const VERIFY_RECHECK_MS = 1_000;
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
+const nextUtcMidnight = (now: number) => Math.floor(now / DAY_MS) * DAY_MS + DAY_MS;
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 export class EndpointState {
@@ -54,6 +60,8 @@ export class EndpointState {
   private used: number;
   private clampsUntil = 0;
   private sidelinedUntil = 0;
+  private offUntil = 0;               // spent: nothing at all until then (the next UTC midnight)
+  private logsOffUntil = 0;           // its plan refuses eth_getLogs ranges: no log pieces until then (a day)
   private throttles = 0;
   private failures = 0;
   private refusals = 0;               // endpoint-wide refusals in a row (no call answered in between)
@@ -81,6 +89,8 @@ export class EndpointState {
     this.used = finite(m.used) && m.used >= 0 ? Math.floor(m.used) : 0;
     if (finite(m.clampsUntil) && m.clampsUntil > now) this.clampsUntil = m.clampsUntil;
     if (finite(m.sidelinedUntil) && m.sidelinedUntil > now) this.sidelinedUntil = Math.min(m.sidelinedUntil, now + SIDELINE_MS);
+    if (finite(m.offUntil) && m.offUntil > now) this.offUntil = Math.min(m.offUntil, now + DAY_MS);
+    if (finite(m.logsOffUntil) && m.logsOffUntil > now) this.logsOffUntil = Math.min(m.logsOffUntil, now + DAY_MS);
     // The refusal and strike streaks go on across runs (a run may end before an endpoint refuses four times in a row);
     // an endpoint back from a sideline is sidelined again by its next refusal.
     if (finite(m.refusals) && m.refusals >= 0) this.refusals = Math.min(SIDELINE_AFTER - 1, Math.floor(m.refusals));
@@ -92,8 +102,11 @@ export class EndpointState {
   straddle(now: number): Straddle {
     return this.endpoint.straddle === "clamps" || this.clampsUntil > now || this.unverified || this.verifying ? "clamps" : "refuses";
   }
-  // Sidelined: it refused SIDELINE_AFTER requests in a row; no work, head or nonce read goes to it until then.
-  sidelined(now: number): boolean { return this.sidelinedUntil > now; }
+  // Sidelined: it refused SIDELINE_AFTER requests in a row (a keyed one: one HTTP 401/403), or its monthly capacity is
+  // spent; no work, head or nonce read goes to it until then.
+  sidelined(now: number): boolean { return this.sidelinedUntil > now || this.offUntil > now; }
+  // No log pieces (its plan refuses eth_getLogs ranges); head and nonce reads still go to it.
+  logsOff(now: number): boolean { return this.logsOffUntil > now; }
   currentSpan(): number { return this.span; }
   currentBatch(): number { return Math.max(1, Math.min(this.liveBatch, this.batch)); }
   bare(): boolean { return this.batch === 1; }
@@ -222,6 +235,16 @@ export class EndpointState {
         if (this.refusals >= SIDELINE_AFTER) this.sidelinedUntil = Math.max(this.sidelinedUntil, now + SIDELINE_MS);
         else this.rest(now, REFUSAL_RESTS[this.refusals - 1]);
         break;
+      case "sideline":
+        this.refusals = Math.max(this.refusals + 1, SIDELINE_AFTER - 1);
+        this.sidelinedUntil = Math.max(this.sidelinedUntil, now + SIDELINE_MS);
+        break;
+      case "spent":
+        this.offUntil = Math.max(this.offUntil, nextUtcMidnight(now));
+        break;
+      case "noLogs":
+        this.logsOffUntil = Math.max(this.logsOffUntil, now + DAY_MS);
+        break;
     }
   }
 
@@ -247,6 +270,8 @@ export class EndpointState {
     if (this.batch < this.endpoint.batch && this.batchUntil > now) { m.batch = this.batch; m.batchUntil = this.batchUntil; }
     if (this.clampsUntil > now) m.clampsUntil = this.clampsUntil;
     if (this.sidelinedUntil > now) m.sidelinedUntil = this.sidelinedUntil;
+    if (this.offUntil > now) m.offUntil = this.offUntil;
+    if (this.logsOffUntil > now) m.logsOffUntil = this.logsOffUntil;
     if (this.refusals > 0) m.refusals = Math.min(this.refusals, SIDELINE_AFTER - 1); // after a sideline: one more refusal
     if (this.strikes > 0) m.strikes = Math.min(this.strikes, STRIKES_TO_REFUSAL - 1);
     return m;
@@ -259,18 +284,25 @@ export function minSpanFor(priority: Priority): number {
   return priority === 3 ? 10_000 : priority === 0 ? 0 : 1_000;
 }
 
-// The endpoint to send `item` to now (in priority order), with the highest block it may read; or the time to wait
-// for (before `deadline`); or null when no endpoint can ever take it this run (the straddle rule with no refusing
-// endpoint, spans, daily budgets, sidelined endpoints). An endpoint whose straddle self-test is still to come counts
-// as a refusing one to wait for.
+// An endpoint's place in the order of the follow (P0) and the head read: its followPriority, else its priority (a
+// metered provider placed first for backfill can come last here, behind the refusing public endpoint).
+export function followRank(e: Pick<Endpoint, "priority" | "followPriority">): number {
+  return e.followPriority ?? e.priority;
+}
+
+// The endpoint to send `item` to now (in priority order — the follow's order for P0), with the highest block it may
+// read; or the time to wait for (before `deadline`); or null when no endpoint can ever take it this run (the straddle
+// rule with no refusing endpoint, spans, daily budgets, sidelined endpoints, endpoints without log reads). An endpoint
+// whose straddle self-test is still to come counts as a refusing one to wait for.
 export function pickEndpoint(states: readonly EndpointState[],
                              item: { from: number; to: number; priority: Priority; refusingOnly?: boolean },
                              now: number, head: number, deadline: number)
   : { state: EndpointState; upTo: number } | { waitUntil: number } | null {
   let wait = Number.POSITIVE_INFINITY;
   let eligible = false;
-  for (const s of [...states].sort((a, b) => a.endpoint.priority - b.endpoint.priority)) {
-    if (s.sidelined(now)) continue;
+  const rank = (s: EndpointState) => (item.priority === 0 ? followRank(s.endpoint) : s.endpoint.priority);
+  for (const s of [...states].sort((a, b) => rank(a) - rank(b))) {
+    if (s.sidelined(now) || s.logsOff(now)) continue;
     if (s.currentSpan() < minSpanFor(item.priority)) continue;
     if (!s.budgetAllows(now, item.priority)) continue;
     const top = item.refusingOnly && s.straddle(now) !== "refuses" ? null : s.highestAllowed(now, item.from, head);
@@ -291,22 +323,23 @@ export function pickEndpoint(states: readonly EndpointState[],
   return wait < deadline ? { waitUntil: wait } : null;
 }
 
-// In-flight response bytes (§10.3): each request reserves min(3 MiB, max(256 KiB, 2 × the running average answer of
-// its kind)); everything in flight ≤ 12 MiB; a single-block piece reserves 8 MiB and runs with no other single block.
+// In-flight response bytes (§10.3): each request reserves min(3 MiB — or the endpoint's own responseCap —, max(256 KiB,
+// 2 × the running average answer of its kind)); everything in flight ≤ 12 MiB; a single-block piece reserves 8 MiB and
+// runs with no other single block.
 export class ByteBudget {
   private reserved = 0;
   private singles = 0;
   private averages = new Map<string, number>();
   constructor(readonly total = 12 * 1_048_576, readonly cap = 3 * 1_048_576, readonly single = 8 * 1_048_576) {}
 
-  reservation(kind: string, single: boolean): number {
+  reservation(kind: string, single: boolean, cap: number = this.cap): number {
     if (single) return this.single;
     const avg = this.averages.get(kind) ?? 0;
-    return Math.min(this.cap, Math.max(262_144, 2 * avg));
+    return Math.min(cap, Math.max(262_144, 2 * avg));
   }
 
-  tryReserve(kind: string, single: boolean): number | null {
-    const amount = this.reservation(kind, single);
+  tryReserve(kind: string, single: boolean, cap: number = this.cap): number | null {
+    const amount = this.reservation(kind, single, cap);
     if (single && this.singles > 0) return null;
     if (this.reserved + amount > this.total) return null;
     this.reserved += amount;

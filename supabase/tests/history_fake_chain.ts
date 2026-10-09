@@ -3,7 +3,9 @@
 // 2026-10-08 — span limits, 429 with Retry-After, nodes behind the head that refuse (-32014) or silently clamp a range
 // crossing their head, HTTP 403 to any JSON-RPC array, an answer that lies once, latency growing with the answer — and
 // the failures of a broken endpoint: an HTTP refusal of everything, an error for every call, logs without
-// blockTimestamp, a gateway error (HTML) for one range.
+// blockTimestamp, a gateway error (HTML) for one range; and Alchemy's documented answers: a 10,000-log cap answered with
+// "Log response size exceeded … this block range should work: [a, b]", the Free tier's refusal (HTTP 400), a fetch that
+// fails quoting the whole URL.
 // Every request is recorded (start time, range, concurrency) for the test's assertions. Not a test file itself.
 import type { VirtualClock } from "./history_pglite_db.ts";
 
@@ -83,6 +85,9 @@ export type FakeBehaviour = {
   callError?: { code: number; message: string };                  // every call: this JSON-RPC error (HTTP 200)
   noTimestamps?: boolean;                                         // logs without blockTimestamp
   gatewayError?: { from: number; to: number; status: number };    // an eth_getLogs request touching [from, to]: HTML
+  maxLogs?: number;                     // more logs than this: Alchemy's "Log response size exceeded" with a range that fits
+  spanStatus?: number;                  // the HTTP status of its span refusal (Alchemy's Free tier: 400)
+  throwFetch?: string;                  // every request: fetch throws a TypeError with this message
 };
 
 export type Recorded = { label: string; at: number; end?: number; status: number; pieces: { from: number; to: number; nothing: boolean }[];
@@ -118,6 +123,7 @@ export class FakeNetwork {
     this.inFlight[label] = (this.inFlight[label] ?? 0) + 1;
     this.maxInFlight[label] = Math.max(this.maxInFlight[label] ?? 0, this.inFlight[label]);
     try {
+      if (b.throwFetch) throw new TypeError(b.throwFetch);
       if (b.refuse) return this.reply(rec, b.refuse.status, b.refuse.body);
       const g = b.gatewayError;
       if (g && rec.pieces.some((p) => p.from <= g.to && p.to >= g.from)) return this.reply(rec, g.status, "<html><body>502 Bad Gateway</body></html>");
@@ -130,13 +136,15 @@ export class FakeNetwork {
       const nodeHead = this.chain.head - (behind?.lag ?? b.headLag ?? 0);
       const straddle = behind?.kind ?? b.straddle;
       let logCount = 0;
+      let status = 200;
       const answers = calls.map((c) => {
-        const r = this.answer(label, b, c, nodeHead, straddle, array);
+        const { status: s, ...r } = this.answer(label, b, c, nodeHead, straddle, array);
+        if (s) status = Math.max(status, s);
         if (Array.isArray(r.result)) logCount += r.result.length;
         return { jsonrpc: "2.0", id: c.id, ...r };
       });
       await this.wait(b.latency(logCount), init?.signal ?? undefined);
-      return this.reply(rec, 200, JSON.stringify(array ? answers : answers[0]));
+      return this.reply(rec, status, JSON.stringify(array ? answers : answers[0]));
     } finally {
       this.inFlight[label]--;
       rec.end = this.clock.now();
@@ -144,7 +152,7 @@ export class FakeNetwork {
   }) as typeof fetch;
 
   private answer(label: string, b: FakeBehaviour, c: { method: string; params: unknown[] }, nodeHead: number,
-                 straddle: "refuses" | "clamps", array: boolean): { result?: unknown; error?: { code: number; message: string } } {
+                 straddle: "refuses" | "clamps", array: boolean): { result?: unknown; error?: { code: number; message: string }; status?: number } {
     if (array && b.arrays === "internal") return { error: { code: -32603, message: "Internal error" } };
     if (b.callError) return { error: b.callError };
     switch (c.method) {
@@ -164,7 +172,7 @@ export class FakeNetwork {
       case "eth_getLogs": {
         const f = c.params[0] as { fromBlock: string; toBlock: string; address?: string[]; topics?: (string[] | null)[] };
         const from = parseInt(f.fromBlock, 16), to = parseInt(f.toBlock, 16);
-        if (to - from + 1 > b.span) return { error: { code: -32602, message: b.spanMessage } };
+        if (to - from + 1 > b.span) return { error: { code: b.spanStatus ? -32600 : -32602, message: b.spanMessage }, status: b.spanStatus };
         if (from > nodeHead) {
           return straddle === "refuses" ? { error: { code: -32603, message: "ErrUpstreamBlockUnavailable: requested block is not available yet" } }
                                         : { error: { code: -32602, message: "Block requested not found. Request might be querying historical state that is not available" } };
@@ -172,7 +180,14 @@ export class FakeNetwork {
         if (to > nodeHead && straddle === "refuses") {
           return { error: { code: -32014, message: `block not available: block not found for eth_getLogs, requested toBlock ${to} is not yet available on the node` } };
         }
-        const logs = this.chain.query(f, nodeHead).map((l) => this.chain.rpcLog(l)) as Record<string, unknown>[];
+        const found = this.chain.query(f, nodeHead);
+        if (b.maxLogs !== undefined && found.length > b.maxLogs) {
+          const fits = Math.max(from, found[b.maxLogs].block - 1); // [from, fits] holds at most maxLogs of them
+          return { error: { code: -32602, message: "Log response size exceeded. You can make eth_getLogs requests with up to a 10,000 " +
+            "block range and no limit on the response size, or you can request any block range with a cap of 10K logs in the response. " +
+            `Based on your parameters and the response size limit, this block range should work: [${hex(from)}, ${hex(fits)}]` } };
+        }
+        const logs = found.map((l) => this.chain.rpcLog(l)) as Record<string, unknown>[];
         if (b.noTimestamps) for (const l of logs) delete l.blockTimestamp;
         const k = (this.logCounts[label] = (this.logCounts[label] ?? 0) + 1);
         if (b.lieOnce === k && logs.length >= 0) {
