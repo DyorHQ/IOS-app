@@ -86,6 +86,9 @@ struct RootView: View {
                 LogScanClock.suspended()
                 // Alerts arrive while the app is open: checks pause until it is back.
                 env.alerts.enteredBackground()
+                // The wallet's history: the return is a new foreground session, which reads the server's history again
+                // when the scans fell behind, and polls it within a new window (`HistoryModel.resume`).
+                env.history.enteredBackground()
             }
             if phase == .active {
                 session.mera.enteredForeground()

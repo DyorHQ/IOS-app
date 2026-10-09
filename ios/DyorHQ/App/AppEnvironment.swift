@@ -44,6 +44,13 @@ final class AppEnvironment {
     let historyStore: HistoryStore
     let walletHistory: WalletHistoryService
     let history = HistoryModel()
+    /// The server's cache of the wallet's history (supabase migration 32's `history_read`), taken in at the history
+    /// model's times (`ServerHistorySync`): nil on a local fork, whose chain isn't the one the server read, and in a build
+    /// without the backend. The owner's switches for it are applied with the others (`apply(_:)`).
+    let serverHistory: ServerHistorySync?
+    /// What the server's history keeps in UserDefaults: the owner's last switches for it, and per wallet the spot check's
+    /// day and the distrust (`ServerHistoryDefaults`).
+    let serverHistoryDefaults = ServerHistoryDefaults()
     /// Every DyorHQ launchpad and Moments coin, read from the factories (`DyorCoinRegistry`, created here once): what a
     /// token's picture and label are drawn from (`TokenLogo`, `TokenBadgeView`) and which coins are the wallet's own on
     /// Home. Kept in Application Support, a fork's apart from mainnet's.
@@ -102,8 +109,8 @@ final class AppEnvironment {
         let isFork = host == "127.0.0.1" || host == "localhost"
         // History reads go across the public endpoints, in ranges each answers, through one gate (`LogsRouter`): one
         // client for every reader. A local fork keeps its own logs, so a development build pointed at 127.0.0.1 scans the
-        // fork instead.
-        logsRouter = LogsRouter(endpoints: isFork ? [LogsEndpoint(url: config.rpcURL, span: 50_000)] : LogsEndpoints.monadMainnet,
+        // fork instead: one node, whose head is the head the router reads, so it clamps nothing (`LogsEndpoint.clamps`).
+        logsRouter = LogsRouter(endpoints: isFork ? [LogsEndpoint(url: config.rpcURL, span: 50_000, clamps: false)] : LogsEndpoints.monadMainnet,
                                 store: isFork ? nil : UserDefaultsLogsCapabilityStore())
         logsClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(logsRouter: logsRouter)
         // State at past blocks (a wallet's nonce at a block, for its first transaction): only the endpoints that answer
@@ -124,10 +131,13 @@ final class AppEnvironment {
         // lane: behind every screen's scan and the wallet's history rounds (`LogsGate.Lane`), and paused while the history
         // fills in (`VenueTokenList.follow`).
         venueTokens = VenueTokensService(logsRPC: logsClient, multicall: multicall)
-        // The wallet's history, kept in Application Support (a fork's apart from mainnet's).
+        // The wallet's history, kept in Application Support (a fork's apart from mainnet's), under the owner's history
+        // epoch the last read of the flags said: what the server's history adds before they are read again this launch is
+        // marked with it, never with a lower one the next read would drop.
         let historyDirectory = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))?
             .appendingPathComponent(isFork ? "history-fork" : "history")
-        historyStore = HistoryStore(router: logsRouter, directory: historyDirectory)
+        let keptSwitches = serverHistoryDefaults.kept
+        historyStore = HistoryStore(router: logsRouter, directory: historyDirectory, epoch: keptSwitches.historyEpoch)
         // The registry reads every factory on the failover RPC; a Debug build on a local fork keeps its own file. The
         // price service asks it which tokens are DyorHQ coins, and which factory made each.
         let registry = DyorCoinRegistry(rpc: rpc, live: config.launchpad, liveMoments: config.moments, store: .applicationSupport(fork: isFork))
@@ -149,7 +159,9 @@ final class AppEnvironment {
                                              firstActivity: { [archiveClient] wallet in
                                                  // The block of the wallet's first transaction, found once (about 27 nonce reads at past blocks)
                                                  // and kept: the transfer scans read back to it, so every swap the wallet ever made counts. A
-                                                 // wallet that has sent none is asked again next time, not kept as such.
+                                                 // wallet that has sent none is asked again next time, not kept as such. The device's own
+                                                 // only: the one the server's history found is kept apart, in the history store, and dropped
+                                                 // with the rest of what the server added (`HistoryStore.serverFirstTransaction`).
                                                  if let kept = keptFirstBlock(wallet) { return kept }
                                                  let first = try await archiveClient.firstTransactionBlock(of: wallet, head: try await archiveClient.blockNumber())
                                                  if let first { UserDefaults.standard.set(String(first), forKey: "history.v1.firstBlock.\(wallet.hex.lowercased())") }
@@ -158,6 +170,11 @@ final class AppEnvironment {
                                              // What was found before, from the device with no read: a round never starts above a floor
                                              // already known (it would trim what lies below it), while a lookup runs beside the first.
                                              knownFirstActivity: keptFirstBlock)
+        // The server's history: read with the publishable key, the spot check reading the chain through the same router.
+        // Never on a fork, whose blocks past its start aren't mainnet's; the switch as the last read of the flags left it.
+        serverHistory = isFork || !config.hasSupabase ? nil
+            : ServerHistorySync(client: HistoryServerClient(supabase: social.client), history: walletHistory, router: logsRouter, defaults: serverHistoryDefaults)
+        history.setServerHistory(keptSwitches.serverHistory)
         #if DEBUG
         // A fork rehearsal (Secrets.xcconfig MOMENTS_*, Debug only): v2 links (c4) and names follow the Moments this build
         // shows. Without the override this is nil, and c4 stays MomentsAddresses.monadMainnet.
@@ -205,16 +222,31 @@ final class AppEnvironment {
 
     /// The last venue switch handed to the price service, so switches apply in the order they were read.
     @ObservationIgnored private var venueSwitch: Task<Void, Never>?
+    /// The last history epoch handed to the store, so epochs apply in the order they were read.
+    @ObservationIgnored private var epochSwitch: Task<Void, Never>?
 
     /// Applies the owner's remote switches (`RemoteFlags`, from `UpdateGate`'s read of `app_config` 'ios'): DyorHQ venue
-    /// prices on the price service (off: priced like any token, as build 16 did), and the DyorHQ labels on the coins model
-    /// (off: build 16's labels). Nothing is written anywhere; the next check applies the row again.
+    /// prices on the price service (off: priced like any token, as build 16 did), the DyorHQ labels on the coins model
+    /// (off: build 16's labels), and the server's history on the history model (off: the chain alone, as build 22 read
+    /// it). The history epoch is applied to the store whatever the switch says: entries that took the server's history
+    /// in under a lower one are read again from nothing, and the rounds start over on the wallet when any was. The
+    /// server's two are kept on the device for the next launch, until the flags are read again (`ServerHistoryDefaults`);
+    /// nothing else is written anywhere, and the next check applies the row again.
     func apply(_ flags: RemoteFlags) {
         dyorCoins.showsDyorBadges = flags.dyorBadges
         let previous = venueSwitch
         venueSwitch = Task { [prices] in
             await previous?.value
             await prices.setUsesDyorVenues(flags.dyorVenuePrices)
+        }
+        serverHistoryDefaults.keep(flags)
+        history.setServerHistory(flags.serverHistory)
+        let previousEpoch = epochSwitch
+        epochSwitch = Task { [weak self, historyStore] in
+            await previousEpoch?.value
+            let reset = await historyStore.apply(epoch: flags.historyEpoch)
+            guard reset > 0, let self else { return }
+            history.epochReset(env: self)
         }
     }
 

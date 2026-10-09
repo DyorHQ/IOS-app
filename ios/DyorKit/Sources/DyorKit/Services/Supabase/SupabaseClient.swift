@@ -267,6 +267,16 @@ public actor SupabaseClient {
         return try decode(data, as: T.self)
     }
 
+    /// `rpc` for a function whose arguments aren't all text — block numbers, a flag, a null (`history_read`'s
+    /// `p_from_block`, `p_meta_only`) — as JSON values: a whole number goes as digits, never "1.0", so PostgREST hands a
+    /// `bigint` argument its value; and the answer as it came, for the caller to parse (`HistoryServerClient`). The same
+    /// request as `rpc`: the publishable key, or the session when `authed`. Throws `SupabaseError.http` with the status and
+    /// body for anything but a 2xx, and the transport's error when there is no answer.
+    public func rpcJSON(name: String, body: [String: JSON], authed: Bool = false) async throws -> Data {
+        let encoded = try JSONEncoder().encode(body)
+        return try await send(method: "POST", path: "rest/v1/rpc/\(name)", query: [], body: encoded, prefer: nil, authed: authed)
+    }
+
     /// Deletes rows matching the query. Requires a session.
     public func delete(_ table: String, query: [URLQueryItem]) async throws {
         guard currentSession != nil else { throw SupabaseError.notSignedIn }

@@ -308,15 +308,16 @@ public struct WalletHistorySnapshot: Sendable {
     }
 
     /// How much of the window from `block` (nil: each scan's whole window) `scans` have read, 0 to 1, each counting the
-    /// same (`HistoryStatus.progress(from:)`); short of 1 (`readingCap`) for a scan whose head is old, until a round reads
-    /// it again (`HistoryStatus.isCurrent`), and while the swaps built from them still leave a transaction out there
-    /// (`swapsWait`).
+    /// same (`HistoryStatus.progress(from:)`); short of 1 (`readingCap`) for a scan that doesn't hold the window yet
+    /// (`holds(_:from:now:)`: part of it unread — however small a part — or its head old, until a round reads it again),
+    /// and while the swaps built from them still leave a transaction out there (`swapsWait`). A share capped only for an
+    /// old head printed "Reading your history… 100%" over a window of millions of blocks with its newest few hundred
+    /// unread: the server's history adopted up to its trust margin, or the newest 600 left for rpc2 while it rests.
     public func progress(from block: UInt64?, scans: [String], now: Date = Date()) -> Double {
         guard !scans.isEmpty else { return 1 }
         let read = scans.reduce(0) { total, id in
-            let status = status(id)
-            let share = status.progress(from: block)
-            return total + (status.isCurrent(at: now) ? share : min(share, Self.readingCap))
+            let share = status(id).progress(from: block)
+            return total + (holds(id, from: block, now: now) ? share : min(share, Self.readingCap))
         } / Double(scans.count)
         return swapsWait(from: block, scans: scans) ? min(read, Self.readingCap) : read
     }
@@ -443,7 +444,8 @@ public actor WalletHistoryService {
     /// What `firstActivity` found before, with no read (the app keeps it on the device): nil when it hasn't.
     private let knownFirstActivity: @Sendable (Address) -> UInt64?
     /// What `firstActivity` answered, by wallet: a block, or none (not kept: a wallet that sends its first
-    /// transaction later is asked again).
+    /// transaction later is asked again). The device's own only: the one the server's history found is the store's
+    /// (`HistoryStore.serverFirstTransaction(wallet:)`), dropped with the rest of what the server added.
     private var firstBlocks: [String: UInt64] = [:]
     /// The lookups of a first transaction under way, by wallet: one at a time, beside the rounds (`transferFloor`).
     private var firstLookups: [String: Task<Void, Never>] = [:]
@@ -474,7 +476,7 @@ public actor WalletHistoryService {
     /// known now; the instant read of the store never starts one.
     public func scans(wallet: Address, findingFirstTransaction: Bool = true) async -> [HistoryScan] {
         let stacks = await stacks()
-        let floor = transferFloor(wallet, lookup: findingFirstTransaction)
+        let floor = await transferFloor(wallet, lookup: findingFirstTransaction)
         return [WalletHistoryScans.transfersIn(wallet: wallet, floor: floor), WalletHistoryScans.transfersOut(wallet: wallet, floor: floor), WalletHistoryScans.launchpad(wallet: wallet),
                 WalletHistoryScans.feeSharing(wallet: wallet, stacks: stacks), WalletHistoryScans.moments(wallet: wallet, cohorts: cohorts)]
     }
@@ -482,12 +484,16 @@ public actor WalletHistoryService {
     /// How far back the transfer scans read for `wallet`: to its first transaction when that is older than the usual
     /// window (`WalletHistoryScans.transferDays`), so every swap it ever made counts; the window alone when it never sent
     /// one, or until its first transaction's block is known. Never waits for it: a round reads at once with what is known
-    /// (`knownFirstActivity`), and a lookup started beside it (`lookup`) deepens the floor from the next round on — the
-    /// launchpad, fee-sharing and Moments scans never needed it, and the newest blocks come first either way.
-    private func transferFloor(_ wallet: Address, lookup: Bool) -> HistoryScan.Floor {
+    /// (`knownFirstActivity`, or the server's history's, `HistoryStore.serverFirstTransaction(wallet:)`: the earlier of
+    /// the two), and a lookup started beside it (`lookup`) when neither is deepens the floor from the next round on — the
+    /// launchpad, fee-sharing and Moments scans never needed it, and the newest blocks come first either way. The server's
+    /// dropped (an epoch reset, an erase, a spot check's mismatch), the device's own stands, or is looked up.
+    private func transferFloor(_ wallet: Address, lookup: Bool) async -> HistoryScan.Floor {
         let key = wallet.hex.lowercased()
-        if let first = firstBlocks[key] ?? knownFirstActivity(wallet) {
-            firstBlocks[key] = first
+        let found = firstBlocks[key] ?? knownFirstActivity(wallet)
+        if let found { firstBlocks[key] = found }
+        let server = await store.serverFirstTransaction(wallet: wallet)
+        if let first = [found, server].compactMap({ $0 }).min() {
             return .earliest(block: first, blocks: WalletHistoryScans.transferBlocks)
         }
         if lookup, firstLookups[key] == nil {
@@ -497,10 +503,10 @@ public actor WalletHistoryService {
     }
 
     /// One lookup of `wallet`'s first transaction (`firstActivity`): a block found is kept for the next round's floor; none,
-    /// or a read that failed, is asked again at the next round.
+    /// or a read that failed, is asked again at the next round. A block only ever moves earlier.
     private func lookUpFirstTransaction(_ wallet: Address) async {
         let key = wallet.hex.lowercased()
-        if let first = try? await firstActivity(wallet) { firstBlocks[key] = first }
+        if let first = try? await firstActivity(wallet) { firstBlocks[key] = min(first, firstBlocks[key] ?? first) }
         firstLookups[key] = nil
     }
 
@@ -527,9 +533,21 @@ public actor WalletHistoryService {
     }
 
     private func built(wallet: Address, curves: Set<Address>, decimals: [Address: Int], reading: Bool) async -> WalletHistorySnapshot {
+        await snapshot(wallet: wallet, entries: await entries(wallet: wallet), curves: curves, decimals: decimals, reading: reading)
+    }
+
+    /// What the store holds of each of `wallet`'s scans, by id, from the device with no network (`HistoryStore.cached`):
+    /// what the instant read builds from, and what decides whether the server's history is read (`ServerHistoryPlan`).
+    public func entries(wallet: Address) async -> [String: HistoryEntry] {
         var entries: [String: HistoryEntry] = [:]
         for scan in await scans(wallet: wallet, findingFirstTransaction: false) { entries[scan.id] = await store.cached(scan, wallet: wallet) }
-        return await snapshot(wallet: wallet, entries: entries, curves: curves, decimals: decimals, reading: reading)
+        return entries
+    }
+
+    /// Monad's pace as known now, with no read (`BlockClock.knownSecondsPerBlock`): how far the chain has moved since an
+    /// entry's head, for the server's history (`ServerHistoryPlan.estimatedHead`).
+    public var knownSecondsPerBlock: Double {
+        get async { await clock.knownSecondsPerBlock }
     }
 
     /// The reference `wallet`'s records were last matched with, as kept beside its scans; nil when none was.
@@ -549,12 +567,52 @@ public actor WalletHistoryService {
         get async { await store.erasureMark }
     }
 
-    /// Forgets everything held for `wallet` (an erase of this device's data): the store's entries and what is kept beside
-    /// them, and what was built from them here.
+    /// Forgets everything held for `wallet` (an erase of this device's data, or a spot check that found the server's
+    /// history wrong): the store's entries and what is kept beside them — the server's first transaction with them
+    /// (`HistoryStore.forget`) — and what was built from them here, the first transaction's block held in memory among
+    /// it (the device's own, `knownFirstActivity`, is read again).
     public func forget(wallet: Address) async {
         swapCache[wallet.hex] = nil
         swapFacts[wallet.hex] = nil
+        firstBlocks[wallet.hex.lowercased()] = nil
         await store.forget(wallet: wallet)
+    }
+
+    /// Takes in one read of the server's history of `wallet` (`HistoryServerClient`), made after `erasureToken` was taken
+    /// (`HistoryStore.erasureToken()`) and under the owner's history epoch `epoch`: the wallet's first transaction first,
+    /// when the server found one earlier than the one known, so the transfer scans keep what the read adds back to it
+    /// (`adopt(firstTransaction:wallet:erasureToken:epoch:)`); then every scan the server served (`HistoryStore.adopt`),
+    /// all at once, each after its own refresh under way. The
+    /// chain's head is read first (`HistoryStore.latest`, one request): a scan whose head is past it speaks for blocks the
+    /// device can't prove exist, and none is taken in when the head can't be read — the rounds read the chain as before.
+    /// Nothing for another wallet's read, or a read of the metadata alone. The ids of the scans it took in.
+    @discardableResult
+    public func adopt(_ read: ServerHistoryRead, wallet: Address, erasureToken: Int, epoch: Int) async -> Set<String> {
+        guard read.wallet == wallet, !read.metaOnly, let chainHead = await store.latest()?.number else { return [] }
+        if case .found(let block) = read.firstTransaction { await adopt(firstTransaction: block, wallet: wallet, erasureToken: erasureToken, epoch: epoch) }
+        let scans = await scans(wallet: wallet, findingFirstTransaction: false)
+        return await withTaskGroup(of: String?.self) { group in
+            for scan in scans {
+                guard let server = read.scan(scan) else { continue }
+                group.addTask { [store] in
+                    await store.adopt(server, scan: scan, wallet: wallet, erasureToken: erasureToken, epoch: epoch, chainHead: chainHead) != nil ? scan.id : nil
+                }
+            }
+            var adopted = Set<String>()
+            for await id in group { if let id { adopted.insert(id) } }
+            return adopted
+        }
+    }
+
+    /// The wallet's first transaction as the server's history found it (`ServerFirstTransaction.found`, confirmed there
+    /// on a second endpoint), read under the owner's history epoch `epoch`: kept in the store, apart from the device's own
+    /// (`HistoryStore.adopt(firstTransaction:wallet:erasureToken:epoch:)`), when it is earlier than the one the device
+    /// found, or that isn't known. A block only ever moves earlier, which only ever deepens the transfer scans' floor —
+    /// more to read, never less — and it stays the server's: an epoch reset, an erase or a spot check's mismatch drops it,
+    /// and the floor is the device's own again. Nothing is kept once this device's data was erased since `erasureToken`.
+    func adopt(firstTransaction block: UInt64, wallet: Address, erasureToken: Int, epoch: Int) async {
+        if let found = firstBlocks[wallet.hex.lowercased()] ?? knownFirstActivity(wallet), found <= block { return }
+        await store.adopt(firstTransaction: block, wallet: wallet, erasureToken: erasureToken, epoch: epoch)
     }
 
     /// Reads on in every scan, each within `budget`, all at once through the gate in the history's lane (behind the screen

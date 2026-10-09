@@ -393,6 +393,12 @@ final class HistoryInstantReadTests: XCTestCase {
         XCTAssertTrue(environment.contains("swapHistory = SwapHistoryService(rpc: logsClient, clock: clock, archive: archiveClient)"))
         XCTAssertTrue(environment.contains("let archiveClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(urls: LogsEndpoints.archive)"))
         XCTAssertTrue(environment.contains("knownFirstActivity: keptFirstBlock)"))
+        // The device's own first transaction alone is kept in UserDefaults, by its own lookup: the server's history's is
+        // kept apart, in the history store, and dropped with the rest of what the server added (`HistoryStore.forget`,
+        // `apply(epoch:)`) — never written where it would deepen the transfer scans' floor past every switch.
+        XCTAssertTrue(environment.contains(#"if let first { UserDefaults.standard.set(String(first), forKey: "history.v1.firstBlock.\(wallet.hex.lowercased())") }"#))
+        XCTAssertEqual(environment.components(separatedBy: "history.v1.firstBlock.").count - 1, 2, "read once, written once")
+        XCTAssertFalse(environment.contains("keepFirstActivity"))
         let model = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
         XCTAssertTrue(model.contains("""
                         let cached = await env.walletHistory.cached(wallet: wallet, curves: curves, decimals: decimals)
@@ -408,7 +414,7 @@ final class HistoryInstantReadTests: XCTestCase {
     private func router() -> LogsRouter {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
-        return LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000)], session: URLSession(configuration: configuration),
+        return LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000, clamps: false)], session: URLSession(configuration: configuration),
                           gate: LogsGate(inFlight: 8, interval: .zero), concurrency: 4)
     }
 

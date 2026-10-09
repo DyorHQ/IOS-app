@@ -7,14 +7,23 @@ import Foundation
    Monad's public endpoints each answer a range of so many blocks per `eth_getLogs`, every one far short of a wallet's
    history (about 111M blocks), measured 2026-10-08 from the owner's network:
    - rpc2.monad.xyz: 10,000 blocks; address lists and topic lists accepted; a batch of 6 ranges in one request; 4
-     requests a second sustained without a refusal, about 1 in 5 refused (HTTP 429) at 11 a second.
+     requests a second sustained without a refusal, about 1 in 5 refused (HTTP 429) at 11 a second. Refuses a range
+     that ends past its node's head (-32014 "… is not yet available on the node").
    - rpc4.monad.xyz: 1,000 (some nodes answer any range, most refuse over 1,000); refuses a batch with -32603.
    - rpc3.monad.xyz: 1,000, a request's ranges counted together.
-   - rpc1.monad.xyz: 100 (it answered any wallet-scoped range until 2026-10-08); HTTP 429 after a burst.
+   - rpc1.monad.xyz: 100 (it answered any wallet-scoped range until 2026-10-08); HTTP 429 after a burst; any
+     JSON-RPC batch, of any method, answered HTTP 403 "Restricted JSON RPC method" (2026-10-09): one range a request.
    - rpc.monad.xyz: 100; the app's client for everything else.
    Build 21 and earlier asked rpc1 for the whole history on every screen (about 40 scans at once when Home opened),
    split every refusal into smaller ranges and had no time limit, so on today's endpoints every history screen spun
    for minutes and showed 0.
+
+   A range that ends past the answering node's head is refused by rpc2 alone (measured 2026-10-08/09). rpc4, rpc3 and
+   rpc1 — and rpc.monad.xyz, taken to, unmeasured — answer it CLAMPED: the logs up to that node's head, those of the
+   blocks past it simply missing, with no error, which reads exactly as blocks with no logs; and a node of theirs can be
+   hundreds of blocks behind. In build 22 and earlier such an answer marked every block of the range read, and the next
+   round read again only the 20 blocks below the newest one read: a transfer in the blocks left out was never seen, on
+   any screen, however many rounds later.
 
    The design:
    1. One logs router, every endpoint (this file). A scan is a window of blocks; the router cuts it into ranges of
@@ -25,12 +34,18 @@ import Foundation
       at a time. A scan has a budget of
       requests and seconds; past it, the caller gets what was read and exactly which blocks it covers (`LogsRead`),
       never a part passed off as the whole. A range refused for how many logs it holds is split, not taken for the
-      endpoint's span.
+      endpoint's span. For a read whose answer is kept as coverage — the wallet's history and its spot check, which pass
+      the round's head — an endpoint that clamps (`LogsEndpoint.clamps`) is asked only for blocks at least 600 below the
+      head (`LogsEndpoints.headLag`): the newest blocks go to one that refuses past its head — waited for while the
+      scan's deadline lasts, else left unread, a gap like any other — never to one that would answer them short. A
+      screen's read, never kept, may ask any endpoint for any block, as in build 22.
    2. A history store per wallet (`HistoryStore`): five scans (transfers in and out, launchpad, fee sharing,
-      Moments), each kept on disk with the blocks it covers. A refresh reads the blocks since the last one first,
-      then the gaps back to the floor while its budget lasts; the cursor never moves past a block that wasn't read.
-      The transfer scans read back to the wallet's first transaction (found once by bisection over its nonce at past
-      blocks) or 30 days, whichever is earlier; the rest from their contracts' deployment.
+      Moments), each kept on disk with the blocks it covers. A refresh reads the blocks since the last one first, from
+      1,200 below the newest read (`HistoryStore.overlap`) so that what a clamped answer could have left out is read
+      again, in at most half its seconds; then the gaps back to the floor while its budget lasts. The cursor never
+      moves past a block that wasn't read. The transfer scans read back to the wallet's first transaction (found once
+      by bisection over its nonce at past blocks) or 30 days, whichever is earlier; the rest from their contracts'
+      deployment.
    3. Screens publish what they have (`WalletHistoryService`, the app's `HistoryModel`): what the app recorded shows
       at once, chain history fills in behind ("Reading your history… 28%"), and a source that couldn't be read says
       so with Retry, never replacing what the last good read showed. Rounds of up to 40 requests per scan, a second
@@ -38,41 +53,59 @@ import Foundation
       from the third in a row the screens say what is left couldn't be read; a return to the app, a pull or a Retry
       starts a round at once. */
 
-/// A public endpoint for `eth_getLogs`: the widest range it answers per request, as measured, and how many ranges
-/// one request may carry.
+/// A public endpoint for `eth_getLogs`: the widest range it answers per request, as measured, how many ranges one
+/// request may carry, and whether it answers a range past its node's head short (`clamps`).
 public struct LogsEndpoint: Sendable, Hashable {
     public let url: URL
     /// The widest block range (inclusive) one `eth_getLogs` of this endpoint answers.
     public let span: UInt64
     /// Ranges one request carries: 1 where the endpoint counts a request's ranges together (rpc3) or refuses a batch
-    /// (rpc4 answers a batch of ranges with an internal error).
+    /// (rpc4 answers a batch of ranges with an internal error, rpc1 any batch with HTTP 403). One range is then sent as
+    /// a single JSON-RPC object, never an array (`RPCClient.batch`).
     public let batch: Int
     /// Whether the endpoint answers state at any past block (a nonce, a balance): rpc1, rpc2 and rpc4 do; rpc3 and
     /// rpc.monad.xyz refuse old blocks ("historical state that is not available", measured 2026-10-08).
     public let archive: Bool
+    /// Whether the endpoint may answer a range that ends past its node's head CLAMPED — the logs up to that node's head,
+    /// those of the blocks past it simply missing, with no error — rather than refuse it. A clamped answer reads exactly
+    /// as blocks with no logs, so such an endpoint is never asked for a block within `LogsEndpoints.headLag` of the head
+    /// by a read whose answer is kept (the wallet's history, given the round's head: `LogsRouter.read`). Measured
+    /// 2026-10-08/09: rpc2 refuses (`RPCClient.refusesPastHead`); rpc4, rpc3 and rpc1 clamp, a node of theirs hundreds
+    /// of blocks behind at times; rpc.monad.xyz is taken to. True unless known
+    /// otherwise: an endpoint nobody measured is the kind that can't lose a log. A local fork is one node and the head
+    /// the router reads is its own, so it is never behind it: it clamps nothing.
+    public let clamps: Bool
 
-    public init(url: URL, span: UInt64, batch: Int = 6, archive: Bool = false) {
+    public init(url: URL, span: UInt64, batch: Int = 6, archive: Bool = false, clamps: Bool = true) {
         self.url = url
         self.span = max(1, span)
         self.batch = max(1, batch)
         self.archive = archive
+        self.clamps = clamps
     }
 }
 
 public enum LogsEndpoints {
-    /// Monad mainnet's public endpoints for logs, the widest first, as measured on 2026-10-08.
+    /// Monad mainnet's public endpoints for logs, the widest first, as measured on 2026-10-08 and 09.
     public static let monadMainnet: [LogsEndpoint] = [
-        LogsEndpoint(url: URL(string: "https://rpc2.monad.xyz")!, span: 10_000, archive: true),
-        LogsEndpoint(url: URL(string: "https://rpc4.monad.xyz")!, span: 1_000, batch: 1, archive: true),
-        LogsEndpoint(url: URL(string: "https://rpc3.monad.xyz")!, span: 1_000, batch: 1),
-        LogsEndpoint(url: URL(string: "https://rpc1.monad.xyz")!, span: 100, archive: true),
-        LogsEndpoint(url: URL(string: "https://rpc.monad.xyz")!, span: 100),
+        LogsEndpoint(url: URL(string: "https://rpc2.monad.xyz")!, span: 10_000, archive: true, clamps: false),
+        LogsEndpoint(url: URL(string: "https://rpc4.monad.xyz")!, span: 1_000, batch: 1, archive: true, clamps: true),
+        LogsEndpoint(url: URL(string: "https://rpc3.monad.xyz")!, span: 1_000, batch: 1, clamps: true),
+        LogsEndpoint(url: URL(string: "https://rpc1.monad.xyz")!, span: 100, batch: 1, archive: true, clamps: true),
+        LogsEndpoint(url: URL(string: "https://rpc.monad.xyz")!, span: 100, clamps: true),
     ]
     /// The endpoints that answer state at past blocks, in order: a client for old nonces and balances fails over
     /// among these only (`RPCClient(urls:)`), never onto one that refuses them.
     public static var archive: [URL] { monadMainnet.filter(\.archive).map(\.url) }
     /// The smallest range any endpoint is asked for: what every one of them answers.
     public static let floorSpan: UInt64 = 100
+    /// How far behind the head a clamping endpoint's node is taken to be, at most (`LogsEndpoint.clamps`): the wallet's
+    /// history asks such an endpoint only for blocks at least this far below the head, and the newer ones wait for an
+    /// endpoint that refuses past its head (`LogsRouter.read`). 600 blocks, about three minutes: the nodes measured behind
+    /// were hundreds of blocks so, and the server's history indexer keeps the same margin (`history-indexer/endpoints.ts`,
+    /// `lag`). One rpc2 range of 10,000 blocks holds it many times over, so the blocks it keeps from the clamping
+    /// endpoints cost rpc2 one range a scan.
+    public static let headLag: UInt64 = 600
 }
 
 /// An `eth_getLogs` filter with the lists the method allows: any of `addresses` (none: every contract), and at each
@@ -117,6 +150,33 @@ public struct LogsQuery: Sendable, Hashable {
             guard log.topics.indices.contains(i), position.contains(log.topics[i]) else { return false }
         }
         return true
+    }
+
+    /// Whether every log this filter matches, `other` matches too — so a range read whole for `other` holds every log of
+    /// this filter in it, and its coverage counts for this one (`HistoryStore.adopt`: the app's scan against the server
+    /// history cache's, `history_read`'s `query`). The lists are sets, in any order. `other` takes this filter when it
+    /// names no address, or this one names some and every one is among `other`'s; and at every topic position (a
+    /// position past the end of a list is nil, anything) when `other` has nil there, or this one lists topics there and
+    /// every one is among `other`'s. Not a subset — the app knows a cohort the server doesn't yet — and the scan is read
+    /// from the chain, as before.
+    public func isSubset(of other: LogsQuery) -> Bool {
+        if !other.addresses.isEmpty {
+            guard !addresses.isEmpty, Set(addresses).isSubset(of: Set(other.addresses)) else { return false }
+        }
+        for position in 0..<max(topics.count, other.topics.count) {
+            guard position < other.topics.count, let theirs = other.topics[position] else { continue }
+            guard position < topics.count, let mine = topics[position], Set(mine).isSubset(of: Set(theirs)) else { return false }
+        }
+        return true
+    }
+
+    /// `fingerprint` with every list sorted: the same text for the same filter, in whatever order its lists were built —
+    /// the form the server's history cache prints for its scans (`history_read`'s `fingerprint`, its lists sorted in
+    /// Postgres), for logs and diagnostics. What a stored scan is checked against stays `fingerprint`: the files kept
+    /// before this keep loading.
+    public var canonicalFingerprint: String {
+        addresses.map { $0.hex.lowercased() }.sorted().joined(separator: ",") + "|"
+            + topics.map { $0.map { $0.map(\.hexString).sorted().joined(separator: "+") } ?? "*" }.joined(separator: ",")
     }
 }
 
@@ -507,7 +567,24 @@ public actor LogsRouter {
     /// with its endpoints answering, a run that ended short, read again only after a pause on a later return to the app
     /// (`VenueTokenList.resume`). The venue list, the one background scan, reads one request at a time, so its waits never
     /// overlap; its requests stay bounded (`LogsBudget.requests`).
-    public func read(_ query: LogsQuery, from: UInt64, to: UInt64, order: Order = .ascending, budget: LogsBudget, concurrency: Int? = nil,
+    ///
+    /// `head`: the chain head the caller read for this round, given by a read whose answer is kept as coverage for good —
+    /// the wallet's history (`HistoryStore`) and its spot check (`ServerHistorySync.spotCheck`). Then an endpoint that
+    /// clamps (`LogsEndpoint.clamps`) is asked only for blocks at least `LogsEndpoints.headLag` below it (or below the
+    /// window's end, when that is later): one of its nodes, a few hundred blocks behind, answers a range ending past its own
+    /// head short, with no error, and the blocks it left out would read as blocks with no logs, covered for good. The
+    /// blocks above go to an endpoint that refuses past its head (rpc2), first when one takes them; while one is resting,
+    /// the clamping endpoints read on below, and once nothing else is left the scan waits for it, within its deadline. Past
+    /// the deadline, or with no such endpoint, they are left unread — a gap the caller sees (`covered`), as any range no
+    /// endpoint answered. A gap read far below the head is given the head too, so its newest blocks aren't kept from the
+    /// clamping endpoints for nothing.
+    ///
+    /// Nil — a screen's read (`RPCClient.chunkedLogsReport`, `newestLogs`: a coin's trades and holders, a Moment's), never
+    /// kept — is routed as in build 22: every endpoint may be asked for every block. Held back as well, the newest 600
+    /// blocks of every such window waited on rpc2 alone, and with rpc2 down, throttled past the deadline or refusing
+    /// past its head three times running, those screens showed nothing or "couldn't be read", where a clamping endpoint
+    /// would have answered — at worst a few hundred blocks short, until the screen reads again.
+    public func read(_ query: LogsQuery, from: UInt64, to: UInt64, head: UInt64? = nil, order: Order = .ascending, budget: LogsBudget, concurrency: Int? = nil,
                      lane: LogsGate.Lane = .interactive) async -> LogsRead {
         guard from <= to else { return LogsRead(logs: [], covered: [], requests: 0) }
         let batchesAtOnce = min(self.concurrency, max(1, concurrency ?? self.concurrency))
@@ -516,6 +593,13 @@ public actor LogsRouter {
         var seen = Set<String>()
         var covered: [ClosedRange<UInt64>] = []
         var requests = 0
+        // Whether the newest blocks are held back from the clamping endpoints: for a read given the round's head alone,
+        // whose answer is kept (above). Then the newest block a clamping endpoint may be asked for (`LogsEndpoint.clamps`)
+        // is `headLag` below the head — below the window's end when that is later, a window that reaches past the head the
+        // caller read; nil, none at all, the head within `headLag` of the chain's first block.
+        let holdsBack = head != nil
+        let roundHead = max(head ?? to, to)
+        let clampTop: UInt64? = roundHead >= LogsEndpoints.headLag ? roundHead - LogsEndpoints.headLag : nil
         // Blocks still to ask, as ranges from the window's cursor. A range refused is asked again — in parts an endpoint
         // answers, on another endpoint — and one an endpoint refuses on its own account `maxAttempts` times is left as
         // a gap. A request that got no answer at all counts against the endpoint, not its ranges, unless it carried one.
@@ -539,6 +623,28 @@ public actor LogsRouter {
             retry.append(piece)
         }
 
+        /// `piece` as `endpoint` may be asked for it (`mine`), and what is left for an endpoint that refuses past its head
+        /// (`rest`): such an endpoint may be asked for all of it; a clamping one for its blocks up to `clampTop` only,
+        /// none when it starts above — unless nothing is held back (`holdsBack`), when every endpoint takes all of it.
+        func share(_ piece: Piece, with endpoint: LogsEndpoint) -> (mine: Piece?, rest: Piece?) {
+            guard endpoint.clamps, holdsBack else { return (piece, nil) }
+            guard let top = clampTop, piece.from <= top else { return (nil, piece) }
+            return piece.to <= top ? (piece, nil) : (Piece(from: piece.from, to: top), Piece(from: top + 1, to: piece.to))
+        }
+
+        /// Whether everything left to ask — the ranges to ask again, those past a node's head whose pause is over among
+        /// them, and the cursor's — lies above `clampTop`: only an endpoint that refuses past its head may be asked for it.
+        /// Never, when nothing is held back (`holdsBack`).
+        func onlyNearTheHead() -> Bool {
+            guard holdsBack else { return false }
+            let now = ContinuousClock.now
+            var lowest = retry.map(\.from) + behindHead.filter { $0.at <= now }.map(\.piece.from)
+            if let at = cursor { lowest.append(order == .ascending ? at : from) }
+            guard !lowest.isEmpty else { return false }
+            guard let top = clampTop else { return true }
+            return lowest.allSatisfy { $0 > top }
+        }
+
         func nextPieces(_ endpoint: LogsEndpoint) -> [Piece] {
             let span = span(of: endpoint.url)
             let limit = batchLimit(endpoint)
@@ -547,29 +653,47 @@ public actor LogsRouter {
             let now = ContinuousClock.now
             retry.insert(contentsOf: behindHead.filter { $0.at <= now }.map(\.piece), at: 0)
             behindHead.removeAll { $0.at <= now }
-            // Ranges to ask again first, cut to this endpoint's span; what doesn't fit the request waits at the front.
-            while out.count < limit, let piece = retry.first {
-                retry.removeFirst()
+            // Ranges to ask again first, cut to this endpoint's span; what doesn't fit the request waits at the front. A
+            // clamping endpoint takes their blocks up to `clampTop` only: those above stay where they were, in order, for
+            // an endpoint that refuses past its head.
+            var index = 0
+            while out.count < limit, index < retry.count {
+                let (mine, rest) = share(retry.remove(at: index), with: endpoint)
+                if let rest {
+                    retry.insert(rest, at: index)
+                    index += 1
+                }
+                guard let piece = mine else { continue }
                 var start = piece.from
                 while start <= piece.to {
                     let end = min(piece.to, start + span - 1)
                     if out.count < limit {
                         out.append(Piece(from: start, to: end))
                     } else {
-                        retry.insert(Piece(from: start, to: piece.to), at: 0)
+                        retry.insert(Piece(from: start, to: piece.to), at: index)
                         break
                     }
                     if end == UInt64.max { break }
                     start = end + 1
                 }
             }
-            while out.count < limit, let at = cursor {
+            cursorRanges: while out.count < limit, let at = cursor {
                 switch order {
                 case .ascending:
-                    let end = min(to, at + span - 1)
-                    out.append(Piece(from: at, to: end))
-                    cursor = end < to ? end + 1 : nil
+                    // A clamping endpoint reads up to `clampTop`; the cursor stays at the blocks above, for an endpoint
+                    // that refuses past its head.
+                    guard let piece = share(Piece(from: at, to: min(to, at + span - 1)), with: endpoint).mine else { break cursorRanges }
+                    out.append(piece)
+                    cursor = piece.to < to ? piece.to + 1 : nil
                 case .descending:
+                    if holdsBack, endpoint.clamps, clampTop.map({ at > $0 }) ?? true {
+                        // The newest blocks, above `clampTop`, are set aside to ask again — first, by an endpoint that
+                        // refuses past its head — and a clamping endpoint reads on below them.
+                        let low = clampTop.map { max(from, $0 + 1) } ?? from
+                        retry.insert(Piece(from: low, to: at), at: 0)
+                        cursor = low > from ? low - 1 : nil
+                        continue
+                    }
                     let start = at - from >= span ? at - span + 1 : from
                     out.append(Piece(from: start, to: at))
                     cursor = start > from ? start - 1 : nil
@@ -581,8 +705,10 @@ public actor LogsRouter {
         await withTaskGroup(of: Batch.self) { group in
             var inFlight = 0
             while true {
+                // Once all that is left lies within `headLag` of the head, only an endpoint that refuses past its head is
+                // asked — waited for, within the deadline, while it rests — never a clamping one (`share`).
                 while inFlight < batchesAtOnce, requests < budget.requests, ContinuousClock.now < deadline, !Task.isCancelled,
-                      let endpoint = await available(deadline: deadline) {
+                      let endpoint = await available(deadline: deadline, refusingOnly: onlyNearTheHead()) {
                     let pieces = nextPieces(endpoint)
                     guard !pieces.isEmpty else { break }
                     requests += 1
@@ -695,22 +821,24 @@ public actor LogsRouter {
                         covered: LogsRead.merge(covered), requests: requests)
     }
 
-    /// The first endpoint not resting — unless a wider one, resting, wakes soon enough to be worth the wait
-    /// (`waitForWider`) and hasn't been resting over and over; when every one rests, waits for the first to wake,
-    /// within `deadline`.
-    private func available(deadline: ContinuousClock.Instant) async -> LogsEndpoint? {
+    /// The first endpoint not resting — of those that refuse a range past their head only, when `refusingOnly` (all that
+    /// is left of a scan lies within `LogsEndpoints.headLag` of the head) — unless a wider one, resting, wakes soon enough
+    /// to be worth the wait (`waitForWider`) and hasn't been resting over and over; when every one rests, waits for the
+    /// first to wake, within `deadline`. Nil when none wakes within it, or there is none to ask.
+    private func available(deadline: ContinuousClock.Instant, refusingOnly: Bool = false) async -> LogsEndpoint? {
+        let candidates = refusingOnly ? endpoints.filter { !$0.clamps } : endpoints
         while true {
             let now = ContinuousClock.now
-            if let endpoint = endpoints.first(where: { (restingUntil[$0.url] ?? now) <= now }) {
+            if let endpoint = candidates.first(where: { (restingUntil[$0.url] ?? now) <= now }) {
                 // A wider endpoint resting for a moment is worth more than a narrow one answering now.
-                let wider = endpoints.prefix { $0.url != endpoint.url }.filter { span(of: $0.url) >= span(of: endpoint.url) * 5 && (lastRest[$0.url] ?? 0) < Self.waitForWider }
+                let wider = candidates.prefix { $0.url != endpoint.url }.filter { span(of: $0.url) >= span(of: endpoint.url) * 5 && (lastRest[$0.url] ?? 0) < Self.waitForWider }
                 if let wake = wider.compactMap({ restingUntil[$0.url] }).min(), wake - now <= .seconds(Self.waitForWider), wake < deadline, !Task.isCancelled {
                     try? await Task.sleep(until: wake, clock: .continuous)
                     continue
                 }
                 return endpoint
             }
-            guard let wake = endpoints.compactMap({ restingUntil[$0.url] }).min(), wake < deadline, !Task.isCancelled else { return nil }
+            guard let wake = candidates.compactMap({ restingUntil[$0.url] }).min(), wake < deadline, !Task.isCancelled else { return nil }
             try? await Task.sleep(until: wake, clock: .continuous)
         }
     }

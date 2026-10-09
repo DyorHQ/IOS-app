@@ -125,7 +125,36 @@ with no scan of their own. A screen's scan wider than its budget reads newest fi
 `chunkedLogsReport(order: .descending)`) and says when it stopped short: a holder count is then a minimum ("12+", with a
 plain note rather than an error, since no read can do better for a coin older than the budget reaches), and the 24h
 volume of the trades read too. A range refused for ending past the answering node's head is asked again after a pause
-(`LogsRouter.headPause`), and the head of those windows is read from the logs endpoints themselves. The NFTs list says how
-far back the transfers into the wallet reach ("Only NFTs received since …") and counts what it lists as a minimum. Monad's
-pace is measured from block headers rather than assumed
-(`Chain/BlockClock.swift`).
+(`LogsRouter.headPause`), and the head of those windows is read from the logs endpoints themselves. Only `rpc2` refuses
+such a range: `rpc4`, `rpc3` and `rpc1` (and, unmeasured, `rpc.monad.xyz`) answer it clamped to their node's head, with
+no error and the later blocks' logs missing, a node hundreds of blocks behind at times. So for the wallet's history,
+whose reads are kept as coverage (a read given the round's head), the router asks an endpoint that clamps only for blocks
+at least 600 below the head (`LogsEndpoint.clamps`, `LogsEndpoints.headLag`): the newest blocks wait for `rpc2` while
+the scan's deadline lasts, and are otherwise left unread, a gap like any other. A screen's own read (no head given, never
+kept) may ask any endpoint for any block, as before: with `rpc2` down it is at worst a few hundred blocks short until it
+reads again, rather than empty. Every history round reads again the 1,200 blocks below the newest it read
+(`HistoryStore.overlap`), and `rpc1`, which answers any JSON-RPC batch with HTTP 403, is sent one range a request. The
+NFTs list says how far back the transfers into the wallet reach ("Only NFTs received since …") and counts what it lists
+as a minimum. Monad's pace is measured from block headers rather than assumed (`Chain/BlockClock.swift`).
+
+The wallet's history can also come from the backend's cache of the same five scans (supabase migration 32,
+`history_read`, filled by the `history-indexer` Edge Function from the same public endpoints). `HistoryModel` publishes
+the instant read from the device first, then, before the first round of each run of the rounds (a launch, another
+wallet, a return to the app, an epoch reset), asks `ServerHistorySync.beforeRound`: a full read while any scan doesn't
+hold what the server could add (every block from its floor to 1,200 below its head), a top-up from 20 blocks below the
+oldest scan's newest block read when every scan does but is more than 60,000 blocks behind, else nothing
+(`ServerHistoryPlan`); after an epoch reset or a spot check's mismatch the read is due at once, whatever the time of the
+last, and one read or poll of a wallet runs at a time (the read waits for the one under way). It waits at most 20
+seconds for it (the client's 15 and the chain head's read); what it takes in (`HistoryStore.adopt`, only the blocks the
+document proves, never the newest 1,200) is published at once, and the rounds then read only what is left, about 2,400
+blocks a scan (the 1,200-block margin plus the 1,200-block overlap), one `rpc2` request. A scan the server is
+still filling in is polled beside the rounds — its account alone every minute, for at most 15 minutes a foreground
+session, then bounded reads of the three newest ranges it newly covers. Once a day per wallet a random 10,000-block range
+of what the server added to the transfers in is read again from the chain (one request) and compared by log id: a
+mismatch distrusts the server for that wallet for a day, forgets the wallet's history on the device and reads it again
+from the chain. Every failure is discarded and the device reads the chain as before. The owner's switches are
+`serverHistory` (on unless the `app_config` row says `false`) and `historyEpoch` (raising it resets every entry that took
+the server's history in under a lower one, whether the switch is on or off); both are kept in UserDefaults for the next
+launch (`ServerHistoryDefaults`), and the server has its own instant switch (`serving`). The wallet's first transaction
+as the server found it is kept in the history store, apart from the one the device found, and goes with the rest of what
+the server added (an epoch reset, an erase, a spot check's mismatch). Nothing is read from the server on a local fork.

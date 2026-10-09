@@ -67,7 +67,7 @@ final class HistoryWindowTests: XCTestCase {
         LogsStub.install(head: 200_000) { _ in nil }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
-        let router = LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000)], session: URLSession(configuration: configuration),
+        let router = LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000, clamps: false)], session: URLSession(configuration: configuration),
                                 gate: LogsGate(inFlight: 8, interval: .zero), concurrency: 1)
         let store = HistoryStore(router: router, directory: nil)
         let scan = HistoryScan(id: "transfers-in", query: LogsQuery(address: nil, topics: [transferTopic, nil, walletWord]), floor: .blocks(100_000))
@@ -220,6 +220,30 @@ final class HistoryWindowTests: XCTestCase {
         XCTAssertEqual(Self.snapshot().progress(from: 0, scans: []), 1)
     }
 
+    /// Never "100%" while part of a window is unread, however small the part and however lately the scan read: a window
+    /// of millions of blocks with its newest few hundred unread — the server's history taken in up to its trust margin,
+    /// or the newest 600 left for rpc2 while it rests — read 0.9999, printed "Reading your history… 100%" on Home, the
+    /// Portfolio, My Launchpad and My Moments. Read up to now, it is 1.
+    func testAWindowWithItsNewestBlocksUnreadIsNeverAHundredPercent() {
+        let head: UInt64 = 111_727_140
+        let now = Date()
+        func snapshot(_ covered: [ClosedRange<UInt64>]) -> WalletHistorySnapshot {
+            var snapshot = WalletHistorySnapshot.empty
+            for id in WalletHistoryScans.ids { snapshot.status[id] = HistoryStatus(HistoryEntry(covered: covered, head: head, headTimestamp: 1, floor: 0, updatedAt: now)) }
+            return snapshot
+        }
+        let margin = snapshot([0...(head - 1_200)])
+        XCTAssertGreaterThan(margin.status(WalletHistoryScans.transfersInId).progress, 0.9999)
+        XCTAssertEqual(margin.progress(from: nil, scans: WalletHistoryScans.volume, now: now), WalletHistorySnapshot.readingCap, "All")
+        XCTAssertEqual(margin.progress(from: head - 1_000_000, scans: WalletHistoryScans.volume, now: now), WalletHistorySnapshot.readingCap, "a month or so")
+        XCTAssertEqual(margin.progress(from: head - 1_000, scans: WalletHistoryScans.volume, now: now), 0, "a window inside the unread blocks")
+        XCTAssertFalse(margin.covers(from: head - 1_000_000, scans: WalletHistoryScans.volume, now: now))
+        let read = snapshot([0...head])
+        XCTAssertEqual(read.progress(from: nil, scans: WalletHistoryScans.volume, now: now), 1)
+        XCTAssertEqual(read.progress(from: head - 1_000_000, scans: WalletHistoryScans.volume, now: now), 1)
+        XCTAssertEqual(read.progress(from: nil, scans: WalletHistoryScans.volume, now: now.addingTimeInterval(3_600)), WalletHistorySnapshot.readingCap, "read an hour ago: not up to now")
+    }
+
     // MARK: The screens
 
     /// Each screen says "Reading your history" for its own scans over its own window, with their progress: Home's Total
@@ -349,7 +373,7 @@ final class HistoryWindowTests: XCTestCase {
         LogsStub.install(head: head) { _ in nil }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
-        let router = LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000)], session: URLSession(configuration: configuration),
+        let router = LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000, clamps: false)], session: URLSession(configuration: configuration),
                                 gate: LogsGate(inFlight: 8, interval: .zero), concurrency: 4)
         let logsClient = LogsStub.rpc()
         let clock = BlockClock(rpc: logsClient, measured: 0.4)

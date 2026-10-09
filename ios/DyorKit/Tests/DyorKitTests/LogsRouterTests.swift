@@ -29,11 +29,13 @@ final class LogsRouterTests: XCTestCase {
     private var query: LogsQuery { LogsQuery(address: nil, topics: [transferTopic, nil, walletWord]) }
 
     /// A router over three stub endpoints: one answering 10,000 blocks in batches of 6, one 1,000 one range a request,
-    /// one 100.
+    /// one 100 — each refusing a range past its head, so every one may read up to it (an endpoint that clamps has tests
+    /// of its own, below).
     private func router(gate: LogsGate = LogsGate(inFlight: 8, interval: .zero), concurrency: Int = 4, store: (any LogsCapabilityStore)? = nil) -> LogsRouter {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
-        return LogsRouter(endpoints: [LogsEndpoint(url: Self.wide, span: 10_000), LogsEndpoint(url: Self.narrow, span: 1_000, batch: 1), LogsEndpoint(url: Self.last, span: 100)],
+        return LogsRouter(endpoints: [LogsEndpoint(url: Self.wide, span: 10_000, clamps: false), LogsEndpoint(url: Self.narrow, span: 1_000, batch: 1, clamps: false),
+                                      LogsEndpoint(url: Self.last, span: 100, clamps: false)],
                           session: URLSession(configuration: configuration), gate: gate, store: store, concurrency: concurrency)
     }
 
@@ -220,6 +222,195 @@ final class LogsRouterTests: XCTestCase {
         XCTAssertEqual(LogsRouter.namedSpan(RPCError(code: -32614, message: "eth_getLogs is limited to a 100 range")), 100)
         XCTAssertNil(LogsRouter.namedSpan(RPCError(code: -32602, message: "block range too large")))
     }
+
+    // MARK: Endpoints that clamp
+
+    private static let refusing = URL(string: "https://refusing.logs-stub.invalid")!
+    private static let clamping = URL(string: "https://clamping.logs-stub.invalid")!
+
+    /// A router over an endpoint that refuses a range past its head (rpc2) and one that answers it clamped (rpc4, rpc3,
+    /// rpc1), both 10,000 blocks in batches of 6, so neither is waited for as the wider (`LogsRouter.waitForWider`): the
+    /// one that refuses first, as on mainnet, unless `clampingFirst`. `refusing: false` leaves it out.
+    private func clampRouter(refusing: Bool = true, clampingFirst: Bool = false) -> LogsRouter {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LogsStub.self]
+        let refuser = LogsEndpoint(url: Self.refusing, span: 10_000, clamps: false)
+        let clamper = LogsEndpoint(url: Self.clamping, span: 10_000, clamps: true)
+        let endpoints = !refusing ? [clamper] : clampingFirst ? [clamper, refuser] : [refuser, clamper]
+        return LogsRouter(endpoints: endpoints, session: URLSession(configuration: configuration), gate: LogsGate(inFlight: 8, interval: .zero))
+    }
+
+    /// The ranges each host was asked for.
+    private func asked(_ url: URL) -> [LogsStub.Range] {
+        zip(LogsStub.queries(), LogsStub.hosts()).filter { $0.1 == url.host() }.map(\.0)
+    }
+
+    /// Mainnet's endpoints as measured on 2026-10-08/09: rpc2 alone refuses a range past its node's head; rpc4, rpc3 and
+    /// rpc1 answer it clamped, and rpc.monad.xyz is taken to. rpc1 answers any batch with HTTP 403: one range a request.
+    /// An endpoint nobody measured is taken to clamp.
+    func testMainnetsEndpointsSayWhichClampAndRpc1TakesOneRangeARequest() throws {
+        let byHost = Dictionary(uniqueKeysWithValues: LogsEndpoints.monadMainnet.map { ($0.url.host() ?? "", $0) })
+        XCTAssertEqual(byHost.filter { !$0.value.clamps }.keys.sorted(), ["rpc2.monad.xyz"], "only rpc2 refuses a range past its head")
+        XCTAssertEqual(byHost.filter(\.value.clamps).keys.sorted(), ["rpc.monad.xyz", "rpc1.monad.xyz", "rpc3.monad.xyz", "rpc4.monad.xyz"])
+        XCTAssertEqual(try XCTUnwrap(byHost["rpc1.monad.xyz"]).batch, 1, "rpc1 answers any JSON-RPC batch with HTTP 403")
+        XCTAssertEqual(LogsEndpoints.monadMainnet.first?.url.host(), "rpc2.monad.xyz", "the endpoint the newest blocks are read on comes first")
+        XCTAssertEqual(LogsEndpoints.headLag, 600)
+        XCTAssertTrue(LogsEndpoint(url: Self.wide, span: 1_000).clamps, "unmeasured: the kind that can't lose a log")
+    }
+
+    /// rpc1's batch, as `LogsEndpoints.monadMainnet` gives it, never sends rpc1 a batch: every range goes as a single
+    /// JSON-RPC object, and nothing comes back HTTP 403. With the 6 ranges a request of build 22, every request rpc1 was
+    /// sent was refused.
+    func testRpc1IsNeverSentABatch() async throws {
+        let rpc1 = try XCTUnwrap(LogsEndpoints.monadMainnet.first { $0.url.host() == "rpc1.monad.xyz" })
+        let stub = URL(string: "https://rpc1.batch-stub.invalid")!
+        LogsStub.install(head: 100_000, logs: [transfer(at: 450), transfer(at: 999)], refusingBatches: [stub.host()!]) { _ in nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LogsStub.self]
+        let router = LogsRouter(endpoints: [LogsEndpoint(url: stub, span: rpc1.span, batch: rpc1.batch, archive: rpc1.archive, clamps: rpc1.clamps)],
+                                session: URLSession(configuration: configuration), gate: LogsGate(inFlight: 8, interval: .zero))
+        let read = await router.read(query, from: 1, to: 1_000, head: 100_000, budget: LogsBudget(requests: 20, seconds: 10))
+        XCTAssertTrue(read.covers(1, 1_000))
+        XCTAssertEqual(read.logs.map(\.blockNumber), [450, 999])
+        XCTAssertEqual(read.requests, 10, "ten 100-block ranges, one a request")
+        XCTAssertEqual(LogsStub.batchHosts(), [], "no batch, so no HTTP 403")
+        XCTAssertEqual(LogsStub.requests(), 10)
+    }
+
+    /// The bug in build 22: a node of a clamping endpoint 300 blocks behind answered the newest range up to its own head,
+    /// with no error, and the router marked the whole range read — the transfer past that node's head never seen. Now, for
+    /// a read given the round's head (the wallet's history, whose answer is kept), a clamping endpoint is asked only for
+    /// blocks at least 600 below the head: while the endpoint that refuses past its head rests (throttled), the clamping
+    /// one reads every older block, and the newest wait for the other, within the scan's deadline, which reads them — the
+    /// transfer found, every block read.
+    func testTheNewestBlocksWaitForTheEndpointThatRefusesPastItsHead() async {
+        let throttled = RangeCount()
+        let answered = RangeLog()
+        LogsStub.install(head: 100_000, logs: [transfer(at: 50_000), transfer(at: 99_300), transfer(at: 99_900)], hostRule: { host, range in
+            // The first request to the endpoint that refuses, six ranges, is throttled; it rests, then answers.
+            guard host == Self.refusing.host() else { return nil }
+            if throttled.next() <= 6 { return .status(429) }
+            answered.add(range)
+            return nil
+        }, clampedAt: [Self.clamping.host()!: 99_700]) { _ in nil }
+        let started = ContinuousClock.now
+        let read = await clampRouter().read(query, from: 1, to: 100_000, head: 100_000, order: .descending, budget: LogsBudget(requests: 40, seconds: 20))
+        XCTAssertTrue(read.covers(1, 100_000), "every block read")
+        XCTAssertEqual(read.logs.map(\.blockNumber), [50_000, 99_300, 99_900], "the transfer past the clamping node's head too")
+        let clamped = asked(Self.clamping)
+        XCTAssertFalse(clamped.isEmpty, "the clamping endpoint read the older blocks while the other rested")
+        XCTAssertTrue(clamped.allSatisfy { $0.to <= 99_400 }, "never a block within 600 of the head: \(clamped.filter { $0.to > 99_400 })")
+        XCTAssertTrue(answered.ranges.contains { $0.to == 100_000 }, "the newest blocks answered — not throttled — on the endpoint that refuses past its head: \(answered.ranges)")
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - started, .seconds(LogsRouter.throttleRest), "they waited out its rest")
+    }
+
+    /// Asked first, a clamping endpoint sets the newest blocks aside, reads on below them, and the endpoint that refuses
+    /// past its head reads them: read newest first and oldest first alike.
+    func testAClampingEndpointAskedFirstLeavesTheNewestToTheOther() async {
+        for order in [LogsRouter.Order.descending, .ascending] {
+            LogsStub.install(head: 100_000, logs: [transfer(at: 20_000), transfer(at: 99_950)], clampedAt: [Self.clamping.host()!: 99_800]) { _ in nil }
+            let read = await clampRouter(clampingFirst: true).read(query, from: 1, to: 100_000, head: 100_000, order: order, budget: LogsBudget(requests: 40, seconds: 10))
+            XCTAssertTrue(read.covers(1, 100_000), "\(order)")
+            XCTAssertEqual(read.logs.map(\.blockNumber), [20_000, 99_950], "\(order)")
+            XCTAssertTrue(asked(Self.clamping).allSatisfy { $0.to <= 99_400 }, "\(order): \(asked(Self.clamping))")
+            XCTAssertTrue(asked(Self.refusing).allSatisfy { $0.from >= 99_401 }, "\(order): only the newest blocks were the other's")
+        }
+    }
+
+    /// The wallet's history (a read given the round's head) with no endpoint that refuses past its head to read the newest
+    /// blocks — none, or one that never answers before the deadline: the newest 600 are left unread, a gap the coverage
+    /// says, never a clamped answer passed off as read and kept for good.
+    func testWithNoEndpointThatRefusesPastItsHeadTheNewestBlocksAreAGap() async {
+        LogsStub.install(head: 100_000, logs: [transfer(at: 50_000), transfer(at: 99_900)], clampedAt: [Self.clamping.host()!: 99_700]) { _ in nil }
+        let alone = await clampRouter(refusing: false).read(query, from: 1, to: 100_000, head: 100_000, order: .descending, budget: LogsBudget(requests: 40, seconds: 10))
+        XCTAssertEqual(alone.covered, [1...99_400])
+        XCTAssertFalse(alone.covers(1, 100_000))
+        XCTAssertEqual(alone.logs.map(\.blockNumber), [50_000])
+
+        LogsStub.install(head: 100_000, logs: [transfer(at: 50_000), transfer(at: 99_900)], hostRule: { host, _ in host == Self.refusing.host() ? .noAnswer : nil },
+                         clampedAt: [Self.clamping.host()!: 99_700]) { _ in nil }
+        let started = ContinuousClock.now
+        let down = await clampRouter().read(query, from: 1, to: 100_000, head: 100_000, budget: LogsBudget(requests: 40, seconds: 3))
+        XCTAssertEqual(down.covered, [1...99_400], "the endpoint that refuses never answered: its blocks are a gap")
+        XCTAssertEqual(down.logs.map(\.blockNumber), [50_000])
+        XCTAssertTrue(asked(Self.clamping).allSatisfy { $0.to <= 99_400 })
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(8), "waited for it within the deadline, no longer")
+    }
+
+    /// The head the caller read keeps from the clamping endpoints only the blocks within 600 of it: a window far below it
+    /// is theirs to read whole, and one reaching past the head is held back from the window's end. With no head given — a
+    /// screen's read, never kept — nothing is held back, as in build 22.
+    func testOnlyTheBlocksNearTheHeadAreKeptFromAClampingEndpoint() async {
+        LogsStub.install(head: 100_000, logs: [transfer(at: 49_990)]) { _ in nil }
+        let given = await clampRouter(refusing: false).read(query, from: 1, to: 50_000, head: 100_000, budget: LogsBudget(requests: 20, seconds: 10))
+        XCTAssertTrue(given.covers(1, 50_000))
+        XCTAssertEqual(given.logs.map(\.blockNumber), [49_990])
+        LogsStub.install(head: 100_000, logs: [transfer(at: 49_990)]) { _ in nil }
+        let past = await clampRouter(refusing: false).read(query, from: 1, to: 50_000, head: 40_000, budget: LogsBudget(requests: 20, seconds: 10))
+        XCTAssertEqual(past.covered, [1...49_400], "a window past the head given: held back from its end")
+        LogsStub.install(head: 100_000, logs: []) { _ in nil }
+        let early = await clampRouter(refusing: false).read(query, from: 1, to: 500, head: 500, budget: LogsBudget(requests: 20, seconds: 10))
+        XCTAssertEqual(early.covered, [], "a head within 600 of the first block: nothing is a clamping endpoint's")
+        XCTAssertEqual(early.requests, 0)
+        LogsStub.install(head: 100_000, logs: [transfer(at: 49_990)]) { _ in nil }
+        let screen = await clampRouter(refusing: false).read(query, from: 1, to: 50_000, budget: LogsBudget(requests: 20, seconds: 10))
+        XCTAssertTrue(screen.covers(1, 50_000), "no head given: nothing held back")
+        XCTAssertEqual(screen.logs.map(\.blockNumber), [49_990])
+    }
+
+    /// A screen's read — no head given, never kept: a coin's trades and holders, a Moment's (`RPCClient.newestLogs`) — is
+    /// routed as in build 22. With the endpoint that refuses past its head down, its newest blocks still come from a
+    /// clamping one and the screen has its newest run to stand on (`NewestLogs`): at worst a few hundred blocks short (the
+    /// transfer past the clamping node's own head isn't there) until it reads again. Held back as for the history, every
+    /// such screen showed nothing while rpc2 was down, throttled past the deadline or refusing past its head.
+    func testAScreensReadWithNoHeadAsksAnyEndpointForTheNewestBlocks() async {
+        LogsStub.install(head: 100_000, logs: [transfer(at: 50_000), transfer(at: 99_650), transfer(at: 99_900)],
+                         hostRule: { host, _ in host == Self.refusing.host() ? .noAnswer : nil }, clampedAt: [Self.clamping.host()!: 99_700]) { _ in nil }
+        let started = ContinuousClock.now
+        let read = await clampRouter().read(query, from: 1, to: 100_000, order: .descending, budget: LogsBudget(requests: 40, seconds: 10))
+        XCTAssertTrue(read.covers(1, 100_000))
+        XCTAssertEqual(read.logs.map(\.blockNumber), [50_000, 99_650], "the clamping node's answer, short of its own head")
+        XCTAssertTrue(asked(Self.clamping).contains { $0.to == 100_000 }, "the newest range asked of the clamping endpoint")
+        let newest = NewestLogs(read, from: 1, to: 100_000)
+        XCTAssertEqual(newest.readFrom, 1)
+        XCTAssertEqual(newest.logs.map(\.blockNumber), [50_000, 99_650], "something to stand on")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(8), "never waited for the endpoint that is down")
+    }
+
+    /// rpc2's refusal of a range past its node's head (-32014, measured 2026-10-09) is that, not a failure: the range is
+    /// asked again of rpc2 after a pause, uncounted — never handed to a clamping endpoint — and three refusals in a row
+    /// from a node a few blocks behind don't leave the newest blocks a gap.
+    func testRpc2sRefusalPastItsHeadIsAskedAgainAfterAPause() async {
+        let refusals = RangeCount()
+        let pastHead = LogsStub.Failure.error(code: -32014, message: "block not available: block not found for eth_getLogs, requested toBlock 100000 is not yet available on the node")
+        LogsStub.install(head: 100_000, logs: [transfer(at: 99_999)], hostRule: { host, range in
+            host == Self.refusing.host() && range.to == 100_000 && refusals.next() <= 3 ? pastHead : nil
+        }, clampedAt: [Self.clamping.host()!: 99_990]) { _ in nil }
+        let started = ContinuousClock.now
+        let read = await clampRouter().read(query, from: 90_001, to: 100_000, head: 100_000, order: .descending, budget: LogsBudget(requests: 40, seconds: 20))
+        XCTAssertTrue(read.covers(90_001, 100_000))
+        XCTAssertEqual(read.logs.map(\.blockNumber), [99_999])
+        XCTAssertEqual(refusals.count, 4, "refused three times, answered the fourth")
+        XCTAssertEqual(asked(Self.clamping).count, 0, "never handed to the clamping endpoint: rpc2 itself, asked again")
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - started, .seconds(3), "asked again after 1 s, then after 2 s")
+    }
+}
+
+/// A count across a test's stub rules, which run on the URL loading system's threads.
+private final class RangeCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+    /// The next count: 1 the first time.
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; value += 1; return value }
+}
+
+/// The ranges a test's stub rule let through, from the URL loading system's threads.
+private final class RangeLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: [LogsStub.Range] = []
+    var ranges: [LogsStub.Range] { lock.lock(); defer { lock.unlock() }; return held }
+    func add(_ range: LogsStub.Range) { lock.lock(); held.append(range); lock.unlock() }
 }
 
 /// A capability store in memory.

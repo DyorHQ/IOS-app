@@ -31,7 +31,7 @@ final class HistoryStoreTests: XCTestCase {
     private func router(concurrency: Int = 1) -> LogsRouter {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
-        return LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000)], session: URLSession(configuration: configuration),
+        return LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000, clamps: false)], session: URLSession(configuration: configuration),
                           gate: LogsGate(inFlight: 8, interval: .zero), concurrency: concurrency)
     }
 
@@ -73,8 +73,144 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(entry.logs.map(\.blockNumber), [150_000, 199_500, 202_000], "the log below the floor is dropped, the new one added")
         XCTAssertEqual(entry.unread, 0)
         let queries = LogsStub.queries()
-        XCTAssertEqual(queries.first?.from, 199_980, "the new blocks first, with the overlap")
+        XCTAssertEqual(queries.first?.from, 198_800, "the new blocks first, from 1,200 below the newest read")
         XCTAssertEqual(queries.first?.to, 203_000)
+        XCTAssertEqual(HistoryStore.overlap, 2 * LogsEndpoints.headLag)
+    }
+
+    /// The bug in build 22: a round's newest range answered by a node of a clamping endpoint hundreds of blocks behind
+    /// was marked read with the transfers past that node's head missing, and the next round read again only the 20
+    /// blocks below the newest read. Every round now reads again the 1,200 below it: a transfer such an answer left out
+    /// is found by the next round, at no request more.
+    func testTheNextRefreshReadsAgainWhatAClampedAnswerLeftOut() async {
+        // Round 1 read every block to the head, but its newest answer was short: the transfer at 199,500 is missing.
+        LogsStub.install(head: 200_000, logs: [transfer(at: 150_000)]) { _ in nil }
+        let store = HistoryStore(router: router(), directory: directory)
+        let first = await store.refresh(scan, wallet: wallet, budget: LogsBudget(requests: 5, seconds: 10))
+        XCTAssertTrue(first.complete)
+        XCTAssertEqual(first.logs.map(\.blockNumber), [150_000])
+
+        LogsStub.install(head: 200_300, logs: [transfer(at: 150_000), transfer(at: 199_500), transfer(at: 200_250)]) { _ in nil }
+        let entry = await HistoryStore(router: router(), directory: directory).refresh(scan, wallet: wallet, budget: LogsBudget(requests: 5, seconds: 10))
+        XCTAssertTrue(entry.complete)
+        XCTAssertEqual(entry.logs.map(\.blockNumber), [150_000, 199_500, 200_250], "found 500 blocks below the newest read")
+        XCTAssertEqual(LogsStub.queries(), [LogsStub.Range(from: 198_800, to: 200_300)], "one range, one request")
+        XCTAssertEqual(LogsStub.requests(), 2, "the head, and that request")
+    }
+
+    /// A router over an endpoint that refuses a range past its head (rpc2) and one that answers it clamped (rpc4): both
+    /// 10,000 blocks in batches of 6, so neither is waited for as the wider.
+    private func clampRouter() -> LogsRouter {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LogsStub.self]
+        return LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://refusing.logs-stub.invalid")!, span: 10_000, clamps: false),
+                                      LogsEndpoint(url: URL(string: "https://clamping.logs-stub.invalid")!, span: 10_000, clamps: true)],
+                          session: URLSession(configuration: configuration), gate: LogsGate(inFlight: 8, interval: .zero), concurrency: 4)
+    }
+
+    /// With the endpoint that refuses past its head down, a round reads every block on the clamping one but those within
+    /// 600 of the head, which it leaves unread — the history not complete, never a clamped answer taken for them — and,
+    /// the new blocks' read given half the round, a gap far below the head is read whole there (the round's head is the
+    /// router's, not the gap's end). Once the other answers again, the next round reads them, the transfer the clamping
+    /// node didn't have found.
+    func testWithTheEndpointThatRefusesPastItsHeadDownTheNewestBlocksStayUnread() async {
+        let logs = [transfer(at: 120_000), transfer(at: 199_000), transfer(at: 200_200)]
+        let refusingHost = "refusing.logs-stub.invalid", clampingHost = "clamping.logs-stub.invalid"
+        // Round 1, every endpoint up: one request, the newest 60,000 blocks.
+        LogsStub.install(head: 200_000, logs: logs) { _ in nil }
+        let one = await HistoryStore(router: clampRouter(), directory: directory).refresh(scan, wallet: wallet, budget: LogsBudget(requests: 1, seconds: 10))
+        XCTAssertEqual(one.covered, [140_001...200_000])
+
+        // Round 2, the endpoint that refuses past its head down, the head 500 blocks on, the clamping node at the old head.
+        LogsStub.install(head: 200_500, logs: logs, hostRule: { host, _ in host == refusingHost ? .noAnswer : nil }, clampedAt: [clampingHost: 200_000]) { _ in nil }
+        let two = await HistoryStore(router: clampRouter(), directory: directory).refresh(scan, wallet: wallet, budget: LogsBudget(requests: 40, seconds: 3))
+        XCTAssertFalse(two.complete)
+        XCTAssertEqual(two.covered, [100_500...200_000], "the gap below read whole; past round 1's head, nothing")
+        XCTAssertEqual(two.unread, 500)
+        XCTAssertEqual(two.logs.map(\.blockNumber), [120_000, 199_000])
+        let clamped = zip(LogsStub.queries(), LogsStub.hosts()).filter { $0.1 == clampingHost }.map(\.0)
+        XCTAssertTrue(clamped.contains { $0.to == 140_000 }, "the gap's own newest blocks, far below the head, read by the clamping endpoint")
+        XCTAssertTrue(clamped.allSatisfy { $0.to <= 199_900 }, "nothing within 600 of the head: \(clamped.filter { $0.to > 199_900 })")
+
+        // Round 3, every endpoint up again.
+        LogsStub.install(head: 200_500, logs: logs) { _ in nil }
+        let three = await HistoryStore(router: clampRouter(), directory: directory).refresh(scan, wallet: wallet, budget: LogsBudget(requests: 40, seconds: 10))
+        XCTAssertTrue(three.complete)
+        XCTAssertEqual(three.logs.map(\.blockNumber), [120_000, 199_000, 200_200])
+    }
+
+    /// The new blocks' read has half the round's seconds: with the endpoint that refuses past its head throttled, it stops
+    /// waiting for it at half the budget, and the gap far below the head is read in the half left. Given the round's whole
+    /// seconds it would have waited out one more rest (2 s, then 4, then 8: asked at 0, 2 and 6 s), the third ask within a
+    /// 10-second budget but not within 5 — so the endpoint is asked twice, never three times.
+    func testTheNewBlocksReadHasHalfTheRoundsSeconds() async {
+        let logs = [transfer(at: 120_000), transfer(at: 199_000)]
+        let refusingHost = "refusing.logs-stub.invalid"
+        LogsStub.install(head: 200_000, logs: logs) { _ in nil }
+        let one = await HistoryStore(router: clampRouter(), directory: directory).refresh(scan, wallet: wallet, budget: LogsBudget(requests: 1, seconds: 10))
+        XCTAssertEqual(one.covered, [140_001...200_000])
+
+        // The endpoint that refuses past its head throttled every time; the head 500 blocks on.
+        LogsStub.install(head: 200_500, logs: logs, hostRule: { host, _ in host == refusingHost ? .status(429) : nil }) { _ in nil }
+        let two = await HistoryStore(router: clampRouter(), directory: directory).refresh(scan, wallet: wallet, budget: LogsBudget(requests: 40, seconds: 10))
+        XCTAssertEqual(two.covered, [100_500...200_000], "the gap below read whole in the half left; past round 1's head, nothing")
+        XCTAssertEqual(two.unread, 500)
+        XCTAssertEqual(two.logs.map(\.blockNumber), [120_000, 199_000])
+        let refused = zip(LogsStub.queries(), LogsStub.hosts()).filter { $0.1 == refusingHost }.map(\.0)
+        XCTAssertEqual(refused.count, 2, "asked at 0 and 2 s: the third ask, at 6 s, past half the round's 10: \(refused)")
+    }
+
+    /// A gap within 600 of the head, read first when the new blocks' read didn't run (the entry read to the head already,
+    /// a hole near it), that no endpoint could take — only one that refuses past its head may, and there is none to ask —
+    /// never ends the round: the clamping endpoints still read the older gaps.
+    func testANearHeadGapNoEndpointCouldTakeNeverStopsTheOlderGaps() async throws {
+        // Read to the head, with a hole 300 to 550 below it and the older blocks unread.
+        let folder = directory.appendingPathComponent(wallet.hex.lowercased())
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stored = #"{"version":2,"query":"\#(scan.query.fingerprint)","covered":[[140001,199949],[200200,200500]],"head":200500,"headTimestamp":1,"floor":100500,"logs":[]}"#
+        try Data(stored.utf8).write(to: folder.appendingPathComponent("\(scan.id).json"))
+        LogsStub.install(head: 200_500, logs: [transfer(at: 120_000)]) { _ in nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LogsStub.self]
+        let clampingOnly = LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://clamping.logs-stub.invalid")!, span: 10_000, clamps: true)],
+                                      session: URLSession(configuration: configuration), gate: LogsGate(inFlight: 8, interval: .zero), concurrency: 4)
+        let entry = await HistoryStore(router: clampingOnly, directory: directory).refresh(scan, wallet: wallet, budget: LogsBudget(requests: 40, seconds: 10))
+        XCTAssertEqual(entry.covered, [100_500...199_949, 200_200...200_500], "the older gap read; the hole near the head left for an endpoint that refuses past it")
+        XCTAssertEqual(entry.logs.map(\.blockNumber), [120_000])
+        XCTAssertTrue(LogsStub.queries().allSatisfy { $0.to <= 199_900 }, "never a block within 600 of the head on the clamping endpoint")
+    }
+
+    /// A refresh asked after the wallet was forgotten never joins one from before: that one started from entries now gone
+    /// — a spot check that found the server's history wrong forgets the wallet and restarts the rounds at once — and gives
+    /// back what is held now, never what it started from. In the first cut a refresh asked after the erase joined it, and
+    /// was handed the forgotten logs.
+    func testARefreshAfterAnEraseNeverJoinsOneFromBefore() async throws {
+        let scan = HistoryScan(id: "s", query: LogsQuery(address: nil, topics: [transferTopic, nil, walletWord]), floor: .block(40_000))
+        LogsStub.install(head: 50_000, logs: [transfer(at: 45_000)]) { _ in nil }
+        let store = HistoryStore(router: router(), directory: directory)
+        let held = await store.refresh(scan, wallet: wallet, budget: LogsBudget(requests: 10, seconds: 10))
+        XCTAssertEqual(held.logs.map(\.blockNumber), [45_000])
+
+        // The next refresh waits on its new blocks; the wallet is forgotten meanwhile, and a refresh asked after it.
+        LogsStub.install(head: 50_300, logs: [transfer(at: 45_000), transfer(at: 50_200)], holding: { $0.contains(50_200) }) { _ in nil }
+        let before = Task { await store.refresh(scan, wallet: self.wallet, budget: LogsBudget(requests: 10, seconds: 10)) }
+        for _ in 0..<500 where LogsStub.held() == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(LogsStub.held(), 1)
+        await store.forget(wallet: wallet)
+        // The chain out of reach for it: what it gives back is what is held, and only that.
+        let after = Task { await store.refresh(scan, wallet: self.wallet, budget: LogsBudget(requests: 10, seconds: 10), at: nil) }
+        try await Task.sleep(for: .milliseconds(200))
+        LogsStub.release()
+        let fresh = await after.value
+        XCTAssertEqual(fresh.logs, [], "not the forgotten logs")
+        XCTAssertEqual(fresh.covered, [])
+        XCTAssertFalse(fresh.reachedChain, "its own read, not the one from before")
+        let old = await before.value
+        XCTAssertEqual(old.logs, [], "what is held now, never what it started from")
+        let kept = await store.cached(scan, wallet: wallet)
+        XCTAssertEqual(kept.logs, [])
+        XCTAssertEqual(kept.covered, [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(wallet.hex.lowercased()).path))
     }
 
     /// A chain that can't be reached moves nothing and says so; what was held stays.

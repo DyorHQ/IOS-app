@@ -71,11 +71,13 @@ enum AccountDeletion {
         NotificationHub.shared.clear()
         // Before the erase: a venue list save after it would turn App Lock's default off for the next launch (R4).
         env.venueList.stop()
-        // The wallet's history on disk, what was built from it, and whatever a round under way reads after this. The
+        // The wallet's history on disk, what was built from it, and whatever a round under way reads after this — what the
+        // server's history added with it, and the day of its spot check and its distrust (`ServerHistorySync.forget`). The
         // history's rounds stop first: none starts after the erase, nor keeps the reference beside the scans, while the
         // sign-out below waits on Privy.
         env.history.start(env: env, wallet: nil)
         await env.walletHistory.forget(wallet: account.address)
+        await env.serverHistory?.forget(wallet: account.address)
         await session.eraseLocalData()
         session.deletionNotice = notice
     }
@@ -151,9 +153,11 @@ enum AccountDeletion {
         env.perplTrading.forget(address: address)
         NotificationHub.shared.clear()
         env.venueList.stop()
-        // The history's rounds stop before its store is erased: none starts after it, nor writes beside the scans.
+        // The history's rounds stop before its store is erased: none starts after it, nor writes beside the scans. The
+        // server's history's spot check and distrust for the wallet go with it.
         env.history.start(env: env, wallet: nil)
         await env.walletHistory.forget(wallet: address)
+        await env.serverHistory?.forget(wallet: address)
         await session.eraseLocalData()
     }
 

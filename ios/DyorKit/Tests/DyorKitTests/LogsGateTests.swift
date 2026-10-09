@@ -172,7 +172,7 @@ final class LogsGateTests: XCTestCase {
     private func router(gate: LogsGate, concurrency: Int = 4) -> LogsRouter {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
-        return LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000)], session: URLSession(configuration: configuration),
+        return LogsRouter(endpoints: [LogsEndpoint(url: URL(string: "https://wide.logs-stub.invalid")!, span: 10_000, clamps: false)], session: URLSession(configuration: configuration),
                           gate: gate, concurrency: concurrency)
     }
 

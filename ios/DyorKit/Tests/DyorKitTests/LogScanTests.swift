@@ -619,6 +619,15 @@ final class LogScanTests: XCTestCase {
         let pastHead = RPCError(code: -32602, message: "block range extends beyond current head block")
         XCTAssertTrue(RPCClient.refusesPastHead(pastHead))
         XCTAssertFalse(RPCClient.refusesSize(pastHead))
+        // rpc2's (2026-10-09), the endpoint the newest blocks are read on, and an upstream's: past the head, never a failure
+        // counted against the range, nor a size.
+        for refusal in [RPCError(code: -32014, message: "block not available: block not found for eth_getLogs, requested toBlock 111739189 is not yet available on the node"),
+                        RPCError(code: -32014, message: "block not available"),
+                        RPCError(code: -32603, message: "ErrUpstreamBlockUnavailable: upstream does not have the requested block yet")] {
+            XCTAssertTrue(RPCClient.refusesPastHead(refusal), refusal.message)
+            XCTAssertFalse(RPCClient.refusesSize(refusal), refusal.message)
+        }
+        XCTAssertFalse(RPCClient.refusesPastHead(RPCError(code: -32000, message: "block not available")), "-32014's words alone, under another code")
         let other = [
             RPCError(code: -32603, message: "Internal error"),
             RPCError(code: -32000, message: "header not found"),
@@ -627,7 +636,10 @@ final class LogScanTests: XCTestCase {
             RPCError(code: -32602, message: "Invalid params"),
             RPCError(code: -1, message: "Malformed log response"),
         ]
-        for error in other { XCTAssertFalse(RPCClient.refusesSize(error), error.message) }
+        for error in other {
+            XCTAssertFalse(RPCClient.refusesSize(error), error.message)
+            XCTAssertFalse(RPCClient.refusesPastHead(error), error.message)
+        }
     }
 }
 
@@ -639,7 +651,11 @@ final class LogScanTests: XCTestCase {
 /// request (not an array) whose call is refused gets that HTTP status, the error still its body, as rpc1 sends a size
 /// refusal (400). With `answer`, a call other than the logs (a transaction, a receipt, a balance or a nonce at a block) is
 /// answered by the test, by the host asked. A log with a block timestamp is answered with it (`blockTimestamp`), as
-/// Monad's endpoints answer.
+/// Monad's endpoints answer. With `clampedAt`, a host whose node is behind the chain's head answers its own head, and a
+/// range past it CLAMPED, as rpc4, rpc3 and rpc1 answer one (measured 2026-10-08/09): the logs up to its node's head,
+/// those past it left out, with no error. With `refusingBatches`, a host answers any JSON array (a batch of any size) with
+/// HTTP 403 "Restricted JSON RPC method", as rpc1 does (2026-10-09); every request sent as an array is counted by host
+/// (`batchHosts()`).
 final class LogsStub: URLProtocol {
     struct Range: Hashable, Sendable {
         let from: UInt64
@@ -697,12 +713,17 @@ final class LogsStub: URLProtocol {
     nonisolated(unsafe) private static var holding: (@Sendable (Range) -> Bool)?
     nonisolated(unsafe) private static var waiting = 0
     private static let released = NSCondition()
+    /// By host: the head of the node answering it, behind the chain's (`clampedAt`).
+    nonisolated(unsafe) private static var nodeHeads: [String: UInt64] = [:]
+    /// Hosts answering any JSON array with HTTP 403 (`refusingBatches`), and the host of every request sent as one.
+    nonisolated(unsafe) private static var batchRefusers: Set<String> = []
+    nonisolated(unsafe) private static var batched: [String] = []
 
     /// `latency`: how long each request takes to answer, so requests sent together overlap (`maxInFlight()`). `logCap`: a
     /// range matching more logs is refused as rpc1 refuses one over its 10K, naming the range from its start that fits.
     static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, latency: TimeInterval = 0,
                         logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, answer: Answer? = nil,
-                        holding: (@Sendable (Range) -> Bool)? = nil, rule: @escaping Rule) {
+                        holding: (@Sendable (Range) -> Bool)? = nil, clampedAt: [String: UInt64] = [:], refusingBatches: Set<String> = [], rule: @escaping Rule) {
         released.lock()
         self.holding = holding
         released.broadcast()
@@ -718,6 +739,9 @@ final class LogsStub: URLProtocol {
         self.firstTransaction = firstTransaction
         self.rule = rule
         self.hostRule = hostRule
+        nodeHeads = clampedAt
+        batchRefusers = refusingBatches
+        batched = []
         failHead = false
         asked = []
         askedAddresses = []
@@ -725,6 +749,12 @@ final class LogsStub: URLProtocol {
         requestCount = 0
         inFlight = 0
         mostInFlight = 0
+    }
+
+    /// The host of every request sent as a JSON array (a batch), in order.
+    static func batchHosts() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return batched
     }
 
     /// The address each range in `queries()` asked for, in the same order.
@@ -796,6 +826,19 @@ final class LogsStub: URLProtocol {
         // Every call is recorded, even in a request that is to get no answer.
         var spent: UInt64 = 0
         let host = request.url?.host() ?? ""
+        // A batch, of any size, to a host that refuses one (rpc1): HTTP 403, the calls unread.
+        if decoded.array != nil {
+            Self.lock.lock(); Self.batched.append(host); let refused = Self.batchRefusers.contains(host); Self.lock.unlock()
+            if refused {
+                let response = HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+                // not localized: rpc1's own English, as it sends it
+                let body = #"{"jsonrpc":"2.0","id":null,"error":{"code":-32601,"message":"Restricted JSON RPC method"}}"#
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(body.utf8))
+                client?.urlProtocolDidFinishLoading(self)
+                return
+            }
+        }
         let answers = calls.map { Self.reply($0, host: host, spent: &spent) }
         let replies = answers.compactMap { $0 }
         guard replies.count == answers.count else {
@@ -839,7 +882,10 @@ final class LogsStub: URLProtocol {
         func error(_ code: Int, _ message: String) -> JSON {
             .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(Double(code)), "message": .string(message)])])
         }
-        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let hostRule = self.hostRule; let budget = batchSpan; let cap = logCap; let failHead = self.failHead; let answer = self.answer; lock.unlock()
+        lock.lock(); let chainHead = self.head; let logs = chainLogs; let rule = self.rule; let hostRule = self.hostRule; let budget = batchSpan; let cap = logCap; let failHead = self.failHead; let answer = self.answer; lock.unlock()
+        // A host whose node is behind answers its own head, and the logs up to it only (`clampedAt`).
+        lock.lock(); let nodeHead = nodeHeads[host]; lock.unlock()
+        let head = nodeHead ?? chainHead
         if let answer, let method = call["method"].string, method != "eth_getLogs", let value = answer(host, method, call["params"]) { return result(value) }
         switch call["method"].string {
         case "eth_getBlockByNumber":
@@ -877,8 +923,9 @@ final class LogsStub: URLProtocol {
                 if let list = position.array { return list.compactMap { $0.string.flatMap { Data(hex: $0) } } }
                 return nil
             }
+            // Clamped: a range past the node's head is answered up to it, the blocks past it left out with no error.
             let matching = logs.filter { log in
-                (addresses.isEmpty || addresses.contains(log.address)) && range.contains(log.blockNumber)
+                (addresses.isEmpty || addresses.contains(log.address)) && range.contains(log.blockNumber) && (nodeHead.map { log.blockNumber <= $0 } ?? true)
                     && topics.enumerated().allSatisfy { i, topic in topic == nil || (log.topics.indices.contains(i) && topic!.contains(log.topics[i])) }
             }
             if let cap, matching.count > cap {

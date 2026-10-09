@@ -3,7 +3,8 @@ import XCTest
 
 /// The owner's remote switches (`RemoteFlags`): the optional `flags` of the public `app_config` row 'ios', read with the
 /// minimum build. Each is on unless the row says JSON `false` for it, so nothing is written to production to ship, and a
-/// row that is missing, malformed or mistyped never turns a feature off.
+/// row that is missing, malformed or mistyped never turns a feature off — the server's history included (the owner's
+/// decision, 2026-10-09). The history epoch is a whole number from 0, anything else 0.
 final class RemoteFlagsTests: XCTestCase {
     private let base = "https://fmnjqrguvopusfufmirs.supabase.co"
     private lazy var backend = SupabaseClient(url: URL(string: base)!, anonKey: "sb_publishable_test", session: WalletAuthCapture.session())
@@ -18,6 +19,7 @@ final class RemoteFlagsTests: XCTestCase {
     /// Absent: the row as it is today (no `flags`), no row at all, or a switch left out — every switch on.
     func testAbsentIsOn() {
         XCTAssertEqual(RemoteFlags.on, RemoteFlags(dyorVenuePrices: true, dyorBadges: true))
+        XCTAssertEqual(RemoteFlags.on, RemoteFlags(dyorVenuePrices: true, dyorBadges: true, serverHistory: true, historyEpoch: 0))
         XCTAssertEqual(parse(#"[{"value":{"min_build":16}}]"#), .on, "today's row")
         XCTAssertEqual(parse(#"[]"#), .on, "no row")
         XCTAssertEqual(parse(#"[{"value":{"min_build":16,"flags":{}}}]"#), .on, "no switch named")
@@ -30,13 +32,48 @@ final class RemoteFlagsTests: XCTestCase {
         XCTAssertEqual(parse(#"[{"value":{"min_build":16,"flags":{"dyorVenuePrices":false,"dyorBadges":true}}}]"#), RemoteFlags(dyorVenuePrices: false, dyorBadges: true))
         XCTAssertEqual(parse(#"[{"value":{"min_build":16,"flags":{"dyorVenuePrices":true,"dyorBadges":false}}}]"#), RemoteFlags(dyorVenuePrices: true, dyorBadges: false))
         XCTAssertEqual(parse(#"[{"value":{"flags":{"dyorVenuePrices":false,"dyorBadges":false}}}]"#), RemoteFlags(dyorVenuePrices: false, dyorBadges: false))
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"serverHistory":false}}}]"#), RemoteFlags(serverHistory: false), "the server's history off, the rest on")
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"serverHistory":true,"historyEpoch":2}}}]"#), RemoteFlags(serverHistory: true, historyEpoch: 2))
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"dyorBadges":false,"historyEpoch":7}}}]"#), RemoteFlags(dyorBadges: false, historyEpoch: 7), "the switch left out stays on")
+    }
+
+    /// The server's history is on unless the row says JSON `false`, like every switch (the owner's decision, against the
+    /// contract's opt-in): the server has its own instant switch, and the app fails open.
+    func testTheServersHistoryIsOnUnlessTheRowTurnsItOff() {
+        XCTAssertTrue(RemoteFlags.on.serverHistory)
+        XCTAssertTrue(parse(#"[{"value":{"min_build":16}}]"#).serverHistory, "today's row")
+        XCTAssertTrue(parse(#"[{"value":{"flags":{}}}]"#).serverHistory)
+        for value in ["true", #""false""#, "0", "null", "{}", "[]"] {
+            XCTAssertTrue(parse(#"[{"value":{"flags":{"serverHistory":\#(value)}}}]"#).serverHistory, value)
+        }
+        XCTAssertFalse(parse(#"[{"value":{"flags":{"serverHistory":false}}}]"#).serverHistory)
+    }
+
+    /// The history epoch: a whole number from 0 to 2^31 - 1 as given (JSON has no integers apart: 3.0 is 3); anything
+    /// else — a fraction, a negative, a string, a boolean, null, too large, left out — 0.
+    func testTheHistoryEpochIsAWholeNumberElseZero() {
+        func epoch(_ value: String) -> Int { parse(#"[{"value":{"flags":{"historyEpoch":\#(value)}}}]"#).historyEpoch }
+        XCTAssertEqual(epoch("0"), 0)
+        XCTAssertEqual(epoch("1"), 1)
+        XCTAssertEqual(epoch("42"), 42)
+        XCTAssertEqual(epoch("3.0"), 3)
+        XCTAssertEqual(epoch("1e2"), 100)
+        XCTAssertEqual(epoch("2147483647"), 2_147_483_647)
+        XCTAssertEqual(RemoteFlags.largestEpoch, 2_147_483_647)
+        for value in ["2147483648", "1e20", "-1", "-0.5", "2.5", #""3""#, "true", "false", "null", "[3]", #"{"n":3}"#] {
+            XCTAssertEqual(epoch(value), 0, value)
+        }
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"serverHistory":false}}}]"#).historyEpoch, 0, "left out")
+        XCTAssertEqual(parse("not json").historyEpoch, 0)
+        // The switches beside it stay as the row says.
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"historyEpoch":"9","dyorVenuePrices":false}}}]"#), RemoteFlags(dyorVenuePrices: false, historyEpoch: 0))
     }
 
     /// Malformed is on: a value that isn't JSON true or false, a `flags` that isn't an object, a body that isn't the
     /// row's answer.
     func testMalformedIsOn() {
         for value in [#""false""#, "0", "1", "null", "[]", "{}", #""off""#, "-1"] {
-            XCTAssertEqual(parse(#"[{"value":{"flags":{"dyorVenuePrices":\#(value),"dyorBadges":\#(value)}}}]"#), .on, value)
+            XCTAssertEqual(parse(#"[{"value":{"flags":{"dyorVenuePrices":\#(value),"dyorBadges":\#(value),"serverHistory":\#(value)}}}]"#), .on, value)
         }
         for flags in [#""dyorVenuePrices""#, "false", "[false]", "null", "7"] {
             XCTAssertEqual(parse(#"[{"value":{"min_build":16,"flags":\#(flags)}}]"#), .on, flags)
@@ -65,8 +102,10 @@ final class RemoteFlagsTests: XCTestCase {
 
     /// The app applies them: the gate reads them with the minimum (a failed read keeps what it had), the environment
     /// turns DyorHQ venue prices on at launch and hands the switch to the price service in order, and the DyorHQ labels'
-    /// switch is applied in the one place every label comes from. The price service has the registry and the session's
-    /// one clock, which every service that shows a time shares.
+    /// switch is applied in the one place every label comes from. The server's history's switch goes to the history model
+    /// and its epoch to the store, in order and whatever the switch says, both kept for the next launch and applied from
+    /// it before the flags are read again. The price service has the registry and the session's one clock, which every
+    /// service that shows a time shares.
     func testTheAppAppliesTheSwitches() throws {
         let gate = try DocsLinksTests.appSource("App/UpdateGate.swift")
         XCTAssertTrue(gate.contains("guard let config = try? await client.iosAppConfig() else { return }\n        flags = config.flags\n        onFlags?(config.flags)"))
@@ -85,6 +124,23 @@ final class RemoteFlagsTests: XCTestCase {
                      "updateGate.onFlags = { [weak self] flags in self?.apply(flags) }",
                      "dyorCoins.showsDyorBadges = flags.dyorBadges",
                      "await previous?.value\n            await prices.setUsesDyorVenues(flags.dyorVenuePrices)"] {
+            XCTAssertTrue(environment.contains(part), part)
+        }
+        // The server's history: the switch and the epoch from each read of the flags, kept for the next launch; the epoch
+        // applied to the store in the order read, outside any test of the switch, and the rounds started over when it
+        // dropped an entry.
+        let apply = try XCTUnwrap(environment.range(of: "    func apply(_ flags: RemoteFlags) {"))
+        let applyEnd = try XCTUnwrap(environment.range(of: "\n    }\n", range: apply.upperBound..<environment.endIndex))
+        let applied = String(environment[apply.upperBound..<applyEnd.lowerBound])
+        for part in ["serverHistoryDefaults.keep(flags)\n        history.setServerHistory(flags.serverHistory)",
+                     "epochSwitch = Task { [weak self, historyStore] in\n            await previousEpoch?.value\n            let reset = await historyStore.apply(epoch: flags.historyEpoch)\n            guard reset > 0, let self else { return }\n            history.epochReset(env: self)"] {
+            XCTAssertTrue(applied.contains(part), part)
+        }
+        XCTAssertFalse(applied.contains("if flags.serverHistory"), "the epoch applies with the switch off too")
+        XCTAssertFalse(applied.contains("guard flags.serverHistory"), "the epoch applies with the switch off too")
+        for part in ["let keptSwitches = serverHistoryDefaults.kept\n        historyStore = HistoryStore(router: logsRouter, directory: historyDirectory, epoch: keptSwitches.historyEpoch)",
+                     "history.setServerHistory(keptSwitches.serverHistory)",
+                     "serverHistory = isFork || !config.hasSupabase ? nil\n            : ServerHistorySync(client: HistoryServerClient(supabase: social.client), history: walletHistory, router: logsRouter, defaults: serverHistoryDefaults)"] {
             XCTAssertTrue(environment.contains(part), part)
         }
         XCTAssertEqual(environment.components(separatedBy: "BlockClock(").count - 1, 1, "one clock")

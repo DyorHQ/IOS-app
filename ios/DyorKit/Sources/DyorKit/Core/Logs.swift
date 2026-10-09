@@ -712,12 +712,18 @@ public extension RPCClient {
 
     /// Whether an `eth_getLogs` error refuses the range for ending past the head of the node that answered it — rpc1's
     /// "block range extends beyond current head block" (-32602, probed 2026-09-30), which `refusesSize` would otherwise
-    /// take for a size refusal ("block range") and split — rather than for its size: a smaller range from the same start
-    /// ends there too, and the node reaches it in a moment, so it is asked again first (`LogsAnswer.pastHead`).
+    /// take for a size refusal ("block range") and split; rpc2's "block not available: block not found for eth_getLogs,
+    /// requested toBlock … is not yet available on the node" (-32014, 2026-10-09), and an upstream's
+    /// "ErrUpstreamBlockUnavailable", which read as failures, counted against the range — rather than for its size: a
+    /// smaller range from the same start ends there too, and the node reaches it in a moment, so it is asked again first
+    /// (`LogsAnswer.pastHead`). rpc2 is the endpoint the newest blocks are read on (`LogsEndpoint.clamps`): its refusal
+    /// taken for a failure left them a gap after three asks in a row, a node a few blocks behind the head.
     internal static func refusesPastHead(_ error: RPCError) -> Bool {
         let message = error.message.lowercased()
         // not localized: the endpoint's own English, matched as it sends it
         return message.contains("beyond current head") || message.contains("beyond the current head")
+            || message.contains("not yet available on the node") || message.contains("errupstreamblockunavailable")
+            || (error.code == -32014 && message.contains("block not available"))
     }
 
     /// A range refused — for its size, past the node's head, or, patient, for any reason (`answer`) — read in parts down

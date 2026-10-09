@@ -25,13 +25,14 @@ final class NewestFirstScanTests: XCTestCase {
     }
 
     /// A client on a logs router (mainnet's path) over stub endpoints: one answering 10,000 blocks in batches of 6, one
-    /// 1,000 a request. A patient scan's 80 requests read 4.8M blocks.
+    /// 1,000 a request, both refusing a range past their head (an endpoint that clamps is `LogsRouterTests`'). A patient
+    /// scan's 80 requests read 4.8M blocks.
     private func routed() -> RPCClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LogsStub.self]
         let session = URLSession(configuration: configuration)
-        let router = LogsRouter(endpoints: [LogsEndpoint(url: Self.wide, span: 10_000), LogsEndpoint(url: Self.narrow, span: 1_000, batch: 1)], session: session,
-                                gate: LogsGate(inFlight: 8, interval: .zero))
+        let router = LogsRouter(endpoints: [LogsEndpoint(url: Self.wide, span: 10_000, clamps: false), LogsEndpoint(url: Self.narrow, span: 1_000, batch: 1, clamps: false)],
+                                session: session, gate: LogsGate(inFlight: 8, interval: .zero))
         return RPCClient(logsRouter: router, session: session)
     }
 
