@@ -96,18 +96,19 @@ final class RemoteFlagsTests: XCTestCase {
             XCTAssertTrue(parse(body).perpsLiveOutcome, body)
             XCTAssertTrue(parse(body).perpsApiActions, body)
         }
-        let names = ["dyorVenuePrices", "dyorBadges", "perpsLiveOutcome", "perpsApiActions"]
+        let names = ["dyorVenuePrices", "dyorBadges", "perpsLiveOutcome", "perpsApiActions", "serverHistory"]
         for name in names {
             for value in [#""true""#, "true", "1", "0", "null", "{}", "[]", #""yes""#, #""false""#] {
                 XCTAssertEqual(parse(#"[{"value":{"flags":{"\#(name)":\#(value)}}}]"#), .on, "\(name): \(value)")
             }
         }
-        // False only for JSON `false`, and each on its own: turning one off leaves the other three on.
+        // False only for JSON `false`, and each on its own: turning one off leaves the other four on, and the epoch 0.
         let off = names.map { parse(#"[{"value":{"flags":{"\#($0)":false}}}]"#) }
         XCTAssertEqual(off[0], RemoteFlags(dyorVenuePrices: false, dyorBadges: true, perpsLiveOutcome: true, perpsApiActions: true))
         XCTAssertEqual(off[1], RemoteFlags(dyorVenuePrices: true, dyorBadges: false, perpsLiveOutcome: true, perpsApiActions: true))
         XCTAssertEqual(off[2], RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: false, perpsApiActions: true))
         XCTAssertEqual(off[3], RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: true, perpsApiActions: false))
+        XCTAssertEqual(off[4], RemoteFlags(serverHistory: false))
         XCTAssertEqual(parse(#"[{"value":{"flags":{"perpsLiveOutcome":true,"perpsApiActions":false}}}]"#),
                        RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: true, perpsApiActions: false))
         XCTAssertEqual(parse(#"[{"value":{"min_build":16,"flags":{"dyorBadges":false,"perpsLiveOutcome":false}}}]"#),
