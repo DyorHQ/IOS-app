@@ -2,7 +2,8 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// Remote images load a few at a time, and a load every viewer left is cancelled (security audit 2026-09-26, RI-5).
+/// Remote images load a few at a time (security audit 2026-09-26, RI-5). A load every viewer left is cancelled unless a
+/// trusted download is under way: `ImagePipelineTests`.
 final class MediaLoadingTests: XCTestCase {
     private final class Gauge: @unchecked Sendable {
         private let lock = NSLock()
@@ -53,48 +54,23 @@ final class MediaLoadingTests: XCTestCase {
         XCTAssertEqual(next, 2)
     }
 
-    @MainActor
-    func testOneLoadIsSharedAndCancelledWhenEveryoneLeaves() async throws {
-        let loads = SharedLoads<Int>()
-        let starts = Gauge()
-        let gate = AsyncStream<Void>.makeStream()
-        let start: @Sendable () async -> Int? = {
-            starts.enter()
-            for await _ in gate.stream { return 7 }
-            return nil // cancelled: the stream finished
-        }
-        // Two viewers, one load.
-        let a = Task { @MainActor in await loads.value(for: "k", start: start) }
-        let b = Task { @MainActor in await loads.value(for: "k", start: start) }
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(starts.peak, 1)
-        XCTAssertEqual(loads.count, 1)
-        gate.continuation.yield()
-        let (va, vb) = (await a.value, await b.value)
-        XCTAssertEqual(va, 7)
-        XCTAssertEqual(vb, 7)
-        XCTAssertEqual(loads.count, 0, "finished and forgotten")
-
-        // Every viewer leaves: the load is cancelled and forgotten, so the next viewer starts afresh.
-        let slow = SharedLoads<Int>()
-        let sawCancel = Gauge()
-        let blocked: @Sendable () async -> Int? = {
-            do { try await Task.sleep(for: .seconds(30)) } catch { sawCancel.enter() }
-            return nil
-        }
-        let c = Task { @MainActor in await slow.value(for: "k", start: blocked) }
-        let d = Task { @MainActor in await slow.value(for: "k", start: blocked) }
-        try await Task.sleep(for: .milliseconds(50))
-        c.cancel()
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(slow.count, 1, "one viewer is still waiting")
-        XCTAssertEqual(sawCancel.peak, 0)
-        d.cancel()
-        _ = await c.value
-        _ = await d.value
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(sawCancel.peak, 1, "the load itself was cancelled")
-        XCTAssertEqual(slow.count, 0)
+    /// The limiter says how many wait their turn: what the image pipeline's tests watch to see a request still queued.
+    func testTheLimiterCountsThoseWaiting() async throws {
+        let limiter = AsyncLimiter(1)
+        let release = AsyncStream<Void>.makeStream()
+        let holding = TestGate()
+        let holder = Task { try await limiter.run { holding.open(); for await _ in release.stream { break }; return 0 } }
+        await eventually("the holder has the slot") { holding.isOpen }
+        let waiters = (1...2).map { value in Task { try await limiter.run { value } } }
+        await eventually("both wait") { await limiter.queued == 2 }
+        waiters[0].cancel()
+        await eventually("a cancelled waiter leaves") { await limiter.queued == 1 }
+        release.continuation.yield()
+        _ = try await holder.value
+        let second = try await waiters[1].value
+        XCTAssertEqual(second, 2)
+        let left = await limiter.queued
+        XCTAssertEqual(left, 0)
     }
 
     // MARK: How a logo waits
@@ -112,6 +88,27 @@ final class MediaLoadingTests: XCTestCase {
         // A moment: long enough for a live host, far short of a dead one's 15 s.
         XCTAssertGreaterThanOrEqual(Wait.grace, .milliseconds(500))
         XCTAssertLessThanOrEqual(Wait.grace, .seconds(1))
+    }
+
+    /// A view draws the image it holds only for the picture it belongs to; given another picture, that picture from
+    /// memory at once (whatever it held — an image or none), else nothing (its placeholder). Its stand-in shows for the
+    /// picture it gave up on, one with no source, or one that failed lately — never because the last picture failed.
+    func testAViewDrawsAndGivesUpOnlyForThePictureItIsGiven() {
+        typealias Wait = RemoteImageWait
+        XCTAssertEqual(Wait.drawn(held: "a", heldKey: "A", key: "A") { "memory" }, "a")
+        XCTAssertNil(Wait.drawn(held: nil, heldKey: "A", key: "A") { "memory" } as String?, "its own picture: what it holds")
+        XCTAssertEqual(Wait.drawn(held: "a", heldKey: "A", key: "B") { "b" }, "b", "another picture, from memory")
+        XCTAssertEqual(Wait.drawn(held: nil, heldKey: nil, key: "B") { "b" }, "b", "even when it held no image")
+        XCTAssertNil(Wait.drawn(held: "a", heldKey: "A", key: "B") { nil }, "never the last picture's")
+
+        XCTAssertTrue(Wait.failed(failedKey: "A", key: "A", hasURL: true) { false })
+        XCTAssertFalse(Wait.failed(failedKey: "A", key: "B", hasURL: true) { false }, "the last picture's failure isn't this one's")
+        XCTAssertTrue(Wait.failed(failedKey: nil, key: "B", hasURL: true) { true }, "failed lately")
+        XCTAssertTrue(Wait.failed(failedKey: nil, key: "B", hasURL: false) { false }, "nothing to load")
+        XCTAssertFalse(Wait.failed(failedKey: nil, key: "B", hasURL: true) { false })
+        // The spinner's wait: a picture from the phone arrives within it; a slow network doesn't.
+        XCTAssertGreaterThanOrEqual(Wait.spinnerDelay, .milliseconds(150))
+        XCTAssertLessThanOrEqual(Wait.spinnerDelay, .milliseconds(250))
     }
 
     func testTheGracePeriodEndsUnlessTheViewLeavesFirst() async {
@@ -134,6 +131,9 @@ final class MediaLoadingTests: XCTestCase {
         XCTAssertTrue(misses.contains("a", now: start))
         XCTAssertTrue(misses.contains("a", now: start + 59.9))
         XCTAssertFalse(misses.contains("a", now: start + 60), "asked again after a minute")
+        XCTAssertEqual(misses.remaining("a", now: start + 15) ?? 0, 45, accuracy: 0.001, "how long until it may be asked again")
+        XCTAssertNil(misses.remaining("a", now: start + 60))
+        XCTAssertNil(misses.remaining("never", now: start))
         XCTAssertFalse(misses.contains("b", now: start))
         misses.record("b", at: start + 30)
         misses.remove("b")

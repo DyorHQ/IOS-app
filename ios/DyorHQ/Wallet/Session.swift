@@ -641,11 +641,13 @@ final class Session {
         for itemClass in [kSecClassGenericPassword, kSecClassInternetPassword, kSecClassKey] {
             SecItemDelete([kSecClass as String: itemClass] as CFDictionary)
         }
-        // Every picture this device loaded, in memory and on disk: nothing on this phone shows which coins it looked at
-        // once the account is gone.
+        // Every picture this device loaded, in memory and on disk (the image pipeline's Caches folder, taken away at once,
+        // and nothing a load under way finishes is kept): nothing on this phone shows which coins it looked at once the
+        // account is gone.
         RemoteImageLoader.shared.removeAll()
-        MomentMediaLoader.shared.removeAll()
         URLCache.shared.removeAllCachedResponses()
+        // Kuru's logo directory, kept for a day: public and the same on every phone, but a new install has none.
+        KuruTokenListClient.removeSavedLogos()
         lastError = nil
         state = .signedOut
     }

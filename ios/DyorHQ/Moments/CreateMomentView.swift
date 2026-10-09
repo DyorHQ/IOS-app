@@ -38,6 +38,8 @@ struct CreateMomentView: View {
     /// The locally picked photo (or a video's poster frame), shown as the preview immediately — an IPFS gateway can
     /// take a while to serve a freshly pinned CID, so we never wait on the network to show the user their own media.
     @State private var previewImage: UIImage?
+    /// The preview's side, in points: a picked photo's preview is decoded for it (off the main thread), not at full size.
+    private static let previewSide: CGFloat = 84
     /// The `mediaURI` value the picker upload itself set. The "invalidate on edit" onChange compares against it so the
     /// picker's own write (mediaURI → the pinned ipfs:// CID) is never mistaken for a manual edit and doesn't wipe the
     /// upload's fingerprint / mirror / preview.
@@ -273,7 +275,7 @@ struct CreateMomentView: View {
                             .shadow(radius: 3)
                     }
                 }
-                .frame(width: 84, height: 84)
+                .frame(width: Self.previewSide, height: Self.previewSide)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 VStack(alignment: .leading, spacing: 6) {
                     PhotosPicker(selection: $photoItem, matching: .any(of: [.images, .videos])) {
@@ -425,14 +427,25 @@ struct CreateMomentView: View {
                 mediaHash = videoHash
                 await pin(MediaPins(image: posterUpload, video: videoUpload))
             } else {
-                guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data), let jpeg = image.avatarJPEG(maxDimension: 4096, quality: 0.92) else {
+                // The photo is encoded once, here, at `MomentsMath.photoMaxPixels` and `photoJPEGQuality`, and these bytes
+                // are the Moment's provenance file: their keccak-256 goes on chain, names the mirror and is what gets
+                // pinned. Decoding the pick, drawing it at that size, encoding and hashing it — and the form's small preview
+                // of the very bytes that will be published — all run off the main thread, so the form never stalls.
+                let previewBucket = ImageSizeBucket.bucket(points: Self.previewSide)
+                guard let data = try await item.loadTransferable(type: Data.self),
+                      let photo = await Task.detached(priority: .userInitiated, operation: { () -> (jpeg: Data, hash: Data, preview: CGImage?)? in
+                          guard let jpeg = UIImage(data: data)?.avatarJPEG(maxDimension: CGFloat(MomentsMath.photoMaxPixels), quality: CGFloat(MomentsMath.photoJPEGQuality)),
+                                let size = try? RemoteMedia.inspect(jpeg) else { return nil }
+                          let preview = try? RemoteMedia.thumbnail(jpeg, maxPixelSize: ImageSizeBucket.coverPixelSize(bucket: previewBucket, width: size.width, height: size.height))
+                          return (jpeg, Keccak.hash256(jpeg), preview)
+                      }).value else {
                     imageError = tr("That photo could not be read.")
                     return
                 }
-                previewImage = image; isVideo = false // show the picked photo immediately, before the pin returns
-                let photoUpload = try await social.uploadMomentMedia(jpeg, contentType: "image/jpeg", fileExtension: "jpg")
+                previewImage = photo.preview.map { UIImage(cgImage: $0) }; isVideo = false // show the photo as it will be published, before the pin returns
+                let photoUpload = try await social.uploadMomentMedia(photo.jpeg, contentType: "image/jpeg", fileExtension: "jpg", name: MomentsMath.mediaName(hash: photo.hash))
                 mediaMirror = photoUpload.mirror.absoluteString
-                mediaHash = Keccak.hash256(jpeg)
+                mediaHash = photo.hash
                 await pin(MediaPins(image: photoUpload, video: nil))
             }
             if unpinned == nil { Haptics.success() }
@@ -472,7 +485,7 @@ struct CreateMomentView: View {
     }
 
     /// A photo whose pin failed, published with DyorHQ's https copy instead — only when the user chooses it. The app
-    /// shows that copy only while its bytes still match the on-chain fingerprint (`MomentMediaLoader.imageSources`).
+    /// shows that copy only while its bytes still match the on-chain fingerprint (`MomentArtwork.imageSources`).
     /// Not offered for a video: its cover frame can't be checked against the video's fingerprint.
     private func useMirror() {
         guard let pins = unpinned, pins.video == nil else { return }

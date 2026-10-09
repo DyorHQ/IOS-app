@@ -174,7 +174,7 @@ struct Avatar: View {
         Group {
             if let url {
                 RemoteImage(url: url, pointSize: size) { loading in
-                    if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
+                    if loading { ZStack { Color(.tertiarySystemFill); ImageLoadingSpinner() } } else { placeholder }
                 }
             } else {
                 placeholder

@@ -696,11 +696,14 @@ final class MemoryStore: @unchecked Sendable {
     }
 }
 
-/// A clock a test moves by hand.
+/// A clock a test moves by hand, from `start`; `read` is it as the `now` closure the code under test takes.
 final class TestClock: @unchecked Sendable {
+    let start = Date(timeIntervalSince1970: 1_790_000_000)
     private let lock = NSLock()
-    private var date = Date(timeIntervalSince1970: 1_790_000_000)
+    private var date: Date
+    init() { date = start }
     var now: Date { lock.lock(); defer { lock.unlock() }; return date }
+    var read: @Sendable () -> Date { { [self] in now } }
     func advance(_ seconds: TimeInterval) { lock.lock(); date += seconds; lock.unlock() }
 }
 

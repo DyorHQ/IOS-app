@@ -205,29 +205,70 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertTrue(model.contains("Set(await registry.coins(createdBy: owner).map(\\.address))"), "the coins the factories record it made")
     }
 
-    /// Deleting the account (or this device's data) clears every image cache — the logo loader's, the Moments loader's
-    /// and URLCache's, on disk — and deletes the registry's file, before the sign-out. The registry's erase (a hop to its
-    /// actor) runs before the wipe of the settings, so nothing suspends between the wipe and the sign-out: a Home load in
-    /// flight can't resume for the erased wallet and write its token keys back.
+    /// Deleting the account (or this device's data) clears every image cache — the one image pipeline's, in memory and
+    /// its folder in Caches, its warm-ups cancelled (synchronously: `ImagePipelineTests` erases it), and URLCache's, on
+    /// disk — and Kuru's saved logo directory, and deletes the registry's file, before the sign-out. The registry's erase
+    /// (a hop to its actor) runs before the wipe of the settings, so nothing suspends between the wipe and the sign-out: a
+    /// Home load in flight can't resume for the erased wallet and write its token keys back.
     func testErasingThisDeviceClearsTheImageCachesAndTheRegistry() throws {
         let session = try Self.source("Wallet/Session.swift")
         let erase = try Self.between(session, "func eraseLocalData() async {", "private var relyingParty")
         let signedOut = try XCTUnwrap(erase.range(of: "state = .signedOut"))
-        for step in ["RemoteImageLoader.shared.removeAll()", "MomentMediaLoader.shared.removeAll()", "URLCache.shared.removeAllCachedResponses()",
+        for step in ["RemoteImageLoader.shared.removeAll()", "URLCache.shared.removeAllCachedResponses()", "KuruTokenListClient.removeSavedLogos()",
                      "await dyorCoins?.erase()"] {
             let found = try XCTUnwrap(erase.range(of: step), step)
             XCTAssertLessThan(found.upperBound, signedOut.lowerBound, step)
         }
+        // One pipeline for every picture, Moments' included, with its disk cache in Caches: no other image cache to forget.
+        let files = try Self.sources()
+        for file in files {
+            XCTAssertFalse(file.text.contains("MomentMediaLoader"), file.path)
+            XCTAssertFalse(file.text.contains("NSCache<"), "\(file.path): images are cached by the pipeline alone")
+            XCTAssertFalse(file.text.contains("ImagePipeline(") && file.path != "Design/RemoteImage.swift", "\(file.path): one pipeline")
+        }
+        XCTAssertTrue(try Self.source("Design/RemoteImage.swift").contains("@MainActor static let shared = ImagePipeline(policy: .app, directory: ImageDiskCache.defaultDirectory)"))
         let wipe = try XCTUnwrap(erase.range(of: "WatchOnlyStore.clear()"))
         XCTAssertLessThan(try XCTUnwrap(erase.range(of: "await dyorCoins?.erase()")).upperBound, wipe.lowerBound, "the registry before the wipe")
         XCTAssertFalse(erase[wipe.lowerBound..<signedOut.lowerBound].contains("await"), "no suspension between the wipe and the sign-out")
         XCTAssertTrue(try Self.source("App/AppEnvironment.swift").contains("session.dyorCoins = dyorCoins"))
         let model = try Self.source("App/DyorCoinsModel.swift")
         XCTAssertTrue(try Self.between(model, "func erase() async {", "extension ImageSourcePolicy").contains("await registry.erase() coins = [:]"))
-        let images = try Self.source("Design/RemoteImage.swift")
-        XCTAssertTrue(try Self.between(images, "func removeAll() {", "static func cost(").contains("images.removeAllObjects() misses = RecentMisses()"))
-        let moments = try Self.source("Moments/MomentsUI.swift")
-        XCTAssertTrue(try Self.between(moments, "func removeAll() {", "func load(key:").contains("images.removeAllObjects() misses = [:]"))
+        // The pipeline's erase is synchronous and takes everything: the epoch first (nothing a load under way finishes is
+        // kept), memory, the fetched bytes, both kinds of miss, every warm-up (cancelled, queued or under way), and the
+        // folder.
+        let pipeline = Self.squeezed(try String(contentsOf: try Self.app().deletingLastPathComponent()
+            .appendingPathComponent("DyorKit/Sources/DyorKit/Core/ImagePipeline.swift"), encoding: .utf8))
+        XCTAssertTrue(pipeline.contains("public func removeAll() { epoch.advance() memory.removeAllObjects() bytes.removeAllObjects() "
+            + "misses = RecentMisses() prefetchMisses = RecentMisses() for warming in prefetching.values { warming.task.cancel() } prefetching = [:] "
+            + "if let directory = disk.directory { ImageDiskCache.discardFiles(at: directory) } }"))
+    }
+
+    /// The image pipeline's disk index is read as the app starts, off the main thread, so pictures kept on the phone paint
+    /// on a cold launch without waiting behind it; a new avatar is drawn from the bytes just uploaded, under the very link
+    /// the profile shows; and a picture with no letters to stand in for it waits a moment before its spinner, so one kept
+    /// on the phone never flashes one.
+    func testPicturesKeptOrJustUploadedPaintWithoutASpinner() throws {
+        let app = Self.squeezed(try Self.source("App/DyorHQApp.swift"))
+        XCTAssertTrue(app.contains("Notifications.configure() // The image cache's index is read off the main thread now, before the first screen asks it for a picture. RemoteImageLoader.shared.prepare() return true"))
+        let social = Self.squeezed(try Self.source("Social/SocialSession.swift"))
+        let upload = try Self.between(social, "func uploadAvatar(jpeg: Data) async throws {", "/// A public DyorHQ profile row.")
+        let seeded = try XCTUnwrap(upload.range(of: "if let shown = URL(string: updated.avatar_url ?? cacheBusted) { RemoteImageLoader.shared.seed(jpeg, for: [RemoteImageSource(url: shown)]) }"))
+        XCTAssertLessThan(seeded.upperBound, try XCTUnwrap(upload.range(of: "profile = updated")).lowerBound, "seeded before the profile shows the new link")
+        for path in ["Design/Components.swift", "Moments/MomentsUI.swift", "Launchpad/LaunchpadView.swift"] {
+            XCTAssertTrue(try Self.source(path).contains("if loading { ZStack { Color(.tertiarySystemFill); ImageLoadingSpinner() } } else { placeholder }"), path)
+        }
+        XCTAssertTrue(try Self.source("Portfolio/AssetsModel.swift").contains("if loading { ImageLoadingSpinner() } else { Image(systemName: \"photo\").foregroundStyle(.secondary) }"))
+        for file in try Self.sources() where file.text.contains("RemoteImage(") {
+            XCTAssertFalse(Self.squeezed(file.text).contains("if loading { ProgressView()"), "\(file.path): a spinner at once")
+            XCTAssertFalse(Self.squeezed(file.text).contains("if loading { ZStack { Color(.tertiarySystemFill); ProgressView()"), "\(file.path): a spinner at once")
+        }
+        let image = Self.squeezed(try Self.source("Design/RemoteImage.swift"))
+        XCTAssertTrue(image.contains(".task { if await RemoteImageWait.graceElapses(RemoteImageWait.spinnerDelay) { spinning = true } }"))
+        // The first frame: this picture's from memory whatever the view held; the stand-in only for this picture.
+        XCTAssertTrue(image.contains("RemoteImageWait.drawn(held: image, heldKey: imageKey, key: key) { RemoteImageLoader.shared.memoryImage(sources, bucket: bucket)?.image }"))
+        XCTAssertTrue(image.contains("RemoteImageWait.failed(failedKey: failedKey, key: key, hasURL: !sources.isEmpty) { RemoteImageLoader.shared.failedLately(sources, caps: caps) }"))
+        // A miss is waited out once while the view is there, then asked again.
+        XCTAssertTrue(image.contains("if let wait = loader.retryAfter(sources, caps: caps) { giveUp() guard !waited, await RemoteImageWait.graceElapses(.seconds(wait)) else { return } waited = true continue }"))
     }
 
     /// The registry erase deletes its file.
@@ -315,11 +356,44 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertTrue(artwork.contains("let sources = ImageSourcePolicy.app.creatorSources(logo).map { RemoteImageSource(url: $0) }"))
         XCTAssertFalse(artwork.contains("URL(string: logo)"), "never the launcher's own host")
         let moments = try Self.source("Moments/MomentsUI.swift")
-        let momentSources = try Self.between(moments, "static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {", "func cached(")
+        let momentSources = try Self.between(moments, "static func imageSources(provenance: MomentProvenance, creator: Address?) -> [RemoteImageSource] {", "private var placeholder")
         XCTAssertTrue(momentSources.contains("policy.momentSources(mediaURI: provenance.mediaURI, mediaHash: provenance.mediaHash, isVideo: !provenance.animationURI.isEmpty, creator: creator)"))
         XCTAssertTrue(momentSources.contains("policy.creatorSources(provenance.mediaURI)"))
         XCTAssertFalse(momentSources.contains("gatewayURLs"), "never the creator's own host")
+        // A Moment's art loads through the same pipeline as every picture, at the size of the frame it is drawn in, under
+        // the full caps (a photo's checked original), and the share preview reads the page's artwork from it.
+        let artworkView = try Self.between(moments, "struct MomentArtwork: View {", "static func imageSources(")
+        XCTAssertTrue(artworkView.contains("static let caps = RemoteMedia.caps(forThumbnail: ImageSizeBucket.largest)"))
+        XCTAssertTrue(artworkView.contains("GeometryReader { frame in let side = max(frame.size.width, frame.size.height)"))
+        XCTAssertTrue(artworkView.contains("RemoteImage(sources: Self.imageSources(provenance: provenance, creator: creator), pointSize: side, caps: Self.caps)"))
+        XCTAssertTrue(try Self.source("Moments/MomentLinkView.swift").contains("RemoteImageLoader.shared.memoryImage(sources, bucket: ImageSizeBucket.largest)"))
         XCTAssertTrue(try Self.source("App/AppEnvironment.swift").contains("policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))"))
+    }
+
+    /// The Moments and Launch boards warm their next rows' pictures as each card comes on screen (`BoardPrefetch`), with
+    /// the very sources, size bucket and caps the card will ask for, through the one pipeline — which asks only DyorHQ's
+    /// hosts and the gateways for a picture nobody is looking at yet (`ImagePipelineTests`).
+    func testTheBoardsWarmTheirNextRows() throws {
+        let moments = try Self.source("Moments/MomentsView.swift")
+        XCTAssertTrue(moments.contains("NavigationLink(value: info) { MomentCard(info: info, now: clock.now) } .buttonStyle(.plain) .onAppear { prefetch(after: info) }"))
+        XCTAssertTrue(moments.contains(".onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }"))
+        XCTAssertTrue(moments.contains("private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]"), "two columns, 12 pt apart")
+        XCTAssertTrue(moments.contains("let side = (gridWidth - 12) / 2 for next in BoardPrefetch.following(info.id, in: shown) { MomentArtwork.prefetch(next, side: side) }"))
+        let ui = try Self.source("Moments/MomentsUI.swift")
+        XCTAssertTrue(ui.contains(".overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator) }"), "the card, a column wide")
+        XCTAssertTrue(ui.contains("RemoteImageLoader.shared.prefetch(imageSources(provenance: info.provenance, creator: info.moment.creator), bucket: ImageSizeBucket.bucket(points: side), caps: caps)"))
+        let launchpad = try Self.source("Launchpad/LaunchpadView.swift")
+        XCTAssertEqual(launchpad.components(separatedBy: "{ LaunchCard(launch: launch) } .buttonStyle(.plain) .onAppear { prefetch(after: launch, in: coins) }").count - 1, 2,
+                       "every section's grid")
+        XCTAssertEqual(launchpad.components(separatedBy: "{ LaunchCard(launch: launch) }").count - 1, 2)
+        XCTAssertTrue(launchpad.contains("for next in BoardPrefetch.following(launch.id, in: coins) { LaunchArtwork.prefetch(logo: next.logo) }"))
+        XCTAssertTrue(launchpad.contains(".overlay { LaunchArtwork(symbol: launch.symbol, logo: launch.logo) }"), "the card at the card's size")
+        XCTAssertTrue(launchpad.contains("var pointSize: CGFloat = LaunchArtwork.cardPointSize"))
+        let warm = try Self.between(launchpad, "static func prefetch(logo: String) {", "var body: some View {")
+        XCTAssertTrue(warm.contains("let bucket = ImageSizeBucket.bucket(points: cardPointSize)"))
+        XCTAssertTrue(warm.contains("RemoteImageLoader.shared.prefetch(ImageSourcePolicy.app.creatorSources(logo).map { RemoteImageSource(url: $0) }, bucket: bucket, caps: RemoteMedia.caps(forThumbnail: bucket))"))
+        let artwork = try Self.between(launchpad, "var body: some View { Group { let sources = ImageSourcePolicy.app.creatorSources(logo)", "private var placeholder")
+        XCTAssertTrue(artwork.contains("RemoteImage(sources: sources, pointSize: pointSize) {"), "the card's caps come from its size, as the warm-up's")
     }
 
     /// The token page shows the coin's logo at 44 pt, and for a DyorHQ coin where it was launched in place of the

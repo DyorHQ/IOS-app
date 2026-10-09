@@ -14,6 +14,9 @@ struct MomentsView: View {
     @State private var showPortfolio = false
     /// Moments pushed by value (the board, publish, the portfolio) and, from a link, by (factory, id) to load first.
     @State private var path = NavigationPath()
+    /// The width the board's grid is laid out at: a card's artwork is a column wide (`MomentCard`), so its next rows are
+    /// warmed at the size their cards will ask for (`prefetch(after:)`).
+    @State private var gridWidth: CGFloat = 0
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -125,8 +128,10 @@ struct MomentsView: View {
                         ForEach(shown) { info in
                             NavigationLink(value: info) { MomentCard(info: info, now: clock.now) }
                                 .buttonStyle(.plain)
+                                .onAppear { prefetch(after: info) }
                         }
                     }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
                 }
             }
             .padding(16)
@@ -134,6 +139,14 @@ struct MomentsView: View {
         .background(Color(.systemGroupedBackground))
         .scrollIndicators(.hidden)
         .overlay { if model.moments.isEmpty, model.loading { ProgressView().controlSize(.large) } }
+    }
+
+    /// Warms the artwork of the cards after `info` on the board as it is filtered (`BoardPrefetch`), at a column's width:
+    /// two flexible columns, 12 pt apart (`columns`).
+    private func prefetch(after info: MomentInfo) {
+        guard gridWidth > 0 else { return }
+        let side = (gridWidth - 12) / 2
+        for next in BoardPrefetch.following(info.id, in: shown) { MomentArtwork.prefetch(next, side: side) }
     }
 
     private var header: some View {

@@ -1141,6 +1141,16 @@ public enum MomentsMath {
     /// public mirror of a Moment's image can be found again from its on-chain provenance alone — see `mirrorURL`.
     public static func mediaName(hash: Data) -> String { "moment-" + hash.map { String(format: "%02x", $0) }.joined() }
 
+    /// The longest side, in pixels, a new Moment photo is encoded at (as JPEG, at `photoJPEGQuality`) before anything
+    /// else happens to it: those bytes are its provenance file — their keccak-256 is the on-chain media hash, names the
+    /// mirror (`mediaName`) and is what gets pinned. A phone photo comes to about 0.4–0.9 MB and still covers a 3× phone's
+    /// full width; 4096 px at 0.92 made files of up to 4.8 MB, which every viewer downloads whole to check the hash, and
+    /// over the 2 MB a coin's logo may be (`RemoteMedia.caps`). The size of a video's poster frame. A Moment already
+    /// published keeps the file its hash names.
+    public static let photoMaxPixels = 2048
+    /// The JPEG quality of a new Moment photo (`photoMaxPixels`).
+    public static let photoJPEGQuality = 0.85
+
     /// The Supabase public mirror of a Moment's image, derivable from on-chain data alone: the creator's folder in the
     /// public `launch-media` bucket holds `moment-<mediaHash>.jpg` (the photo, or a video's poster frame — both are
     /// named after the provenance hash at upload). Nil unless the hash is a keccak-256 digest. The mirror is the

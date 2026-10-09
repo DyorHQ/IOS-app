@@ -364,7 +364,7 @@ struct AssetsCard: View {
                         MomentArtwork(provenance: moment.provenance, symbol: moment.symbol, creator: moment.moment.creator)
                     } else if let url = nft.imageURL {
                         RemoteImage(url: url, pointSize: 120) { loading in
-                            if loading { ProgressView().controlSize(.small) } else { Image(systemName: "photo").foregroundStyle(.secondary) }
+                            if loading { ImageLoadingSpinner() } else { Image(systemName: "photo").foregroundStyle(.secondary) }
                         }
                         .accessibilityIgnoresInvertColors() // art, left as it is under Smart Invert
                     } else {

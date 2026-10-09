@@ -326,8 +326,9 @@ final class SocialSession {
     /// Uploads Moment media (a photo, or a video's cover frame) to the public bucket. The object is named after the
     /// keccak-256 of `data` (`moment-<hash>`), so the mirror can be derived later from the on-chain provenance alone
     /// (`MomentsMath.mirrorURL`); pass `name` to file it under another hash — a video's poster frame is stored under
-    /// the video's hash, which is the hash the NFT records. The bucket is write-once: an object already there under
-    /// that name was uploaded from the same bytes (or, for a poster, the same video), so it is used as is.
+    /// the video's hash, which is the hash the NFT records — or under its own when it is already known (a photo, hashed
+    /// off the main thread with its encoding, so it isn't hashed again here). The bucket is write-once: an object already
+    /// there under that name was uploaded from the same bytes (or, for a poster, the same video), so it is used as is.
     func uploadMomentMedia(_ data: Data, contentType: String, fileExtension: String, name: String? = nil) async throws -> MomentUpload {
         guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
         let path = "\(wallet)/\(name ?? MomentsMath.mediaName(hash: Keccak.hash256(data))).\(fileExtension)"
@@ -359,7 +360,8 @@ final class SocialSession {
     }
 
     /// Uploads a new profile picture (JPEG bytes) to the wallet's own folder in the public `avatars` bucket, then
-    /// records its URL on the profile. A cache-busting query is appended so the new image shows immediately.
+    /// records its URL on the profile. A cache-busting query is appended so the new image shows immediately — on this
+    /// phone from the bytes just uploaded (`ImagePipeline.seed`), with no read back.
     func uploadAvatar(jpeg: Data) async throws {
         guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
         let stamp = Int(Date().timeIntervalSince1970)
@@ -367,6 +369,9 @@ final class SocialSession {
         let cacheBusted = "\(url.absoluteString)?v=\(stamp)"
         struct Row: Encodable { let wallet: String; let avatar_url: String }
         let updated: SocialProfile = try await client.upsert("profiles", Row(wallet: wallet, avatar_url: cacheBusted), onConflict: "wallet")
+        if let shown = URL(string: updated.avatar_url ?? cacheBusted) {
+            RemoteImageLoader.shared.seed(jpeg, for: [RemoteImageSource(url: shown)])
+        }
         profile = updated
     }
 }
