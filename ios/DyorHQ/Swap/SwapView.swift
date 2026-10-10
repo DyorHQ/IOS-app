@@ -192,10 +192,13 @@ struct SwapView: View {
     /// and the history.
     private var actionSection: some View {
         Section {
-            // Disabled while the balance can't cover the input: the title says why (UI-4).
-            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient) { reviewing = model.review }
+            // Disabled while the balance can't cover the input: the title says why (UI-4). A watched address can't sign, so
+            // it can't review one either: its quotes still show, and the footer says why, as on the Launch page.
+            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient || !session.canSign) { reviewing = model.review }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+        } footer: {
+            if !session.canSign { Text("Sign in to trade.").frame(maxWidth: .infinity) }
         }
     }
 

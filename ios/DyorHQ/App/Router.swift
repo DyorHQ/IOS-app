@@ -86,6 +86,23 @@ final class Router {
     /// (`holdingLinks`). RootView's gate waits until it is 0, so a link never tears one down.
     var linkHolds = 0
 
+    /// A sign-out, a deletion or a forgotten device ends the account's navigation: what it had open — a presented screen,
+    /// the menu, a tab, a screen one of its screens asked for — closes with it, so the next sign-in lands on Home rather
+    /// than on the last account's Profile. A Moment link waiting for a sign-in stays (`pendingLink`), and so does a tapped
+    /// banner's screen, which the gate drops for anyone but its account (`NotificationRouteGate`).
+    func endSession() {
+        menuOpen = false
+        presented = nil
+        tab = .home
+        tradeMode = .swap
+        pendingSwap = nil
+        pendingPerpMarket = nil
+        pendingLaunch = nil
+        pendingLaunchReference = nil
+        pendingMoment = nil
+        pendingMomentLink = nil
+    }
+
     /// Every URL handed to the app. This parses and stores; nothing navigates until the gate delivers. A URL on our
     /// hosts that isn't a Moment link gets a notice; anything else (Privy's OAuth callback on the `dyorhq` scheme, say)
     /// is not ours to comment on.
