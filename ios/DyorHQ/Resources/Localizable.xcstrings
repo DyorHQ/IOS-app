@@ -542,6 +542,7 @@
       }
     },
     "%@ confirmed on Monad." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -4193,6 +4194,7 @@
       }
     },
     "%lld to claim" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "variations" : {
@@ -14440,6 +14442,7 @@
       }
     },
     "Creator fees couldn't be read" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -14692,6 +14695,7 @@
       }
     },
     "Cross-chain bridging isn't configured in this build yet." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -28117,6 +28121,7 @@
       }
     },
     "Nothing to claim yet" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {

@@ -13,11 +13,12 @@ event history is `eth_getLogs` on `rpc1.monad.xyz` (`LaunchpadService.defaultLog
 `TransactionStep`s that a `ConfirmationSheet` (`ios/DyorHQ/Wallet/TransactionRun.swift`) hands to `TransactionSender`
 (`Chain/Transactions.swift`): each step is simulated with `eth_call`, gas-estimated (+20%), priced EIP-1559, signed on
 the phone by the session's wallet, broadcast with `eth_sendRawTransaction` and polled for its receipt. The signer is one
-of `PrivyWallet` (Privy's embedded wallet: email code, Apple, Google), `LocalWallet` (an imported key or the email +
-password key, in the iPhone Keychain) or a Mera passkey session (`Wallet/Mera/`, key derived from the passkey's PRF
-output, never stored). No DyorHQ server signs or relays transactions. The only backend is Supabase
-(`Services/Supabase/SupabaseClient.swift`): PostgREST reads with the publishable key, writes under a wallet session
-minted by the `wallet-auth` Edge Function from a `personal_sign` over a single-use nonce, row-level security by wallet.
+of `PrivyWallet` (Privy's embedded wallet: Apple, Google, or an account made earlier with an email code), `LocalWallet`
+(an imported key or the email + password key, in the iPhone Keychain) or a Mera passkey session (`Wallet/Mera/`, key
+derived from the passkey's PRF output, never stored). No DyorHQ server signs or relays transactions. The only backend is
+Supabase (`Services/Supabase/SupabaseClient.swift`): PostgREST reads with the publishable key, writes under a wallet
+session minted by the `wallet-auth` Edge Function from a `personal_sign` over a single-use nonce, row-level security by
+wallet.
 
 Tabs: Home, Launch, Trade (Swap | Perps), Moments (`ios/DyorHQ/App/RootView.swift`). The side menu adds Portfolio,
 News and Get Help; Home's header opens Profile and Notifications (`App/Router.swift`). Paths below are relative to
@@ -57,11 +58,11 @@ News and Get Help; Home's header opens Profile and Notifications (`App/Router.sw
 
 | Screen | Reads | Writes | Source |
 | --- | --- | --- | --- |
-| Portfolio (menu) | Volume, fees and P&L per section: Spot from the wallet's `Transfer` logs (up to 90 days), Perps from Perpl's signed fills and position history, Launch from own curve fills and claims, Moments from the Moments logs (live and retired cohorts), Bridge from the local `BridgeStore`. Assets: every held ERC-20 (Multicall3 balances, discovery from `Transfer` logs) and ERC-721 (the four-topic `Transfer` logs among the transfers into the wallet its history store holds, then `ownerOf`, `tokenURI`; no scan of their own). | None; rows navigate to their section. | `Portfolio/PortfolioModel.swift`, `Portfolio/AssetsModel.swift`, `Services/WalletNFTDiscovery.swift` |
+| Portfolio (menu) | Volume, fees and P&L per section: Spot from the wallet's `Transfer` logs in its history store (30 days, or back to its first transaction), Perps from Perpl's signed fills and position history, Launch from own curve fills and claims, Moments from the Moments logs (live and retired cohorts), Bridge from the local `BridgeStore`. Assets: every held ERC-20 (Multicall3 balances, discovery from `Transfer` logs) and ERC-721 (the four-topic `Transfer` logs among the transfers into the wallet its history store holds, then `ownerOf`, `tokenURI`; no scan of their own). | None; rows navigate to their section. | `Portfolio/PortfolioModel.swift`, `Portfolio/AssetsModel.swift`, `Services/WalletNFTDiscovery.swift` |
 | Profile (header) | The wallet's `profiles` row (PostgREST), Recent Activity (local log merged with launchpad activity and 7-day swap scans), Perpl trading status, price-alert count, the RPC host. | Send (native transfer or ERC-20 `transfer`; the recipient is checked with `eth_getCode`). DyorHQ Social: sign in (`wallet-auth`), upsert `profiles` (handle, display name, bio), avatar to the `avatars` bucket (read back from its original by its `?v=` link; this phone draws the bytes it uploaded, `ImagePipeline.seed`). Settings mirrored to `user_settings`. Perpl: enroll or remove the trading key, enable one-click trading. Export: the Keychain key behind Face ID, Privy's export page in a `WKWebView`, or a passkey account's recovery phrase. Delete account: the `delete-account` Edge Function (a Privy token, or the wallet session for an email + password account), the `email_accounts` row, then everything on the device. Sign-out closes the `sessions` row. | `Profile/ProfileView.swift`, `Profile/Settings.swift`, `Profile/RecentActivityView.swift`, `Profile/AccountDeletion.swift`, `Social/SocialSession.swift`, `Social/SocialProfileView.swift`, `Wallet/WalletExportView.swift` |
 | Notifications (bell) | The in-app center (`NotificationHub`, on device). While the app is open, `AlertCenter` checks price alerts every 30 s against `PriceService` and open Perpl positions for margin warnings (`PerpRisk`), fills and closes. There is no push server: local notifications only. | Local `UNUserNotificationCenter` posts; the center and price alerts are mirrored to the `notifications` and `alerts` tables. | `Notifications/*.swift`, `Wallet/Notifications.swift`, `Wallet/PriceAlerts.swift`, `Services/Notifications/` |
 | News (menu) | The public RSS feeds of CoinDesk, Cointelegraph, Decrypt, The Defiant and The Block, fetched directly; articles open on the publisher's site. | None. | `News/NewsView.swift`, `Services/News/NewsService.swift` |
-| Onboarding | Sign-in: Privy (email code, Apple, Google; Privy passkeys when enabled); a Mera passkey (WebAuthn PRF, rpId `accounts.dyorhq.fun`, when `PasskeysEnabled`); email + password (PBKDF2 1,000,000 rounds, the `email-pepper` Edge Function's HMAC, HKDF → secp256k1 key in the Keychain, bound to the wallet through `email-rebind`); an imported phrase or private key (derived on device, Keychain); or watch-only. | Nothing on chain. After sign-in: the backend session (`wallet-auth`), a `profiles` row, a `sessions` row. | `Onboarding/OnboardingView.swift`, `Onboarding/ImportWalletView.swift`, `Wallet/Session.swift`, `Wallet/Mera/`, `Chain/EmailWallet.swift`, `Services/Mera/` |
+| Onboarding | Sign-in: Privy (Apple, Google; Privy passkeys when enabled; an account made earlier with an email code is restored, and an email code now only verifies an email + password account); a Mera passkey (WebAuthn PRF, rpId `accounts.dyorhq.fun`, when `PasskeysEnabled`); email + password (PBKDF2 1,000,000 rounds, the `email-pepper` Edge Function's HMAC, HKDF → secp256k1 key in the Keychain, bound to the wallet through `email-rebind`); an imported phrase or private key (derived on device, Keychain); or watch-only. | Nothing on chain. After sign-in: the backend session (`wallet-auth`), a `profiles` row, a `sessions` row. | `Onboarding/OnboardingView.swift`, `Onboarding/ImportWalletView.swift`, `Wallet/Session.swift`, `Wallet/Mera/`, `Chain/EmailWallet.swift`, `Services/Mera/` |
 | Get Help, side menu | Links to the docs (`dyorhq.gitbook.io/docs`), dyorhq.fun and X. | None. | `Support/GetHelpView.swift`, `Menu/SideMenuView.swift`, `Core/DocsLinks.swift` |
 
 ## Charts
@@ -75,8 +76,8 @@ News and Get Help; Home's header opens Profile and Notifications (`App/Router.sw
 ## Build configuration
 
 `Config/AppConfig.swift` reads build-time values from `Secrets.xcconfig` through `Info.plist`: the Privy app and client
-ids, the social-login and passkey switches, the Perpl builder id, the Supabase URL and publishable key (with working
-defaults), the wallet-export page and the bridge fee recipient. Contract addresses are baked into DyorKit
+ids, the social-login and passkey switches, the Supabase URL and publishable key (with working defaults), the
+wallet-export page and the bridge fee recipient. Contract addresses are baked into DyorKit
 (`LaunchpadAddresses.monadMainnet`, `MomentsAddresses.monadMainnet`); a Debug build may point the RPC and the stacks at
 a local fork, a Release build never reads those overrides. No provider API key ships in the app.
 

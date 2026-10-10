@@ -308,14 +308,6 @@ final class Session {
         backend.startSignIn(address: address, wallet: MeraBackgroundSigner(address: address, session: mera), profileInBackground: true)
     }
 
-    func sendEmailCode(to email: String) async throws {
-        try await requirePrivy().email.sendCode(to: email)
-    }
-
-    func signIn(email: String, code: String) async throws {
-        _ = try await requirePrivy().email.loginWithCode(code, sentTo: email)
-    }
-
     func signInWithApple() async throws {
         do {
             try await signInWithOAuth(.apple, as: .apple)

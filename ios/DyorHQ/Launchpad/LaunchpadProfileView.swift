@@ -949,18 +949,11 @@ final class LaunchpadProfileModel {
 
     var claimableCount: Int { creatorClaimables.count + rewardClaimables.count }
     var hasClaimable: Bool { claimableCount > 0 }
-    var totalClaimableUSD: Double { creatorClaimables.reduce(0) { $0 + ($1.usd ?? 0) } }
     /// The creator fees Claim All claims: those read in the latest load, never balances kept from an earlier one.
     var claimAllCreatorClaimables: [ClaimableAsset] { creatorClaimables.filter(\.current) }
     /// The holder rewards Claim All claims: likewise, those read in the latest load.
     var claimAllRewardClaimables: [RewardClaim] { rewardClaimables.filter(\.current) }
     var claimAllCount: Int { claimAllCreatorClaimables.count + claimAllRewardClaimables.count }
-
-    var claimableSummary: String {
-        guard hasClaimable else { return feesUnread ? tr("Creator fees couldn't be read") : tr("Nothing to claim yet") }
-        if totalClaimableUSD > 0 { return PriceFormat.usdValue(totalClaimableUSD) }
-        return tr("\(claimableCount) to claim")
-    }
 
     /// Claims everything at once: every escrow read in the latest load, across every asset, plus every coin's holder
     /// rewards read in it (each on its launch's own stack).

@@ -4,10 +4,10 @@ DyorHQ is a self-custodial iPhone app for Monad (chain id 143). From one account
 Uniswap v3/v4 and Monday Trade, trades perpetuals on Perpl's on-chain exchange, launches memecoins on the DyorHQ
 Launchpad (bonding curves that graduate into a Uniswap v4 or Monday Trade pool), turns photos and videos into Moments
 (an NFT with its own coin), bridges from other EVM chains through Aurora Intents, and keeps a portfolio, alerts, news and
-a social feed. Keys stay on the phone: Privy's embedded wallet (email code, Apple or Google sign-in), passkey accounts
-(a Swift port of Mera), an on-device email-and-password wallet, an imported wallet, or a watch-only address. Every
-transaction is signed on the device and broadcast by the app itself to keyless public Monad RPCs. The app ships in
-English, Spanish, French, Simplified Chinese and Korean.
+a social feed. Keys stay on the phone: Privy's embedded wallet (Apple or Google sign-in; an account made earlier with an
+email code is restored), passkey accounts (a Swift port of Mera), an on-device email-and-password wallet, an imported
+wallet, or a watch-only address. Every transaction is signed on the device and broadcast by the app itself to keyless
+public Monad RPCs. The app ships in English, Spanish, French, Simplified Chinese and Korean.
 
 This repository holds the app and everything it depends on. There is no web app.
 

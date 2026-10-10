@@ -700,51 +700,6 @@ final class PerplTrading: MeraSessionLifecycle {
         return client
     }
 
-    /// Places the entry order (market/limit) with optional take-profit / stop-loss triggers linked to it. Returns
-    /// the entry's gateway acknowledgement.
-    /// A passkey account's order must fit its live session (`authorize`) or carry a step-up `approval`.
-    func submit(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int = 100,
-                approval: MeraSession.StepUp? = nil) async throws -> PerplOrderAck {
-        try Self.checkTriggers(input: input, takeProfit: takeProfit, stopLoss: stopLoss)
-        let charge = try authorize(input, approval: approval)
-        await ensureConnected()
-        let client: PerplTradeClient
-        do { client = try liveClient() } catch { mera?.refund(charge); throw error }
-        // `lb: 0` (Perpl's own window): the head the frames once carried is no longer read, so nothing is awaited here.
-        if !input.reduceOnly { recentEntries[PerplMarketSide(marketId: input.market.id, isLong: input.side == .long)] = Date() }
-        var frames = [PerplOrders.entry(input, accountId: accountId, head: 0, ttlBlocks: ttlBlocks)]
-        if let takeProfit {
-            frames.append(PerplOrders.takeProfit(side: input.side, price: takeProfit, size: input.size, market: input.market, accountId: accountId, linkedPositionId: nil))
-        }
-        if let stopLoss {
-            frames.append(PerplOrders.stopLoss(side: input.side, price: stopLoss, size: input.size, market: input.market, accountId: accountId, linkedPositionId: nil))
-        }
-        // The entry's id is reserved here, with no `await` before its write (`place` below): the triggers link to it with
-        // `tr` and get their own ids as they are written, so ids rise in write order. `tr`, never a later re-link to the
-        // position (`lp`): see the reasons at the same step in `submitBracket`.
-        let entryRq = client.reserveRequestId()
-        frames[0].requestId = entryRq
-        for index in frames.indices.dropFirst() { frames[index].linkedRequestId = entryRq }
-        let ack: PerplOrderAck
-        do { ack = try await client.place(frames) } catch let error as PerplTradeError where !error.outcomeUnknown { mera?.refund(charge); throw error }
-        if !ack.accepted, !ack.outcomeUnknown { mera?.refund(charge) }
-        return ack
-    }
-
-    /// Cancels open orders or keeper triggers (TP/SL) from the live list, as ONE action: a passkey account's single
-    /// step-up `approval` covers all of them (MERA-PLAN §3 — a cancel always asks). Each cancel is sent whatever the
-    /// others did, and each order's ack is returned by its market and id. An accepted ack means Perpl admitted the
-    /// cancel; the order leaves `openOrders` when the stream confirms it (mt:24).
-    func cancel(orders: [PerplOpenOrder], approval: MeraSession.StepUp? = nil) async throws -> [PerplOpenOrder.Key: PerplOrderAck] {
-        guard !orders.isEmpty else { return [:] }
-        try requireCancelApproval(approval)
-        let done = operation("Perpl cancel")
-        defer { done() }
-        await ensureConnected()
-        let client = try liveClient()
-        return try await sendCancels(orders, on: client).acks
-    }
-
     /// Cancels open orders or keeper triggers (TP/SL) from the live list as ONE action — a passkey account's one step-up
     /// `approval` covers them all (MERA-PLAN §3: a cancel always asks) — and follows each until Perpl's live list confirms
     /// it, on the socket that sent it, for up to `PerplTimeouts.removal`: the order left the list (cancelled, or triggered
@@ -1102,11 +1057,11 @@ final class PerplTrading: MeraSessionLifecycle {
     }
 
     /// Places a bracket (entry + linked TP/SL) and reports whether the entry AND each requested trigger were
-    /// individually accepted — unlike `submit`, which returns only the entry ack. A passkey account's bracket must fit
-    /// its live session (`authorize`) or carry a step-up `approval`. `onChainPositions` / `onChainOrders`: the account's
-    /// positions and orders as the Exchange last reported them, for `checkOpening`. `beforeWrite`: the caller's last check
-    /// on the socket that will write the entry, run right before the write with no `await` after it (it throws to refuse,
-    /// as not sent), and the order to write instead when its terms must be fixed there (`submitClose`'s size).
+    /// individually accepted. A passkey account's bracket must fit its live session (`authorize`) or carry a step-up
+    /// `approval`. `onChainPositions` / `onChainOrders`: the account's positions and orders as the Exchange last
+    /// reported them, for `checkOpening`. `beforeWrite`: the caller's last check on the socket that will write the
+    /// entry, run right before the write with no `await` after it (it throws to refuse, as not sent), and the order to
+    /// write instead when its terms must be fixed there (`submitClose`'s size).
     func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int,
                        approval: MeraSession.StepUp? = nil, onChainPositions: [PerpPosition], onChainOrders: [PerpOrder],
                        beforeWrite: @MainActor (PerplTradeClient) throws -> OrderInput? = { _ in nil }) async throws -> BracketResult {

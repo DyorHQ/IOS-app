@@ -659,18 +659,6 @@ struct TransactionProgress: View {
     }
 }
 
-extension View {
-    /// Standard treatment for a screen that is still loading its first data.
-    @ViewBuilder
-    func loadingOverlay(_ isLoading: Bool) -> some View {
-        overlay {
-            if isLoading {
-                ProgressView().controlSize(.large)
-            }
-        }
-    }
-}
-
 /// Resigns the first responder, dismissing the keyboard. The decimal pad has no return key, so screens that use it
 /// pair this with a "Done" key-accessory button and interactive scroll-to-dismiss — otherwise the keyboard hides
 /// the tab bar with no way back.

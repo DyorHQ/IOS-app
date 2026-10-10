@@ -757,7 +757,8 @@ struct PerpTradeView: View {
         reviewCloses = PerpCloseOrder.closes(orderSide: side, reduceOnly: ticket.effectiveReduceOnly, held: position?.side)
         Haptics.commit()
         // Use the authenticated path when the socket is live, OR when the wallet has an enrolled key and the user wants
-        // TP/SL (its submit awaits ensureConnected()); otherwise the on-chain path. Decided here, once per confirmation.
+        // TP/SL (`submitBracket` awaits ensureConnected()); otherwise the on-chain path. Decided here, once per
+        // confirmation.
         authedOrderAccount = (perplTrading.isReady || (perplTrading.isEnrolled && wantsTriggers)) ? model.account?.accountId : nil
         reviewLive = perplTrading.liveOutcomes
         reviewHeld = position
@@ -1081,9 +1082,10 @@ struct PerpTradeView: View {
 
     @ViewBuilder private var orderConfirmSheet: some View {
         // Use the authenticated (keeper-forwarded) path when the socket is live, OR when the wallet has an enrolled key
-        // and the user wants TP/SL — its submit() awaits ensureConnected(), so a socket that idled to `.enrolled` still
-        // reconnects and carries the triggers instead of silently dropping to a bare on-chain entry. A plain order with
-        // no triggers still falls through to the on-chain path when not live, so trading never depends on one-click.
+        // and the user wants TP/SL — `submitBracket` awaits ensureConnected(), so a socket that idled to `.enrolled`
+        // still reconnects and carries the triggers instead of silently dropping to a bare on-chain entry. A plain
+        // order with no triggers still falls through to the on-chain path when not live, so trading never depends on
+        // one-click.
         if let accountId = authedOrderAccount {
             AuthedOrderSheet(market: market, input: reviewedInput, takeProfit: tpValue, stopLoss: slValue, accountId: accountId, sideColor: sideColor, summaryMargin: notional / max(ticket.leverage, 1),
                              triggerSize: invertedSize(side: ticket.side), triggerNote: turnaroundNote, onChainPositions: model.positions, onChainOrders: model.orders,

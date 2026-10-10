@@ -75,7 +75,6 @@ final class BridgeModel {
         toChain = env.bridgeMonad
     }
 
-    var isConfigured: Bool { env.aurora.isConfigured }
     var monad: EVMChain { env.bridgeMonad }
     /// The chain the user chooses; the other side is pinned to Monad.
     var otherChain: EVMChain { fromChain.isMonad ? toChain : fromChain }
@@ -128,7 +127,6 @@ final class BridgeModel {
     private var loadGeneration = 0
 
     func load() async {
-        guard isConfigured else { loadError = AuroraError.notConfigured.errorDescription; return }
         guard tokens.isEmpty, !needsUnlock else { return }
         loadGeneration += 1
         let generation = loadGeneration
@@ -257,7 +255,6 @@ final class BridgeModel {
 
     // Per-asset balance access for the pickers (keyed by the globally-unique assetId).
     func held(_ token: AuroraToken) -> Bool { (balances[token.assetId] ?? 0) > 0 }
-    func balanceRaw(_ token: AuroraToken) -> BigUInt? { balances[token.assetId] }
     /// The USD value of the held balance (0 when nothing held or no price), used only to rank the picker.
     func balanceUSD(_ token: AuroraToken) -> Double {
         guard let raw = balances[token.assetId], raw > 0, let price = token.price, price > 0 else { return 0 }

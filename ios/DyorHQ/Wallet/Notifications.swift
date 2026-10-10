@@ -77,11 +77,6 @@ enum Notifications {
                                     reference: PerpAlertText.reference(perpId: perpId), deliver: deliver, owner: owner)
     }
 
-    /// `label` is the action's name in the app's language.
-    static func transactionConfirmed(_ label: String) {
-        post(kind: .transaction, title: tr("Confirmed"), body: tr("\(label) confirmed on Monad."))
-    }
-
     /// A completed cross-chain bridge — recorded in the notification center like a swap. The chains' names are never
     /// translated.
     static func bridge(amount: String, from: String, to: String) {

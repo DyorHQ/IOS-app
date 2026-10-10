@@ -17,8 +17,8 @@ struct OnboardingView: View {
                 .navigationDestination(for: OnboardingStep.self) { step in
                     switch step {
                     case .signIn: SignInView(path: $path)
-                    case .email: EmailPasswordView(path: $path)
-                    case .watch: WatchAddressView(path: $path)
+                    case .email: EmailPasswordView()
+                    case .watch: WatchAddressView()
                     case .importWallet: ImportWalletView()
                     }
                 }
@@ -534,7 +534,6 @@ private struct PressableStyle: ButtonStyle {
 struct EmailPasswordView: View {
     @Environment(Session.self) private var session
     @Environment(AppEnvironment.self) private var env
-    @Binding var path: [OnboardingStep]
 
     enum Mode: String, CaseIterable, Identifiable {
         case signUp, logIn
@@ -1393,7 +1392,6 @@ private struct StrengthMeter: View {
 
 struct WatchAddressView: View {
     @Environment(Session.self) private var session
-    @Binding var path: [OnboardingStep]
     @State private var text = ""
     @FocusState private var focused: Bool
 

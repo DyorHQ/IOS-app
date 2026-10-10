@@ -280,17 +280,6 @@ enum VolumePeriod: String, CaseIterable, Identifiable {
         case .all: return nil
         }
     }
-    /// The matching swap-history window (on-chain scans are bounded, so "All" is the scan's own cap).
-    var swapWindow: SwapHistoryService.Window {
-        switch self {
-        case .day: return .day
-        case .week: return .week
-        case .month: return .month
-        case .all: return .all
-        }
-    }
-    /// Blocks to scan for on-chain history (~0.4 s blocks); "All" covers the swap scan's 90-day cap.
-    var blocks: UInt64 { swapWindow.blocks }
     /// The earliest timestamp inside the period (0 for "All").
     func since(now: Date = Date()) -> Date { seconds.map { now.addingTimeInterval(-$0) } ?? .distantPast }
 }

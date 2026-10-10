@@ -32,29 +32,11 @@ struct BridgeView: View {
                 if session.isStubAccount {
                     ContentUnavailableView(Mera.Stub.unavailableTitle, systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("This test passkey signs on the local Monad fork only. Bridging needs a real passkey on a device."))
-                } else if !model.isConfigured {
-                    ContentUnavailableView {
-                        Label("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted")
-                    } description: {
-                        Paragraph("Cross-chain bridging isn't configured in this build yet.")
-                    }
-                } else if model.needsUnlock {
-                    unlockPrompt
                 } else {
-                    form
+                    content
                 }
                 #else
-                if !model.isConfigured {
-                    ContentUnavailableView {
-                        Label("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted")
-                    } description: {
-                        Paragraph("Cross-chain bridging isn't configured in this build yet.")
-                    }
-                } else if model.needsUnlock {
-                    unlockPrompt
-                } else {
-                    form
-                }
+                content
                 #endif
             }
             .navigationTitle(tr("Bridge"))
@@ -76,6 +58,15 @@ struct BridgeView: View {
         .sheet(isPresented: $pickingFromToken) { tokenPicker(for: model.fromChain, isFrom: true) }
         .sheet(isPresented: $pickingToToken) { tokenPicker(for: model.toChain, isFrom: false) }
         .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
+    }
+
+    /// The screen: the unlock prompt while a locked passkey account can't load the routes, else the form.
+    @ViewBuilder private var content: some View {
+        if model.needsUnlock {
+            unlockPrompt
+        } else {
+            form
+        }
     }
 
     /// A locked passkey account: one tap opens its session (the passkey prompt the person asked for), then the routes load.

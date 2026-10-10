@@ -1,5 +1,4 @@
 import BigInt
-import Charts
 import DyorKit
 import SwiftUI
 
@@ -58,8 +57,6 @@ struct PerpsView: View {
     }
 }
 
-enum PerpsSheet: Identifiable { case deposit, withdraw; var id: Self { self } }
-
 @Observable
 @MainActor
 final class PerpsModel {
@@ -75,10 +72,6 @@ final class PerpsModel {
     private(set) var triggers: [PlacedTrigger] = []
     private(set) var collateral: (wallet: BigUInt, allowance: BigUInt) = (0, 0)
     private(set) var loading = false
-    private(set) var error: String?
-    var closing: PerpPosition?
-    var cancelling: PerpOrder?
-    private var perpl: PerplService?
 
     /// Fill detection for this screen: increments whenever an open order fills (a position appears or grows between
     /// polls), with `lastFilledPerpId` naming the market so the trade screen can jump to Positions. Position size is in
@@ -144,7 +137,6 @@ final class PerpsModel {
     }
 
     func load(env: AppEnvironment, address: Address?) async {
-        perpl = env.perpl
         alerts = env.alerts
         loadGeneration &+= 1
         let generation = loadGeneration
@@ -160,7 +152,6 @@ final class PerpsModel {
             let fetched = try await env.perpl.markets()
             markets = fetched
             env.perplTrading.noteMarkets(fetched)
-            error = nil
             if let address {
                 async let collateralTask = env.perpl.collateral(of: address)
                 let acct = try await env.perpl.account(address)
@@ -207,7 +198,7 @@ final class PerpsModel {
                 watch = PerpPositionWatch()
             }
         } catch {
-            self.error = describe(error)
+            // A failed read keeps what was last read, until the next load.
         }
         if let list = try? await ctx { context = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) }) }
     }
@@ -289,28 +280,5 @@ struct CollateralSheet: View {
             }
         }
         .presentationDetents([.medium])
-    }
-}
-
-/// Mark price sampled from the Exchange contract at evenly spaced blocks over the past day, at `clock`'s pace.
-enum MarkPriceHistory {
-    static func load(market: PerpMarket, rpc: RPCClient, clock: BlockClock, points: Int = 48) async -> [PricePoint] {
-        guard let data = try? ABI.encodeCall("getPerpetualInfo(uint256)", [.uint(market.id)]), let latest = try? await rpc.blockNumber() else { return [] }
-        let secondsPerBlock = await clock.secondsPerBlock()
-        let span = min(latest, BlockClock.blocks(in: 86_400, secondsPerBlock: secondsPerBlock))
-        let step = span / UInt64(points)
-        let blocks = (0...points).map { latest - span + UInt64($0) * step }
-        let call = CallRequest(to: Perpl.exchange, data: data)
-        guard let results = try? await rpc.ethCalls(blocks.map { (call, BlockTag.number($0)) }) else { return [] }
-        let types = try? ABIType.parseList("(string,string,uint256,uint256,bytes32,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,int16,uint256,uint8,uint256,uint256,uint256,uint256,uint256,uint256,bool)")
-        guard let types else { return [] }
-        let now = Date()
-        return zip(blocks, results).compactMap { block, result in
-            guard case .success(let raw) = result, let info = try? ABI.decode(raw, types).first else { return nil }
-            let mark = Amount.units(info[11].uint, decimals: market.priceDecimals)
-            guard mark > 0 else { return nil }
-            let age = Double(latest - block) * secondsPerBlock
-            return PricePoint(block: block, time: now.addingTimeInterval(-age), usd: mark)
-        }
     }
 }

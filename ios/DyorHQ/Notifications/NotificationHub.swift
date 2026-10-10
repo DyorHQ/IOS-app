@@ -94,8 +94,6 @@ final class NotificationHub {
 
     private(set) var items: [AppNotification] = []
     private(set) var owner: Address?
-    /// The notification the user tapped in the list, for the router to open.
-    var pendingRoute: AppNotification?
 
     var unreadCount: Int { items.lazy.filter { !$0.read }.count }
 

@@ -6,7 +6,8 @@ import Observation
 
 /// The wallet's money history across every section of DyorHQ — Spot swaps, Perps, Launch and Moments — reduced to
 /// volume, fees paid, P&L, claimed fees and trade counts, for any reporting period. Sources:
-///  · Spot: the wallet's swaps reconstructed from ERC-20 `Transfer` logs (rpc1, up to 90 days).
+///  · Spot: the wallet's swaps reconstructed from its ERC-20 `Transfer` logs in the history store (`HistoryModel`):
+///    30 days, or back to the wallet's first transaction once that is known.
 ///  · Perps: Perpl's authenticated fill and position history (exact notional, fees and realized P&L).
 ///  · Launch: the wallet's own `CurveBuy` / `CurveSell` fills (exact fee + tax), the creator fees the escrows paid straight
 ///    to it, and escrow / holder-reward claims.
@@ -87,11 +88,9 @@ final class PortfolioModel {
     /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back (RS-10).
     private var loadingFor: Address?
     /// The on-chain history as the history model has it (`applyHistory`): how far each period's figures have been read
-    /// (`historyFilling`, `historyProgress`), whether the chain could be reached, and the day the transfer history
-    /// reaches back to.
+    /// (`historyFilling`, `historyProgress`), and whether the chain could be reached.
     private var history = WalletHistorySnapshot.empty
     private(set) var historyUnreachable = false
-    private(set) var historySince: Date?
     private var historyVersion = -1
 
     /// What each period's figures were when last final for the wallet (`SavedFigures`, `SavedScreens.Screen.portfolio`):
@@ -543,9 +542,6 @@ final class PortfolioModel {
         launchHistory = snapshot.launch
         momentsHistory = snapshot.moments
         historyUnreachable = snapshot.unreachable
-        if let anchor = snapshot.anchor, let floor = snapshot.status(WalletHistoryScans.transfersInId).floor {
-            historySince = BlockClock.time(of: floor, anchor: anchor, secondsPerBlock: BlockClock.fallbackSecondsPerBlock)
-        }
         // A period the history has now read in full is final: saved, for the next time the wallet opens.
         if !force, hasLoaded, loadedFor == address { saveFigures() }
     }
@@ -622,7 +618,7 @@ final class PortfolioModel {
         launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsByKey = [:]
         tokens = [:]; prices = [:]
         hasLoaded = false; landedWhole = false; updatedAt = nil; loadedFor = nil; perpsNote = nil; saved = nil; lastSaved = nil; savedFor = nil
-        history = .empty; historyUnreachable = false; historySince = nil; historyVersion = -1
+        history = .empty; historyUnreachable = false; historyVersion = -1
     }
 
     /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events. Without
