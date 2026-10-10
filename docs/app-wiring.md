@@ -135,10 +135,12 @@ no error and the later blocks' logs missing, a node hundreds of blocks behind at
 whose reads are kept as coverage (a read given the round's head: the head clock read anew on the app's endpoints, else
 the logs endpoints' own, `WalletHistoryService.roundHead`), the router asks an endpoint that clamps only for blocks
 at least 600 below the head (`LogsEndpoint.clamps`, `LogsEndpoints.headLag`): the newest blocks wait for `rpc2` while
-the scan's deadline lasts, and are otherwise left unread, a gap like any other. A screen's own read (no head given, never
-kept) may ask any endpoint for any block, as before: with `rpc2` down it is at worst a few hundred blocks short until it
-reads again, rather than empty. Every history round reads again the 1,200 blocks below the newest it read
-(`HistoryStore.overlap`), and `rpc1`, which answers any JSON-RPC batch with HTTP 403, is sent one range a request. The
+the scan's deadline lasts, and are otherwise left unread, a gap like any other. A screen's own read (no head given) may
+ask any endpoint for any block, as before: with `rpc2` down it is at worst a few hundred blocks short until it reads
+again, rather than empty. None of its newest 600 blocks is kept: a Moment coin's holder count, the one screen read kept
+on the device, keeps only blocks at least that far below the head (`MomentHolderTally.settleBlocks`). Every history
+round reads again the 1,200 blocks below the newest it read (`HistoryStore.overlap`), and `rpc1`, which answers any
+JSON-RPC batch with HTTP 403, is sent one range a request. The
 NFTs list says how far back the transfers into the wallet reach ("Only NFTs received since …") and counts what it lists
 as a minimum. Monad's pace is measured from block headers rather than assumed (`Chain/BlockClock.swift`).
 
@@ -197,9 +199,10 @@ what moves: a launch's record, curve values and pool price, a Moment's ledger, e
 Text is kept as the chain holds it and made safe to show on every read. A kept launch whose record no longer matches
 forgets that factory's launches and reads them in full. A graduated Moment coin's transfers counted so far are kept too
 (`moment-holders-<coin>.json`: each address's net transfers over one run of blocks read in one piece), so its page reads
-only the blocks since and, while the count doesn't reach the publish, the blocks before it, newest first; the newest 100
-blocks are read every time and never kept. Delete Account and Forget This Device remove the folder, and no read begun
-before the erase writes to it after (`Session.eraseLocalData`).
+only the blocks since and, while the count doesn't reach the publish, the blocks before it, newest first; the newest 600
+blocks are read every time and never kept, since an endpoint that clamps may have answered them short. Delete Account
+and Forget This Device remove the folder, and no read begun before the erase writes to it after
+(`Session.eraseLocalData`).
 
 The Moments screens read in as few round trips as the data allows (speed work, build 23):
 

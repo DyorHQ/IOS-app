@@ -38,7 +38,9 @@ import Foundation
       the round's head — an endpoint that clamps (`LogsEndpoint.clamps`) is asked only for blocks at least 600 below the
       head (`LogsEndpoints.headLag`): the newest blocks go to one that refuses past its head — waited for while the
       scan's deadline lasts, else left unread, a gap like any other — never to one that would answer them short. A
-      screen's read, never kept, may ask any endpoint for any block, as in build 22.
+      screen's read may ask any endpoint for any block, as in build 22, and is never kept — but for the newest 600
+      blocks' share: a Moment coin's holder count keeps only blocks at least that far below the head
+      (`MomentHolderTally.settleBlocks`).
    2. A history store per wallet (`HistoryStore`): five scans (transfers in and out, launchpad, fee sharing,
       Moments), each kept on disk with the blocks it covers. A refresh reads the blocks since the last one first, from
       1,200 below the newest read (`HistoryStore.overlap`) so that what a clamped answer could have left out is read
@@ -580,10 +582,11 @@ public actor LogsRouter {
     /// clamping endpoints for nothing.
     ///
     /// Nil — a screen's read (`RPCClient.chunkedLogsReport`, `newestLogs`: a coin's trades and holders, a Moment's), never
-    /// kept — is routed as in build 22: every endpoint may be asked for every block. Held back as well, the newest 600
-    /// blocks of every such window waited on rpc2 alone, and with rpc2 down, throttled past the deadline or refusing
-    /// past its head three times running, those screens showed nothing or "couldn't be read", where a clamping endpoint
-    /// would have answered — at worst a few hundred blocks short, until the screen reads again.
+    /// kept within `LogsEndpoints.headLag` of the head (a Moment coin's holder count keeps only the blocks below it,
+    /// `MomentHolderTally.settleBlocks`) — is routed as in build 22: every endpoint may be asked for every block. Held
+    /// back as well, the newest 600 blocks of every such window waited on rpc2 alone, and with rpc2 down, throttled past
+    /// the deadline or refusing past its head three times running, those screens showed nothing or "couldn't be read",
+    /// where a clamping endpoint would have answered — at worst a few hundred blocks short, until the screen reads again.
     public func read(_ query: LogsQuery, from: UInt64, to: UInt64, head: UInt64? = nil, order: Order = .ascending, budget: LogsBudget, concurrency: Int? = nil,
                      lane: LogsGate.Lane = .interactive) async -> LogsRead {
         guard from <= to else { return LogsRead(logs: [], covered: [], requests: 0) }

@@ -85,10 +85,12 @@ public extension MomentsService {
     /// Since build 23 what was counted is kept on the device (`MomentHolderTally`, with a store): a page opened again
     /// reads only the blocks since, and, while the count doesn't reach back to the publish, the blocks before it, newest
     /// first, so an older coin's holders become whole over a few openings instead of starting again from the head each
-    /// time. The newest `MomentHolderTally.settleBlocks` blocks are read every time and never kept, in case the head came
-    /// from a node a block or two ahead of the one that answered the logs. A read of the blocks since that stops short
-    /// starts the count again from the head (the newest blocks are counted first, as before); one that can't read the head
-    /// keeps what was kept, and returns nil.
+    /// time. The newest `MomentHolderTally.settleBlocks` blocks (`LogsEndpoints.headLag`, 600) are read every time and
+    /// never kept: this read is a screen's, given no head, so an endpoint that clamps may answer its newest range short
+    /// from a node hundreds of blocks behind, with no error (`LogsEndpoint.clamps`), and what it left out would be kept
+    /// as blocks with no transfers for good. A read of the blocks since that stops short starts the count again from the
+    /// head (the newest blocks are counted first, as before); one that can't read the head keeps what was kept, and
+    /// returns nil.
     func holderStats(coin: Address, publishedAt: Int) async -> MomentHolderStats? {
         guard isDeployed, let anchor = try? await logsRPC.block(.latest) else { return nil }
         let secondsPerBlock = await clock.secondsPerBlock()
@@ -102,7 +104,7 @@ public extension MomentsService {
         let newer = start <= anchor.number
             ? await logsRPC.newestLogs(address: coin, topics: topics, fromBlock: start, toBlock: anchor.number)
             : NewestLogs(logs: [], readFrom: start, complete: true)
-        let settled = anchor.number > MomentHolderTally.settleBlocks ? anchor.number - MomentHolderTally.settleBlocks : 0
+        let settled = MomentHolderTally.settled(head: anchor.number)
         let settledAt = Self.time(anchor: anchor, block: settled, secondsPerBlock: secondsPerBlock)
         guard var round = MomentHolderTally.round(saved: saved, coin: coin, floor: floor, head: anchor.number, start: start, settled: settled, settledAt: settledAt,
                                                   newer: newer) else { return nil }
@@ -203,10 +205,15 @@ public extension MomentsService {
 /// blocks before `from`, newest first. Public chain data only, the same for every account on the device; erased with the
 /// device's data (`ChainStore.erase`), and a count read before an erase is never kept after it.
 struct MomentHolderTally: Equatable, Sendable {
-    /// The newest blocks read on every read of a coin's holders and never kept: about 30 s of blocks, in case the head was
-    /// read from a node a little ahead of the one that answered the logs (a block it didn't have yet would be kept as
-    /// empty for good).
-    static let settleBlocks: UInt64 = 100
+    /// The newest blocks read on every read of a coin's holders and never kept: `LogsEndpoints.headLag`, 600 blocks, about
+    /// three minutes. The read is a screen's, given no head (`RPCClient.newestLogs`), so any endpoint may be asked for any
+    /// of its blocks — none waits on rpc2, and with rpc2 down the page still shows the holders — and one that clamps
+    /// (`LogsEndpoint.clamps`) answers a range past its node's head short, with no error, from a node hundreds of blocks
+    /// behind at times: a block it left out, kept, would count as one with no transfers for good. So only blocks at least
+    /// that far below the head are kept, as the wallet's history keeps none a clamping endpoint read nearer the head
+    /// (`LogsRouter.read`); the newer ones are shown and read again at the next opening. It covers a head read from a node
+    /// a little ahead of the one that answered the logs too.
+    static let settleBlocks: UInt64 = LogsEndpoints.headLag
     /// The most wallets a kept count holds: a coin held more widely is read from the head on every opening, as before.
     static let maxKeptWallets = 20_000
 
@@ -224,6 +231,9 @@ struct MomentHolderTally: Equatable, Sendable {
 
     /// The count reaches back to the publish: every transfer of the coin up to `to` is in it.
     var complete: Bool { from <= floor }
+
+    /// The newest block a read of the holders at `head` keeps: `settleBlocks` below it, 0 near the chain's first blocks.
+    static func settled(head: UInt64) -> UInt64 { head > settleBlocks ? head - settleBlocks : 0 }
 
     /// `moment-holders-<coin>.json`.
     static func fileName(_ coin: Address) -> String { "moment-holders-\(coin.hex.lowercased()).json" }

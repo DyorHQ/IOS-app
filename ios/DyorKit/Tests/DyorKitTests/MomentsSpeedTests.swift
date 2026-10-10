@@ -371,6 +371,34 @@ final class MomentsSpeedTests: XCTestCase {
         XCTAssertEqual(wider.floor, 0)
     }
 
+    /// The holders' read is a screen's, given no head, so an endpoint that clamps may answer its newest ranges short, from
+    /// a node hundreds of blocks behind, with no error (`LogsEndpoint.clamps`). Nothing within `LogsEndpoints.headLag` of
+    /// the head is kept: what such a node left out shows short once, is never kept as blocks with no transfers, and the
+    /// next opening counts it — the figures then those of one read of everything. With 100 blocks held back, as merged, the
+    /// transfers of blocks 402–900 were lost for good.
+    func testAClampedAnswerNeverReachesTheKeptCount() throws {
+        XCTAssertGreaterThanOrEqual(MomentHolderTally.settleBlocks, LogsEndpoints.headLag)
+        XCTAssertEqual(MomentHolderTally.settled(head: 1_000), 400)
+        XCTAssertEqual(MomentHolderTally.settled(head: 600), 0, "near the chain's first blocks")
+        let asOf = Date(timeIntervalSince1970: 1_000)
+        let head: UInt64 = 1_000
+        let settled = MomentHolderTally.settled(head: head)
+        // Answered by a node `headLag - 1` blocks behind: nothing past block 401, no error, the read said to be whole.
+        let nodeHead = head - LogsEndpoints.headLag + 1
+        XCTAssertTrue(Self.history.contains { $0.blockNumber > nodeHead && $0.blockNumber <= head - 100 }, "transfers the node left out")
+        let clamped = NewestLogs(logs: Self.history.filter { $0.blockNumber <= nodeHead }, readFrom: 0, complete: true)
+        let first = try XCTUnwrap(MomentHolderTally.round(saved: nil, coin: Self.coin, floor: 0, head: head, start: 0, settled: settled, settledAt: asOf,
+                                                          newer: clamped))
+        let kept = try XCTUnwrap(first.kept)
+        XCTAssertEqual([kept.from, kept.to], [0, settled])
+        XCTAssertEqual(kept.balances, MomentsService.netTransfers(Self.history.filter { $0.blockNumber <= settled }), "only blocks the node had")
+
+        let next = try XCTUnwrap(MomentHolderTally.round(saved: kept, coin: Self.coin, floor: 0, head: head, start: settled + 1, settled: settled, settledAt: asOf,
+                                                         newer: read(settled + 1, head)))
+        XCTAssertEqual(next.stats(addresses: .monadMainnet), whole(through: head))
+        XCTAssertEqual(next.kept, kept)
+    }
+
     /// The kept count on disk: every wallet, a net that went below zero included, read back exactly; a file of another
     /// version or coin, blocks out of order, or any entry that can't be read back is not used at all.
     func testTheKeptCountReadsBackExactlyOrNotAtAll() throws {
@@ -415,13 +443,16 @@ final class MomentsSpeedTests: XCTestCase {
 
         let savedRead = await service.savedHolderStats(coin: Self.coin)
         let saved = try XCTUnwrap(savedRead)
-        XCTAssertEqual(saved.stats.scannedTo, MomentsChainStub.head.number - MomentHolderTally.settleBlocks)
+        XCTAssertEqual(saved.stats.scannedTo, MomentHolderTally.settled(head: MomentsChainStub.head.number))
+        XCTAssertEqual(saved.stats.scannedTo, MomentsChainStub.head.number - LogsEndpoints.headLag)
         XCTAssertTrue(saved.stats.complete)
 
         MomentsChainStub.install({ _, _ in nil }, logs: Self.history)
         let secondRead = await service.holderStats(coin: Self.coin, publishedAt: published)
         XCTAssertEqual(secondRead, first)
-        XCTAssertEqual(MomentsChainStub.logQueries().count, 1, "only the blocks since what was kept")
+        // Only the blocks since what was kept: the newest `settleBlocks`, in the stub endpoint's 100-block ranges.
+        XCTAssertEqual(MomentsChainStub.logQueries().count, Int(MomentHolderTally.settleBlocks / 100), "only the blocks since what was kept")
+        XCTAssertLessThan(MomentsChainStub.logQueries().count, ranges)
 
         store.erase()
         let erased = await service.savedHolderStats(coin: Self.coin)

@@ -108,6 +108,9 @@ final class PortfolioModel {
     /// The wallet whose saved figures were last taken in (`restoreSaved`), found or not: a screen asking again before its
     /// load starts (`showSaved`) reads no file twice. Nil after `reset`.
     @ObservationIgnored private var savedFor: Address?
+    /// The history model's `version` when the history was last reset under saved figures (`dropSaved`): nothing is saved
+    /// from a snapshot published before then, built on the history dropped. The version only moves on, whatever the wallet.
+    @ObservationIgnored private var droppedThrough: Int?
     /// A load for the wallet has landed with everything it reads read (`error` nil) in this session. From then on its
     /// figures are whole: a later load that fails keeps what the last good one read (the launches, the Moments, the
     /// prices), so they never fall back on the saved ones (`showsLive`).
@@ -584,6 +587,8 @@ final class PortfolioModel {
     /// Nothing for another wallet, or after an erase of this device's data since the load began (`loadEpoch`).
     private func saveFigures() {
         guard let address = loadedFor, hasLoaded, error == nil, !history.unreachable, history.read, let savedScreens else { return }
+        // Nothing built on a snapshot published before the history was reset under the saved figures (`dropSaved`).
+        if let droppedThrough, historyVersion <= droppedThrough { return }
         let now = Date()
         let readAt = min(updatedAt ?? now, now)
         var periods = lastSaved?.periods.filter { SavedScreens.isShowable(savedAt: $0.value.savedAt, now: now) } ?? [:]
@@ -595,6 +600,19 @@ final class PortfolioModel {
         let figures = SavedFigures(periods: periods)
         lastSaved = figures
         savedScreens.save(figures, .portfolio, wallet: address, savedAt: newest, epoch: loadEpoch)
+    }
+
+    /// The wallet's history was reset — the owner raised the history epoch, or the day's spot check found the server's
+    /// history wrong (`HistoryModel.restart`) — so the figures saved for it may be built on history that is gone: they are
+    /// forgotten, on the device and here, and none is saved again from a snapshot published before the reset (`version`,
+    /// the history model's then; `saveFigures`). Total Volume and the Portfolio show this session's figures, or a
+    /// placeholder, until the history's rounds land. What is held for another wallet stays.
+    func dropSaved(env: AppEnvironment, for wallet: Address, historyVersion version: Int) {
+        env.savedScreens.remove(.portfolio, wallet: wallet)
+        droppedThrough = max(droppedThrough ?? version, version)
+        guard [loadedFor, loadingFor, savedFor].contains(where: { $0 == wallet }) else { return }
+        saved = nil
+        lastSaved = nil
     }
 
     private func reset() {

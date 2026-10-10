@@ -15,8 +15,10 @@ import Foundation
 ///   (`isShowable`): a day-old balance is no longer a starting point.
 /// - Saved off the main thread, one file after another in the order asked (`save`). An erase of this device's data
 ///   removes every file (`erase`), and a save asked for by a read that began before it is dropped (`epoch`), so nothing
-///   of an erased account comes back. A screen too big to save (`maxBytes`) isn't saved, and its older file is removed,
-///   so the screen never opens on something older than its last read.
+///   of an erased account comes back. One screen's file is removed the same way when what it holds can no longer be
+///   vouched for (`remove`: the Portfolio's figures, once the history they were built from is dropped). A screen too big
+///   to save (`maxBytes`) isn't saved, and its older file is removed, so the screen never opens on something older than
+///   its last read.
 /// - With no directory (a local fork, whose chain a restart replaces), nothing is saved or shown.
 ///
 /// Only what the chain and the app's own reads answered is saved, the same values the screen showed; the file is the app's
@@ -62,6 +64,8 @@ public final class SavedScreens: @unchecked Sendable {
     private let now: @Sendable () -> Date
     private let lock = NSLock()
     private var currentEpoch = 0
+    /// Counts each file's removals (`remove`), by file name: a save asked for before one never lands after it.
+    private var removals: [String: Int] = [:]
     /// Saves run here, one after another, in the order asked: a newer save is never overwritten by an older one.
     private let queue = DispatchQueue(label: "fun.dyorhq.saved-screens", qos: .utility)
 
@@ -112,9 +116,27 @@ public final class SavedScreens: @unchecked Sendable {
     /// A value too big to save (`maxBytes`) removes the screen's file instead.
     public func save<T: Encodable & Sendable>(_ value: T, _ screen: Screen, wallet: Address?, savedAt: Date, epoch: Int) {
         guard directory != nil else { return }
+        let removal = removals(of: Self.fileName(screen, wallet: wallet))
         queue.async { [self] in
-            write(value, screen, wallet: wallet, savedAt: savedAt, epoch: epoch)
+            write(value, screen, wallet: wallet, savedAt: savedAt, epoch: epoch, removal: removal)
         }
+    }
+
+    /// Removes `screen`'s file for `wallet`, what it holds no longer vouched for — the Portfolio's figures once the history
+    /// they were built from is dropped (`HistoryModel.restart`): not shown from now on, and no save asked for before this
+    /// lands after it, as for an erase. A save asked for after it is written as any other.
+    public func remove(_ screen: Screen, wallet: Address?) {
+        let name = Self.fileName(screen, wallet: wallet)
+        lock.lock()
+        defer { lock.unlock() }
+        removals[name, default: 0] += 1
+        if let directory { try? FileManager.default.removeItem(at: directory.appending(path: name)) }
+    }
+
+    private func removals(of name: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return removals[name, default: 0]
     }
 
     /// Removes every saved screen of every wallet (an erase of this device's data): none is shown from now on, and no save
@@ -131,6 +153,12 @@ public final class SavedScreens: @unchecked Sendable {
         queue.sync {}
     }
 
+    /// Holds every save not yet written until `semaphore` is signalled (tests): a save asked for now is written after
+    /// whatever the test does meanwhile.
+    func holdSaves(until semaphore: DispatchSemaphore) {
+        queue.async { semaphore.wait() }
+    }
+
     /// `<screen>-<wallet>.json`, the wallet in lower case, "signed-out" for none.
     static func fileName(_ screen: Screen, wallet: Address?) -> String {
         "\(screen.rawValue)-\(walletKey(wallet)).json"
@@ -140,17 +168,19 @@ public final class SavedScreens: @unchecked Sendable {
         wallet.map { $0.hex.lowercased() } ?? "signed-out"
     }
 
-    /// One atomic write, out of backups, under the lock: an erase waits for it, then removes it. Encoded before the lock is
-    /// taken, so a large screen never holds up a screen reading `epoch` or `load` meanwhile.
-    private func write<T: Encodable>(_ value: T, _ screen: Screen, wallet: Address?, savedAt: Date, epoch: Int) {
+    /// One atomic write, out of backups, under the lock: an erase or a removal waits for it, then removes it. Encoded before
+    /// the lock is taken, so a large screen never holds up a screen reading `epoch` or `load` meanwhile. Dropped when the
+    /// device's data was erased since `epoch`, or the file removed since `removal` (its count of removals when asked).
+    private func write<T: Encodable>(_ value: T, _ screen: Screen, wallet: Address?, savedAt: Date, epoch: Int, removal: Int) {
         guard let directory else { return }
         let file = SavedScreenFile(format: Self.format, build: build, screen: screen.rawValue, wallet: Self.walletKey(wallet),
                                    savedAt: savedAt.timeIntervalSince1970, value: value)
         let data = try? JSONEncoder().encode(file)
+        let name = Self.fileName(screen, wallet: wallet)
         lock.lock()
         defer { lock.unlock() }
-        guard epoch == currentEpoch else { return }
-        var url = directory.appending(path: Self.fileName(screen, wallet: wallet))
+        guard epoch == currentEpoch, removals[name, default: 0] == removal else { return }
+        var url = directory.appending(path: name)
         guard let data, data.count <= Self.maxBytes else {
             try? FileManager.default.removeItem(at: url)
             return

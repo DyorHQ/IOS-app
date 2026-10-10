@@ -107,6 +107,34 @@ final class SavedScreensTests: XCTestCase {
         XCTAssertEqual(saved.load([String].self, .home, wallet: Self.walletA)?.value, ["new"])
     }
 
+    /// One screen's file removed (`remove`: the Portfolio's figures once the history they were built from is dropped) is
+    /// gone for that screen and wallet only, and a save asked for before the removal — still waiting to be written — never
+    /// lands after it; one asked for after it is written as any other.
+    func testARemovedScreenIsGoneAndNoSaveAskedBeforeItLandsAfterIt() {
+        let folder = directory()
+        let saved = store(folder)
+        saved.save(["a"], .portfolio, wallet: Self.walletA, savedAt: Self.now, epoch: saved.epoch)
+        saved.save(["b"], .portfolio, wallet: Self.walletB, savedAt: Self.now, epoch: saved.epoch)
+        saved.save(["home"], .home, wallet: Self.walletA, savedAt: Self.now, epoch: saved.epoch)
+        saved.waitForSaves()
+        // Asked for before the removal, written after it unless dropped: the saves are held until the removal is done.
+        let gate = DispatchSemaphore(value: 0)
+        saved.holdSaves(until: gate)
+        saved.save(["late"], .portfolio, wallet: Self.walletA, savedAt: Self.now, epoch: saved.epoch)
+        saved.remove(.portfolio, wallet: Self.walletA)
+        XCTAssertNil(saved.load([String].self, .portfolio, wallet: Self.walletA), "gone at once")
+        gate.signal()
+        saved.waitForSaves()
+        XCTAssertNil(saved.load([String].self, .portfolio, wallet: Self.walletA), "a save asked for before the removal never lands after it")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appending(path: SavedScreens.fileName(.portfolio, wallet: Self.walletA)).path))
+        XCTAssertEqual(saved.load([String].self, .portfolio, wallet: Self.walletB)?.value, ["b"], "another wallet's stays")
+        XCTAssertEqual(saved.load([String].self, .home, wallet: Self.walletA)?.value, ["home"], "another screen's stays")
+        saved.save(["new"], .portfolio, wallet: Self.walletA, savedAt: Self.now, epoch: saved.epoch)
+        saved.waitForSaves()
+        XCTAssertEqual(saved.load([String].self, .portfolio, wallet: Self.walletA)?.value, ["new"], "asked for after it: written")
+        store(nil).remove(.portfolio, wallet: Self.walletA)
+    }
+
     /// Saves land in the order asked: a newer one is never overwritten by an older one.
     func testSavesLandInTheOrderAsked() {
         let folder = directory()
@@ -469,6 +497,36 @@ final class SavedScreensTests: XCTestCase {
         // The header says why when the Portfolio's load left part of Total Volume unread, beside a saved one kept meanwhile.
         XCTAssertTrue(home.contains("error: model.error ?? volumeError"))
         XCTAssertTrue(home.contains("env.portfolio.historyUnreachable || env.portfolio.error != nil"))
+    }
+
+    /// A reset of the wallet's history — the owner's epoch raised, or the day's spot check finding the server's history
+    /// wrong — drops the Portfolio's figures saved for the wallet, on the device and in the model, before the rounds start
+    /// over: built on the history dropped, they were otherwise shown on Home and in the Portfolio for up to a day. None is
+    /// saved again from a snapshot published before the reset, so the next round's save can't carry one back.
+    func testAHistoryResetDropsThePortfoliosSavedFigures() throws {
+        let history = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
+        XCTAssertTrue(history.contains("func epochReset(env: AppEnvironment) {\n        restart(env: env)\n    }"))
+        XCTAssertTrue(history.contains("guard await sync.spotCheck(wallet: wallet) == .mismatched, let self, self.wallet == wallet else { return }\n            restart(env: env)"))
+        let restart = try XCTUnwrap(history.range(of: "    private func restart(env: AppEnvironment) {\n        guard let wallet else { return }\n        env.portfolio.dropSaved(env: env, for: wallet, historyVersion: version)\n"))
+        let rerun = try XCTUnwrap(history.range(of: "run(env: env, wallet: wallet, fromStore: true, afterReset: true)", range: restart.upperBound..<history.endIndex))
+        XCTAssertLessThan(restart.upperBound, rerun.lowerBound)
+
+        let portfolio = try DocsLinksTests.appSource("Portfolio/PortfolioModel.swift")
+        XCTAssertTrue(portfolio.contains("""
+            func dropSaved(env: AppEnvironment, for wallet: Address, historyVersion version: Int) {
+                env.savedScreens.remove(.portfolio, wallet: wallet)
+                droppedThrough = max(droppedThrough ?? version, version)
+                guard [loadedFor, loadingFor, savedFor].contains(where: { $0 == wallet }) else { return }
+                saved = nil
+                lastSaved = nil
+            }
+        """), "the file, what shows and what the next save starts from")
+        // The figures saved next start from nothing of the dropped ones, and none is built on a snapshot from before.
+        let save = try XCTUnwrap(portfolio.range(of: "    private func saveFigures() {"))
+        let guarded = try XCTUnwrap(portfolio.range(of: "if let droppedThrough, historyVersion <= droppedThrough { return }", range: save.upperBound..<portfolio.endIndex))
+        let carried = try XCTUnwrap(portfolio.range(of: "var periods = lastSaved?.periods", range: save.upperBound..<portfolio.endIndex))
+        XCTAssertLessThan(guarded.upperBound, carried.lowerBound)
+        XCTAssertEqual(portfolio.components(separatedBy: "historyVersion = version").count - 1, 1, "set only from a snapshot applied")
     }
 
     /// My Launchpad's saved escrows are marked as last read and its saved rewards not current, so Claim All never claims

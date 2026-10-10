@@ -352,9 +352,12 @@ final class HistoryModel {
     /// server's history wrong and forgot the wallet's — with the instant read first, the server's history read again before
     /// the first round whatever the time of the last read (`run`'s `afterReset`), and nothing of a round under way joined
     /// or kept: it read entries that are gone (the store lets its refreshes go, `HistoryStore.forget`). The snapshot isn't
-    /// emptied first, as for another wallet: the instant read replaces it at once.
+    /// emptied first, as for another wallet: the instant read replaces it at once. The Portfolio's figures saved for the
+    /// wallet go too (`PortfolioModel.dropSaved`): built on the history dropped, they were otherwise shown on Home and in the
+    /// Portfolio, and saved again, for up to a day.
     private func restart(env: AppEnvironment) {
         guard let wallet else { return }
+        env.portfolio.dropSaved(env: env, for: wallet, historyVersion: version)
         filler?.cancel()
         filler = nil
         stopPolling()
