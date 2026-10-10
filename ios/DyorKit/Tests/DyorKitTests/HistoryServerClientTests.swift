@@ -594,7 +594,7 @@ final class HistoryServerClientTests: XCTestCase {
     // MARK: The request
 
     /// `rpcJSON` posts the arguments as JSON — a block number as digits, never "1.0", a flag as a boolean, a null — with the
-    /// publishable key, as `rpc` does, and surfaces a status other than 2xx with its body; the client sends the wallet
+    /// publishable key, and surfaces a status other than 2xx with its body; the client sends the wallet
     /// lowercase and reads through it, a status other than 2xx failing the read open.
     func testTheRequestGoesAsJSONToTheRPC() async throws {
         let base = "https://fmnjqrguvopusfufmirs.supabase.co"

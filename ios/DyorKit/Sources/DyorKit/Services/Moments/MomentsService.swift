@@ -1,17 +1,8 @@
 import BigInt
 import Foundation
 
-/// A wallet that can sign a raw 32-byte digest — what a Permit2 collect needs. Both the Privy embedded wallet and an
-/// imported local wallet provide it in the app.
-public protocol MomentsPermitSigner: Sendable {
-    var address: Address { get }
-    /// Returns the 65-byte `[r ‖ s ‖ v]` signature as `0x`-hex with `v` as 27/28.
-    func signDigest(_ digest: Data) async throws -> String
-}
-
 /// The Moments client: every read comes straight from the contracts through Multicall3, every write is a
-/// `TransactionStep` plan for `TransactionSender`. A port of the web app's `moments/reads.ts` + `actions.ts`; the
-/// derivations are identical so both clients agree to the wei.
+/// `TransactionStep` plan for `TransactionSender`. Ported from the former web app's `moments/reads.ts` + `actions.ts`.
 public actor MomentsService {
     public let rpc: RPCClient
     /// Where event history is read; a local fork keeps logs on the same node.
@@ -309,12 +300,6 @@ public actor MomentsService {
         }
     }
 
-    /// The Moment id of a coin, 0 when the address is not a Moment coin.
-    public func momentId(coin: Address) async throws -> BigUInt {
-        guard isDeployed else { return 0 }
-        return try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.momentIdByCoin, [.address(coin)], returns: "uint256")])[0][0].uint
-    }
-
     /// Moment ids for many token addresses at once (only the ones that are Moment coins are returned).
     public func momentIds(coins: [Address]) async throws -> [Address: BigUInt] {
         guard isDeployed, !coins.isEmpty else { return [:] }
@@ -498,24 +483,8 @@ public actor MomentsService {
         return [.call(TransactionRequest(to: addresses.factory, data: data), label: L10n.tr("Publish \(input.symbol)"))]
     }
 
-    /// Collects `quantity` editions with a Permit2 signature: Permit2 is approved once for USDC (unlimited, the
-    /// canonical pattern; the step is skipped when the allowance already covers it), then the collect itself
-    /// carries a signed transfer for up to `price × quantity`. The contract only ever pulls the quoted gross.
-    public func collectPlan(momentId: BigUInt, quantity: Int, price: BigUInt, signer: any MomentsPermitSigner, symbol: String) async throws -> [TransactionStep] {
-        guard isDeployed else { throw MomentsError.notDeployed }
-        let maxGross = price * BigUInt(quantity)
-        let permit = Permit2Signature.Permit(token: addresses.usdc, amount: maxGross, nonce: Permit2Signature.randomNonce(), deadline: BigUInt(Int(Date().timeIntervalSince1970) + 30 * 60))
-        let digest = try Permit2Signature.digest(permit: permit, spender: addresses.collect, permit2: addresses.permit2, chainId: Monad.chainId)
-        guard let signature = Data(hex: try await signer.signDigest(digest)), signature.count == 65 else { throw TransactionError.rejected(L10n.tr("The wallet returned an unreadable signature.")) }
-        let data = MomentsABI.calldata(MomentsABI.Collect.collectWithPermit2, [.uint(momentId), .uint(quantity), MomentsABI.permit(token: permit.token, amount: permit.amount, nonce: permit.nonce, deadline: permit.deadline), .bytes(signature)])
-        let maxUint = (BigUInt(1) << 256) - 1
-        return [
-            .approve(token: addresses.usdc, spender: addresses.permit2, amount: maxUint, label: L10n.tr("Approve USDC for Permit2")),
-            .call(TransactionRequest(to: addresses.collect, data: data), label: L10n.string(LocalizedStringResource("Collect \(quantity) editions of \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The values are the number of editions collected and the Moment's symbol."))),
-        ]
-    }
-
-    /// The plain-approval path: an exact USDC approval of the collect contract, then `collect`.
+    /// Collects `quantity` editions: an exact USDC approval of the collect contract for `gross`, then `collect`. The
+    /// contract pulls at most the quoted gross, which the approval covers.
     public func collectWithApprovalPlan(momentId: BigUInt, quantity: Int, gross: BigUInt, symbol: String) -> [TransactionStep] {
         let data = MomentsABI.calldata(MomentsABI.Collect.collect, [.uint(momentId), .uint(quantity)])
         return [

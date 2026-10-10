@@ -317,7 +317,3 @@ final class Clock {
         }
     }
 }
-
-// Both wallets the app can sign with provide the raw-digest signature a Permit2 collect needs.
-extension LocalWallet: MomentsPermitSigner {}
-extension PrivyWallet: MomentsPermitSigner {}

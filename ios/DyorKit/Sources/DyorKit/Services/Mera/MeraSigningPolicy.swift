@@ -686,7 +686,3 @@ extension Mera {
         }
     }
 }
-
-private extension Character {
-    var isASCIIDigit: Bool { isASCII && isNumber }
-}

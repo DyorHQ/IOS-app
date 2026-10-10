@@ -457,7 +457,7 @@ public final class PerplTradeClient {
     public var onPositionEnded: (@MainActor (PerplLivePosition) -> Void)?
     private var announcedTriggers: Set<String> = []
     private var endedPositions: Set<Int> = []
-    /// Order requests between their first frame and their last ack (`place`, `placeAll`, `sendEach`).
+    /// Order requests between their first frame and their last ack (`placeAll`, `sendEach`).
     private var requestsInFlight = 0
     /// Fired on the main actor whenever account state (id / forwardingEnabled / lfr) changes — from the initial
     /// snapshot or a later AccountUpdate — so the owner can re-derive its status the moment forwarding turns on.
@@ -630,21 +630,6 @@ public final class PerplTradeClient {
         pending.removeAll()
         pendingRq.removeAll()
         releaseWaiters()
-    }
-
-    /// Places the frames in order (entry first, then triggers), returning the entry's ack. Triggers are sent
-    /// best-effort after the entry is accepted.
-    public func place(_ frames: [PerplOrderFrame]) async throws -> PerplOrderAck {
-        try admit(frames)
-        requestsInFlight += 1
-        defer { requestsInFlight -= 1 }
-        var firstAck: PerplOrderAck?
-        for frame in frames {
-            let ack = try await send(frame)
-            if firstAck == nil { firstAck = ack }
-            if !ack.accepted { break }
-        }
-        return firstAck ?? PerplOrderAck(code: -1, error: "No frames") // not localized: an ack's error, as Perpl's own are
     }
 
     /// Places the frames in order and returns EVERY frame's ack (stopping after the first rejection). Lets a caller
@@ -907,7 +892,7 @@ public final class PerplTradeClient {
     /// Writes one frame and waits for its ack. Its request id is assigned here, as it is written, so ids rise strictly in
     /// write order (Perpl refuses an id below the last one it accepted): a reserved id is used only while it is still
     /// above every id written; otherwise nothing is written and the frame is refused (never sent: the caller refunds).
-    private func send(_ frame: PerplOrderFrame, written: (Int) -> Void = { _ in }) async throws -> PerplOrderAck {
+    private func send(_ frame: PerplOrderFrame, written: (Int) -> Void) async throws -> PerplOrderAck {
         // The socket closed between frames: this one never leaves the device (rather than waiting 8 s on a socket that
         // no longer exists and reporting an outcome that isn't in doubt).
         guard signedIn, task != nil || transport != nil else { throw PerplTradeError.notSignedIn }

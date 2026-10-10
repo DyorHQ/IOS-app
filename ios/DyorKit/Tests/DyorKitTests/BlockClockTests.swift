@@ -116,11 +116,9 @@ final class BlockClockTests: XCTestCase {
         XCTAssertEqual(MomentsService.holderLookback(ageSeconds: -50, secondsPerBlock: 0.3), 2_000, "a clock ahead of the chain reads the margin")
     }
 
-    /// Scan windows that are block budgets keep their counts, and say blocks; the history filters a user picks are their
+    /// A scan window that is a block budget keeps its count, and says blocks; the history filters a user picks are their
     /// true length at the measured pace.
     func testScanBudgetsKeepTheirBlocksAndFiltersAreTrueTimes() {
-        XCTAssertEqual(WalletTokenDiscovery.defaultWindowBlocks, 6_480_000)
-        XCTAssertEqual(TokenActivityService.defaultLookbackBlocks, 54_000)
         XCTAssertEqual(SwapHistoryService.Window.allBlocks, 19_440_000)
         XCTAssertEqual(SwapHistoryService.Window.all.blocks(secondsPerBlock: 0.3), 19_440_000, "All is a budget")
         XCTAssertEqual(SwapHistoryService.Window.day.blocks(secondsPerBlock: 0.3), 288_000)

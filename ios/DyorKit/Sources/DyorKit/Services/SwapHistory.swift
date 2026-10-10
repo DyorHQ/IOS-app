@@ -54,7 +54,7 @@ public struct SwapHistoryService: Sendable {
     /// nonce at past blocks — state only the archive endpoints answer (`LogsEndpoints.archive`: rpc2, rpc4, rpc1), never
     /// a client that fails over onto rpc3 or rpc.monad.xyz, which refuse old blocks.
     private let archive: RPCClient
-    /// Turns the 24H, 7D and 30D filters into blocks, and block numbers into the times a swap shows.
+    /// Turns block numbers into the times a swap shows.
     public let clock: BlockClock
 
     /// `archive`: the client for the transactions' facts (`TransactionFacts`); nil reads them on `rpc` (a local fork,
@@ -67,7 +67,9 @@ public struct SwapHistoryService: Sendable {
 
     private static let transferSig = "Transfer(address,address,uint256)"
 
-    /// How far back a history query looks. `all` is capped so a no-address scan stays bounded on a busy chain.
+    /// A history filter the user picks (24H, 7D, 30D, All): the app shows its `label` and keeps the recorded rows newer
+    /// than its `seconds`. No scan reads by window any more; `blocks(secondsPerBlock:)` and `allBlocks` keep the block
+    /// budget each one stood for, which BlockClockTests pins.
     public enum Window: String, Sendable, CaseIterable, Identifiable {
         case day, week, month, all
         public var id: String { rawValue }
@@ -79,16 +81,15 @@ public struct SwapHistoryService: Sendable {
             case .all: return L10n.string(LocalizedStringResource("All", bundle: L10n.kit, comment: "[tight] A history window: every swap, as far back as the app reads."))
             }
         }
-        /// The blocks a scan of this window reads at `secondsPerBlock`: the day, the week and the month their true length
+        /// The blocks this window spans at `secondsPerBlock`: the day, the week and the month their true length
         /// (`seconds`); "All" the fixed budget `allBlocks`, whatever the pace.
         public func blocks(secondsPerBlock: Double) -> UInt64 {
             self == .all ? Self.allBlocks : BlockClock.blocks(in: seconds, secondsPerBlock: secondsPerBlock)
         }
         /// `blocks(secondsPerBlock:)` at `BlockClock.fallbackSecondsPerBlock`, for a reader with no clock: an estimate.
-        /// `swaps(wallet:window:)` uses the session's measured pace.
         public var blocks: UInt64 { blocks(secondsPerBlock: BlockClock.fallbackSecondsPerBlock) }
-        /// What an "All" scan reads: a block budget, 19,440,000 blocks (about 68 days at Monad's pace), kept as it was
-        /// when it was called 90 days so a scan with no address filter stays bounded on a busy chain.
+        /// The block budget "All" stands for: 19,440,000 blocks (about 68 days at Monad's pace), kept as it was when it
+        /// was called 90 days and bounded the no-address swap scan this service no longer runs by window.
         public static let allBlocks: UInt64 = 19_440_000
         /// The matching wall-clock cutoff for filtering recorded rows.
         public var seconds: TimeInterval {
@@ -99,18 +100,6 @@ public struct SwapHistoryService: Sendable {
             case .all: return 86_400 * 90
             }
         }
-    }
-
-    /// The current chain head, for a poller to checkpoint from (so it only picks up swaps made after a trader is copied).
-    public func head() async -> UInt64? { try? await rpc.block(.latest).number }
-
-    public func swaps(wallet: Address, window: Window, decimals: [Address: Int] = [:], limit: Int = 100) async -> [SwapRecord] {
-        guard let anchor = try? await rpc.block(.latest) else { return [] }
-        let secondsPerBlock = await clock.secondsPerBlock()
-        let latest = anchor.number
-        let blocks = window.blocks(secondsPerBlock: secondsPerBlock)
-        let from = latest > blocks ? latest - blocks : 0
-        return await scan(wallet: wallet, from: from, to: latest, anchor: anchor, secondsPerBlock: secondsPerBlock, decimals: decimals, limit: limit)
     }
 
     /// Swaps in an explicit block range — e.g. the Portfolio's full-history scan from block 0.

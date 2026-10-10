@@ -2,10 +2,11 @@ import BigInt
 import Foundation
 
 /// The launchpad client: every read comes straight from the contracts through Multicall3, and every write is
-/// a `TransactionStep` plan for `TransactionSender`. A port of the web app's `launchpad.ts` / `actions.ts`;
-/// the derivations (price, market cap, progress) are identical so both apps agree to the wei.
+/// a `TransactionStep` plan for `TransactionSender`. Its derivations (price, market cap, progress) were ported from the
+/// former web app's `launchpad.ts`, and the tests check them to the wei.
 public actor LaunchpadService {
-    /// Where `eth_getLogs` goes on mainnet: rpc1.monad.xyz allows 1 000 blocks per request against 100 on rpc.monad.xyz.
+    /// Where `eth_getLogs` goes when no logs client is passed (`logsRPC`) and the node isn't a local fork. The app passes its
+    /// `LogsRouter` client, which reads across the public endpoints.
     public static let defaultLogsRPC = URL(string: "https://rpc1.monad.xyz")!
     /// `LaunchpadFactory.MAX_EXEMPTIONS`.
     public static let maxExemptions = 32
@@ -17,7 +18,7 @@ public actor LaunchpadService {
     public let rpc: RPCClient
     /// The endpoint used for event history; a local fork keeps logs on the same node.
     public let logsRPC: RPCClient
-    public private(set) var addresses: LaunchpadAddresses
+    public let addresses: LaunchpadAddresses
     /// Turns block numbers into the times the history shows, and a day or a coin's age into blocks.
     public let clock: BlockClock
     let multicall: Multicall
@@ -48,11 +49,6 @@ public actor LaunchpadService {
         self.now = now
     }
 
-    /// Swaps in the deployed addresses once they are known. Cached pair metadata survives; it is chain data.
-    public func setAddresses(_ addresses: LaunchpadAddresses) {
-        self.addresses = addresses
-    }
-
     public var isDeployed: Bool { addresses.isDeployed }
 
     /// The live stack followed by every retired one (skipping a retired stack the build is configured to as live). A
@@ -79,11 +75,7 @@ public actor LaunchpadService {
 
     // MARK: - Pair assets
 
-    /// Symbol and decimals of a pair asset; native MON needs no read. Cached for the life of the service.
-    public func pairInfo(_ address: Address) async throws -> PairInfo {
-        try await pairInfos([address])[address] ?? .mon
-    }
-
+    /// Symbol and decimals of each pair asset; native MON needs no read. Cached for the life of the service.
     private func pairInfos(_ tokens: [Address]) async throws -> [Address: PairInfo] {
         var out: [Address: PairInfo] = [:]
         var missing: [Address] = []

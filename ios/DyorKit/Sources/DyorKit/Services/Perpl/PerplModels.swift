@@ -45,6 +45,8 @@ public struct PerpMarket: Identifiable, Hashable, Sendable {
     public let markTimestamp: Int
     public let longOI: Double
     public let shortOI: Double
+    /// The funding rate for the current interval, signed, in parts per 100 000 of notional: positive means long
+    /// positions pay short positions.
     public let fundingRatePct100k: Int
     public let status: Int
     /// Initial and maintenance margin as fractions of notional (0.1 = 10%); nil when the Exchange's margin read failed.
@@ -64,9 +66,6 @@ public struct PerpMarket: Identifiable, Hashable, Sendable {
         return letters.isEmpty ? symbol : letters.uppercased()
     }
 
-    /// The funding rate for the current interval as a fraction of notional (`fundingRatePct100k / 100 000`):
-    /// positive means long positions pay short positions.
-    public var fundingRateHourly: Double { PerplFunding.hourlyRate(pct100k: fundingRatePct100k) }
     /// The venue's maximum leverage for this market (`floor(1 / initial margin fraction)`).
     public var maxLeverage: Double { (initMarginFraction ?? 0) > 0 ? max(1, (1 / initMarginFraction!).rounded(.down)) : 1 }
     /// The smallest tradable size (one lot).
@@ -252,46 +251,5 @@ public enum PerplError: Error, LocalizedError, Equatable {
         case .contextUnavailable(let status): return L10n.tr("Perpl market data is unavailable (status \(String(status))).")
         case .malformedResponse(let what): return L10n.tr("Perpl sent \(what) the app could not read.")
         }
-    }
-}
-
-
-/// One row of Perpl's authenticated account history: deposits, withdrawals, settlements, funding payments,
-/// liquidations. `amount` is the signed change in AUSD; `balance` the account balance after it.
-public struct PerplAccountEvent: Identifiable, Sendable, Hashable {
-    public enum Kind: Int, Sendable, Hashable {
-        case deposit = 1, withdrawal = 2, settlement = 4, liquidation = 5, funding = 8
-        case other = 0
-    }
-    public let id: String
-    public let time: Date
-    public let kind: Kind
-    public let rawType: Int
-    public let marketId: Int?
-    public let amount: Double
-    public let balance: Double
-    public let fee: Double
-
-    public init(id: String, time: Date, kind: Kind, rawType: Int, marketId: Int?, amount: Double, balance: Double, fee: Double) {
-        self.id = id; self.time = time; self.kind = kind; self.rawType = rawType; self.marketId = marketId; self.amount = amount; self.balance = balance; self.fee = fee
-    }
-
-    /// Parses one `AccountEvent` row (api-docs rest.md: `at`, `in`, `id`, `et`, `m`, `a`, `b`, `f`).
-    init?(event j: [String: Any]) {
-        guard let et = (j["et"] as? NSNumber)?.intValue else { return nil }
-        let at = j["at"] as? [String: Any]
-        let ms = (at?["t"] as? NSNumber)?.doubleValue ?? 0
-        let block = (at?["b"] as? NSNumber)?.intValue ?? 0
-        let market = (j["m"] as? NSNumber)?.intValue
-        self.init(
-            id: "\(et)-\(Int(exactly: ms.rounded(.towardZero)) ?? 0)-\(block)-\(market ?? 0)",
-            time: Date(timeIntervalSince1970: ms / 1000),
-            kind: Kind(rawValue: et) ?? .other,
-            rawType: et,
-            marketId: market,
-            amount: PerplHistory.amount(j["a"]),
-            balance: PerplHistory.amount(j["b"]),
-            fee: PerplHistory.amount(j["f"])
-        )
     }
 }

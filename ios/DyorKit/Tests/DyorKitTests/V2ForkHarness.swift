@@ -232,7 +232,7 @@ class V2ForkCase: XCTestCase {
 }
 
 /// A fresh in-memory key for a fork test; it counts what it signs. Never printed.
-final class ForkWallet: Wallet, MomentsPermitSigner, @unchecked Sendable {
+final class ForkWallet: Wallet, @unchecked Sendable {
     let account: Secp256k1Account
     private let lock = NSLock()
     private var signed = 0
@@ -251,10 +251,4 @@ final class ForkWallet: Wallet, MomentsPermitSigner, @unchecked Sendable {
     }
 
     func signMessage(_ message: Data) async throws -> Data { try account.signMessage(message) }
-
-    /// A Permit2 digest, signed as the app's local wallet signs it.
-    func signDigest(_ digest: Data) async throws -> String {
-        lock.withLock { signed += 1 }
-        return try account.sign(hash32: digest).hexString
-    }
 }

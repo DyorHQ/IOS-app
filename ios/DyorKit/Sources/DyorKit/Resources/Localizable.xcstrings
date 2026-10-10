@@ -1441,6 +1441,7 @@
       }
     },
     "Approve USDC for Permit2" : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -10275,6 +10276,7 @@
       }
     },
     "The wallet returned an unreadable signature." : {
+      "extractionState" : "stale",
       "localizations" : {
         "es" : {
           "stringUnit" : {

@@ -740,7 +740,8 @@ public struct CollectQuote: Sendable, Hashable {
 public struct MomentAccountView: Sendable, Hashable {
     public let usdcBalance: BigUInt
     public let monBalance: BigUInt
-    /// USDC → Permit2 allowance (the one-time approval behind signature collects).
+    /// USDC → Permit2 allowance. Still read with the rest of the stake, but nothing in the app uses it: the app collects
+    /// with an exact approval to the collect contract (`collectAllowance`), and the signature collect it served is gone.
     public let permit2Allowance: BigUInt
     /// USDC → collect contract allowance (the plain-approval path).
     public let collectAllowance: BigUInt

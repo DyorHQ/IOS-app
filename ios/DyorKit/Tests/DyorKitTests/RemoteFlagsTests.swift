@@ -188,7 +188,6 @@ final class RemoteFlagsTests: XCTestCase {
                      "launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)",
                      "moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)",
                      "RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)",
-                     "activity = TokenActivityService(rpc: logsClient, clock: clock)",
                      "swapHistory = SwapHistoryService(rpc: logsClient, clock: clock, archive: archiveClient)",
                      "walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock,",
                      "dyorCoins = DyorCoinsModel(registry: registry, policy: ImageSourcePolicy(supabaseURL: config.supabaseURL))",
@@ -215,7 +214,7 @@ final class RemoteFlagsTests: XCTestCase {
             XCTAssertTrue(environment.contains(part), part)
         }
         XCTAssertEqual(environment.components(separatedBy: "BlockClock(").count - 1, 1, "one clock")
-        XCTAssertEqual(environment.components(separatedBy: "clock: clock").count - 1, 7, "prices, the launchpad, Moments, past cohorts, activity, swap history, the wallet's history")
+        XCTAssertEqual(environment.components(separatedBy: "clock: clock").count - 1, 6, "prices, the launchpad, Moments, past cohorts, swap history, the wallet's history")
 
         let coins = try DocsLinksTests.appSource("App/DyorCoinsModel.swift")
         XCTAssertTrue(coins.contains("var showsDyorBadges = true"))

@@ -22,7 +22,12 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     }
 
     private func discovery() -> WalletTokenDiscovery {
-        WalletTokenDiscovery(logsRPC: MomentsChainStub.rpc(), multicall: Multicall(rpc: MomentsChainStub.rpc()))
+        WalletTokenDiscovery(multicall: Multicall(rpc: MomentsChainStub.rpc()))
+    }
+
+    /// What the wallet holds among the transfers into it `incoming`, as its history store keeps them, read in full.
+    private func held(_ incoming: [Log], complete: Bool = true) async -> WalletTokenDiscovery.Scan {
+        await discovery().held(wallet: wallet, incoming: incoming, complete: complete)
     }
 
     private func transfer(_ contract: Address, nft: Bool, block: UInt64) -> Log {
@@ -33,8 +38,8 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     }
 
     func testOnlyERC20TransfersAreTakenForTokens() async {
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10), transfer(collection, nft: true, block: 20)])
-        let found = await discovery().heldTokens(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let found = await held([transfer(coin, nft: false, block: 10), transfer(collection, nft: true, block: 20)]).tokens
         XCTAssertEqual(found.map(\.address), [coin], "the collection's edition transfer is not a token transfer")
         XCTAssertEqual(found.first?.symbol, "CN")
         let asked = Set(MomentsChainStub.calls().filter { $0.to == collection }.map(\.selector))
@@ -51,14 +56,14 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     /// — never listed as a token it may not be — and the scan says a token may be missing.
     func testATokenWhoseAmountIsIndexedIsListed() async {
         let logs = [transfer(chain.indexed, nft: true, block: 10), transfer(collection, nft: true, block: 20), transfer(coin, nft: false, block: 30)]
-        MomentsChainStub.install(chain.answer, logs: logs)
-        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let scan = await held(logs)
         XCTAssertEqual(scan.tokens.map(\.address), [chain.indexed, coin])
         XCTAssertEqual(scan.tokens.first?.symbol, "IDX")
         XCTAssertTrue(scan.complete)
 
-        MomentsChainStub.install(chain.answer, logs: logs, breakingSelectors: [ABI.selector("supportsInterface(bytes4)")])
-        let unchecked = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer, breakingSelectors: [ABI.selector("supportsInterface(bytes4)")])
+        let unchecked = await held(logs)
         XCTAssertEqual(unchecked.tokens.map(\.address), [coin], "neither four-topic sender is listed unchecked")
         XCTAssertFalse(unchecked.complete, "and the list says a token may be missing")
     }
@@ -67,8 +72,8 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     /// text, and a token with no readable symbol is listed under its short address.
     func testAHeldTokenIsNeverDroppedForItsMetadata() async {
         let logs = [transfer(chain.bytes32, nft: false, block: 10), transfer(chain.nameless, nft: false, block: 20), transfer(chain.blank, nft: false, block: 30)]
-        MomentsChainStub.install(chain.answer, logs: logs)
-        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let scan = await held(logs)
         XCTAssertEqual(scan.tokens.map(\.address), [chain.bytes32, chain.nameless, chain.blank])
         XCTAssertEqual(scan.tokens.map(\.symbol), ["MKR", chain.nameless.short, chain.blank.short])
         XCTAssertEqual(scan.tokens.map(\.name), ["Maker", "Token with no name", "Blank"])
@@ -85,8 +90,8 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         let saved = L10n.locale
         defer { L10n.locale = saved }
         L10n.locale = Locale(identifier: "fr_FR")
-        MomentsChainStub.install(chain.answer, logs: [transfer(chain.nameless, nft: false, block: 10)])
-        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let scan = await held([transfer(chain.nameless, nft: false, block: 10)])
         let nameless = try XCTUnwrap(scan.tokens.first)
         XCTAssertEqual(Token.unnamedName, "Token with no name", "as every earlier build stored it")
         XCTAssertEqual(nameless.name, Token.unnamedName, "found with the app in French, stored in no language")
@@ -166,15 +171,15 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     func testMetadataIsReadInBatches() async {
         let many = (1...120).map { i in Address(data: Data(count: 16) + Data([0x00, 0x0e, 0x00, UInt8(i)]))! }
         let logs = many.enumerated().map { i, token in transfer(token, nft: false, block: UInt64(i + 1)) }
-        MomentsChainStub.install(chain.answer(many: Set(many)), logs: logs)
-        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer(many: Set(many)))
+        let scan = await held(logs)
         XCTAssertEqual(scan.tokens.map(\.address), many)
         XCTAssertTrue(scan.complete)
         let symbolReads = MomentsChainStub.batches().filter { $0.first?.selector == ABI.selector("symbol()").hexString }
         XCTAssertEqual(symbolReads.map(\.count), [150, 150, 60], "three reads of 50 tokens × symbol, name, decimals")
 
-        MomentsChainStub.install(chain.answer(many: Set(many)), logs: logs, breaking: [many[70]])
-        let broken = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer(many: Set(many)), breaking: [many[70]])
+        let broken = await held(logs)
         XCTAssertEqual(broken.tokens.map(\.address), many.filter { $0 != many[70] }, "the breaking token's own balanceOf fails: it holds nothing a send could move")
         XCTAssertTrue(broken.complete)
     }
@@ -191,30 +196,25 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
     }
 
-    /// A scan tells "nothing there" from "couldn't read it": a refused history, chain head or balance read leaves it
-    /// incomplete, so a list can say a token may be missing instead of showing what it found as everything.
+    /// A discovery tells "nothing there" from "couldn't read it": a history not read in full or a refused balance read
+    /// leaves it incomplete, so a list can say a token may be missing instead of showing what it found as everything.
     func testAScanSaysWhenItCouldNotReadEverything() async {
         let found = Token(address: coin, symbol: "CN", name: "Coin", decimals: 18)
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)])
-        let full = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let full = await held([transfer(coin, nft: false, block: 10)])
         XCTAssertEqual(full, WalletTokenDiscovery.Scan(tokens: [found], complete: true))
 
-        MomentsChainStub.install(chain.answer)
-        let nothing = await discovery().scan(wallet: wallet, wholeHistory: true)
+        let nothing = await held([])
         XCTAssertEqual(nothing, WalletTokenDiscovery.Scan(tokens: [], complete: true), "an empty history, read in full")
 
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_getLogs"])
-        let noHistory = await discovery().scan(wallet: wallet, wholeHistory: true)
-        XCTAssertEqual(noHistory, WalletTokenDiscovery.Scan(tokens: [], complete: false), "the history refused: nothing found, and not complete")
-        let listed = await discovery().heldTokens(wallet: wallet, wholeHistory: true)
-        XCTAssertTrue(listed.isEmpty, "heldTokens still lists what it found")
+        let noHistory = await held([], complete: false)
+        XCTAssertEqual(noHistory, WalletTokenDiscovery.Scan(tokens: [], complete: false), "the history not read: nothing found, and not complete")
 
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_getBlockByNumber"])
-        let noHead = await discovery().scan(wallet: wallet, wholeHistory: true)
-        XCTAssertEqual(noHead, WalletTokenDiscovery.Scan(tokens: [], complete: false))
+        let partHistory = await held([transfer(coin, nft: false, block: 10)], complete: false)
+        XCTAssertEqual(partHistory, WalletTokenDiscovery.Scan(tokens: [found], complete: false), "what part of the history shows is listed, and not complete")
 
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_call"])
-        let noBalances = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer, refusing: ["eth_call"])
+        let noBalances = await held([transfer(coin, nft: false, block: 10)])
         XCTAssertEqual(noBalances, WalletTokenDiscovery.Scan(tokens: [], complete: false), "the token was seen, its balance couldn't be read")
     }
 

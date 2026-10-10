@@ -337,9 +337,10 @@ enum MomentsABI {
 
 // MARK: - Permit2 typed data
 
-/// Uniswap Permit2 `SignatureTransfer`: a collect pays USDC with a one-time approval of Permit2 and then one
-/// EIP-712 signature per collect. The digest here matches viem's `hashTypedData` for the same message (pinned in
-/// the tests), which is what the web app signs.
+/// Uniswap Permit2 `SignatureTransfer` typed data for the collect contract's `collectWithPermit2`: one EIP-712 signature
+/// per collect over a Permit2 allowance. The digest here matches viem's `hashTypedData` for the same message (pinned in
+/// the tests). The app doesn't collect this way: it approves the exact USDC a collect pulls
+/// (`MomentsService.collectWithApprovalPlan`).
 public enum Permit2Signature {
     public struct Permit: Sendable, Hashable {
         public let token: Address

@@ -383,11 +383,6 @@ public actor PriceService {
         return out
     }
 
-    /// Value of a raw token amount at a USD price; nil when the price is unknown.
-    public static func usdValue(_ amount: BigUInt, decimals: Int, price: Double?) -> Double? {
-        price.map { Amount.units(amount, decimals: decimals) * $0 }
-    }
-
     // MARK: Discovery
 
     /// Finds where each token not looked up lately trades. A DyorHQ coin first: its venue from its factory's record

@@ -271,18 +271,11 @@ public actor SupabaseClient {
         return (MinimumBuild.parse(data), RemoteFlags.parse(data))
     }
 
-    /// Calls a Postgres function through PostgREST RPC with the current session (or the publishable key).
-    public func rpc<T: Decodable>(_ function: String, _ arguments: [String: String] = [:], authed: Bool = false) async throws -> T {
-        let body = try JSONSerialization.data(withJSONObject: arguments)
-        let data = try await send(method: "POST", path: "rest/v1/rpc/\(function)", query: [], body: body, prefer: nil, authed: authed)
-        return try decode(data, as: T.self)
-    }
-
-    /// `rpc` for a function whose arguments aren't all text — block numbers, a flag, a null (`history_read`'s
-    /// `p_from_block`, `p_meta_only`) — as JSON values: a whole number goes as digits, never "1.0", so PostgREST hands a
-    /// `bigint` argument its value; and the answer as it came, for the caller to parse (`HistoryServerClient`). The same
-    /// request as `rpc`: the publishable key, or the session when `authed`. Throws `SupabaseError.http` with the status and
-    /// body for anything but a 2xx, and the transport's error when there is no answer.
+    /// Calls a Postgres function through PostgREST RPC, its arguments as JSON values — block numbers, a flag, a null
+    /// (`history_read`'s `p_from_block`, `p_meta_only`): a whole number goes as digits, never "1.0", so PostgREST hands a
+    /// `bigint` argument its value; and the answer as it came, for the caller to parse (`HistoryServerClient`). With the
+    /// publishable key, or the session when `authed`. Throws `SupabaseError.http` with the status and body for anything but
+    /// a 2xx, and the transport's error when there is no answer.
     public func rpcJSON(name: String, body: [String: JSON], authed: Bool = false) async throws -> Data {
         let encoded = try JSONEncoder().encode(body)
         return try await send(method: "POST", path: "rest/v1/rpc/\(name)", query: [], body: encoded, prefer: nil, authed: authed)

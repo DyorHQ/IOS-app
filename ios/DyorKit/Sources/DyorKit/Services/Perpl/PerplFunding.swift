@@ -9,18 +9,8 @@ import Foundation
 public enum PerplFunding {
     /// Funding settles every 8 571 blocks, the schedule a market's context doesn't name its own.
     public static let blocksPerInterval: UInt64 = 8_571
-    public static let hoursPerYear = 24.0 * 365.0
 
-    /// `fundingRatePct100k` (contract, parts per 100 000) → fraction of notional per interval.
-    public static func hourlyRate(pct100k: Int) -> Double { Double(pct100k) / 100_000 }
-    /// Gateway `funding.rate` (parts per million) → fraction of notional per interval.
-    public static func hourlyRate(ppm: Double) -> Double { ppm / 1_000_000 }
-
-    /// Simple (non-compounded) annualization of an hourly rate.
-    public static func annualized(hourly: Double) -> Double { hourly * hoursPerYear }
-    public static func daily(hourly: Double) -> Double { hourly * 24 }
-
-    /// Who pays whom at this rate. Zero is a wash.
+    /// Who pays whom at a funding rate. Zero is a wash.
     public enum Direction: Sendable, Hashable {
         case longsPayShorts, shortsPayLongs, flat
         public var summary: String {
@@ -31,15 +21,6 @@ public enum PerplFunding {
             }
         }
     }
-
-    public static func direction(hourly: Double) -> Direction {
-        if hourly > 0 { return .longsPayShorts }
-        if hourly < 0 { return .shortsPayLongs }
-        return .flat
-    }
-
-    /// Funding earned (positive) or paid (negative) by a SHORT of `notional` over `hours` at a constant hourly rate.
-    public static func shortIncome(notional: Double, hourly: Double, hours: Double) -> Double { notional * hourly * hours }
 
     /// The next settlement block on the market's schedule of an interval every `intervalBlocks` blocks (the first
     /// boundary strictly after `head`).
@@ -64,13 +45,5 @@ public enum PerplFunding {
     /// `secondsToNextSettlement` with the interval of `context`, the market's entry in Perpl's context.
     public static func secondsToNextSettlement(startBlock: UInt64, head: UInt64, context: MarketContext) -> Double? {
         secondsToNextSettlement(startBlock: startBlock, head: head, intervalSeconds: context.fundingIntervalSeconds, intervalBlocks: context.fundingIntervalBlocks)
-    }
-
-    /// Hours a short must be held for funding to pay back `totalCost` at a constant hourly rate; nil when the rate
-    /// is not positive (funding is being paid, not earned).
-    public static func breakevenHours(totalCost: Double, notional: Double, hourly: Double) -> Double? {
-        let perHour = notional * hourly
-        guard perHour > 0, totalCost >= 0 else { return nil }
-        return totalCost / perHour
     }
 }
