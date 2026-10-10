@@ -54,8 +54,11 @@ final class SharedPriceReadsTests: XCTestCase {
         return url
     }
 
-    private func service(cache: ChainCache? = ChainCache(), store: ChainStore? = nil, venues: Bool = true, clock: Clock = Clock()) -> PriceService {
-        PriceService(rpc: VenueChainStub.rpc(), dyorVenues: venues, now: { clock.now }, cache: cache, store: store)
+    /// `head`: the time the shared head (`HeadClock`) is aged on, when a test moves it; nil, the device's.
+    private func service(cache: ChainCache? = ChainCache(), store: ChainStore? = nil, venues: Bool = true, clock: Clock = Clock(), head: Clock? = nil) -> PriceService {
+        let rpc = VenueChainStub.rpc()
+        let blockClock = head.map { head in BlockClock(rpc: rpc, head: HeadClock(rpc: rpc, now: { head.now })) }
+        return PriceService(rpc: rpc, clock: blockClock, dyorVenues: venues, now: { clock.now }, cache: cache, store: store)
     }
 
     /// Two screens reading the same prices at once (Home and the Portfolio at launch) cost what one read costs.
@@ -103,11 +106,12 @@ final class SharedPriceReadsTests: XCTestCase {
     }
 
     /// A price is kept for its time, and the day-ago block for a minute: within it a read costs nothing; after it, only the
-    /// prices are read (no head, no day-ago lookup); an invalidation reads the head again.
+    /// prices are read (no head, no day-ago lookup); an invalidation, which forgets the shared head with the shared reads
+    /// (`AppEnvironment.invalidateChainReads`, `HeadClock.forget`), reads the head again, however recent the last.
     func testAPriceIsKeptForItsTimeAndAWarmReadIsOneRoundTrip() async throws {
         let clock = Clock()
         let cache = ChainCache(now: { clock.now })
-        let prices = service(cache: cache)
+        let prices = service(cache: cache, head: clock)
         let first = try await prices.prices(for: [.mon])
         XCTAssertEqual(try XCTUnwrap(first[Monad.native]).change24h ?? 0, 20, accuracy: 1e-6)
 
@@ -125,9 +129,20 @@ final class SharedPriceReadsTests: XCTestCase {
         XCTAssertEqual(requests - start, 2, "the prices now and a day ago, side by side")
         XCTAssertEqual(lookups, Uniswap.v4Tiers.count, "the pool found is kept")
 
+        let head = await prices.clock.head
         cache.invalidate()
+        head.forget()
         _ = try await prices.prices(for: [.mon])
         XCTAssertEqual(headReads, heads + 1, "read again after an invalidation")
+
+        // Invalidated again within the head's second (a transaction settled just after a pull to refresh): the head read
+        // under a second ago is forgotten too, and read anew, as the invalidation promises of every read begun before it.
+        cache.invalidate()
+        head.forget()
+        let before = requests
+        _ = try await prices.prices(for: [.mon])
+        XCTAssertEqual(headReads, heads + 2, "the head is read anew, however recent the last")
+        XCTAssertGreaterThan(requests, before, "the prices and the day-ago block read again")
     }
 
     /// The pools found are kept on the device with when each was found: a relaunch prices with no lookup, a lookup past its

@@ -98,9 +98,13 @@ final class AppEnvironment {
     init(config: AppConfig) {
         self.config = config
         social = SocialSession(config: config)
-        // Keyless public endpoints with failover. Batches stay under rpc.monad.xyz's 50-items-per-second budget; calls
-        // it throttles are retried on rpc1, which limits requests rather than items.
-        rpc = RPCClient(urls: config.rpcURLs, maxBatch: 40)
+        // Keyless public endpoints with failover. Batches stay under rpc.monad.xyz's 50-items-per-second budget; rpc1
+        // limits requests rather than items and refuses every batch (HTTP 403, measured 2026-10-10), so it takes single
+        // calls and the batches stay on rpc.monad.xyz (`RPCClient.isRefusal`). A read's answer must start within 8 s on an
+        // endpoint, then is read whole, and the other is asked too when the first's hasn't started in 1.3 s; a read too big
+        // for one request goes out at once, over the endpoints that take batches, never more than 50 calls of it a second
+        // to one (`RPCClient`).
+        rpc = RPCClient(urls: config.rpcURLs, maxBatch: 40, itemsPerSecond: 50)
         multicall = Multicall(rpc: rpc)
         sender = TransactionSender(rpc: rpc)
         // The Aurora API key never ships in the app: bridge calls go through the aurora-proxy Edge Function, which
@@ -152,8 +156,10 @@ final class AppEnvironment {
         prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true, cache: chainCache, store: chainStore)
         // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools (once v2 is
         // deployed) and those of the retired factories with the current record (the legacy 0xad3d… launches all
-        // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0.
-        swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments)
+        // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0. What the route
+        // search finds (each pair's pools, each coin's graduated pool) is kept a minute in the shared reads, so an amount
+        // typed or a re-quote costs each venue one quote read; a settled transaction forgets it (`invalidateChainReads`).
+        swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments, cache: chainCache)
         perpl = PerplService(rpc: rpc)
         // The launch list and the Moments lists are read once for every screen that asks within a few seconds, and what
         // never changes of a settled launch or Moment is read once and kept (`chainCache`, `chainStore`).
@@ -228,6 +234,28 @@ final class AppEnvironment {
         sync.install(settings: settings, address: { [weak session] in session?.address })
         // The owner's remote switches, read with the minimum build: each on until the row turns it off.
         updateGate.onFlags = { [weak self] flags in self?.apply(flags) }
+        // The connections the first screens read over, opened before they ask.
+        warmConnections()
+    }
+
+    /// When `warmConnections` last opened the connections.
+    @ObservationIgnored private var warmedAt = Date.distantPast
+
+    /// Opens the connections the first reads go over before they ask (speed work, 2026-10-10): the app's two RPC endpoints
+    /// (Home's reads, the hedge of a slow one), the logs endpoint the wallet's history reads first (rpc2), and Supabase. A
+    /// new connection costs 0.4–1.1 s of handshakes per host (measured 2026-10-08), paid by the first screen otherwise. At
+    /// launch and on every return to the app (iOS closes idle connections while it is away), at most every 30 s. Each is
+    /// a request that reads nothing and changes nothing (`RPCClient.warm`, `SupabaseClient.warm`).
+    func warmConnections() {
+        let now = Date()
+        guard now.timeIntervalSince(warmedAt) > 30 else { return }
+        warmedAt = now
+        Task.detached(priority: .userInitiated) { [rpc, logsClient, backend = social.client] in
+            async let app: Void = rpc.warm()
+            async let logs: Void = logsClient.warm(first: 1)
+            async let social: Void = backend.warm()
+            _ = await (app, logs, social)
+        }
     }
 
     /// The last venue switch handed to the price service, so switches apply in the order they were read.
@@ -245,11 +273,14 @@ final class AppEnvironment {
         }
     }
 
-    /// Forgets every chain read the screens share (`chainCache`): a transaction of the user's settled (`ConfirmationSheet`),
-    /// or a pull to refresh asked for what is on chain now. The next read of the launch list, the Moments lists and every
-    /// price goes to the chain, and no read begun before this is joined or kept. What never changes (`chainStore`) stays.
+    /// Forgets every chain read the screens share (`chainCache`), and the shared head (`clock.head`, `HeadClock.forget`): a
+    /// transaction of the user's settled (`ConfirmationSheet`), or a pull to refresh asked for what is on chain now. The
+    /// next read of the launch list, the Moments lists, every price, the head they are measured from and Swap's route
+    /// search goes to the chain, and no read begun before this is joined or kept. What never changes (`chainStore`)
+    /// stays.
     func invalidateChainReads() {
         chainCache.invalidate()
+        clock.head.forget()
     }
 
     /// A transaction sender for `chain`: Monad reuses the app's configured endpoint (and multicall); every other

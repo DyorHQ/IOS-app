@@ -375,10 +375,9 @@ public extension RPCClient {
     /// This endpoint's budget for one request; see `logBatchSpan(for:)`.
     nonisolated var logBatchSpan: UInt64? { Self.logBatchSpan(for: url) }
 
-    nonisolated var isLocal: Bool {
-        let host = url.host() ?? ""
-        return host == "127.0.0.1" || host == "localhost"
-    }
+    /// Whether this client's endpoint is a node on this machine (a local fork): `RPCClient.isLocal(_:)`, the one rule for
+    /// the log floors and fork-block clamps here and for the read limits and item budget.
+    nonisolated var isLocal: Bool { Self.isLocal(url) }
 
     /// The block a local Anvil fork started from (`anvil_metadata`), cached for the process; nil when the local node
     /// is not Anvil or is not a fork.

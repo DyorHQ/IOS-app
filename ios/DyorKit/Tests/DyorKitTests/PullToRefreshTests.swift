@@ -123,10 +123,10 @@ final class PullToRefreshTests: XCTestCase {
     }
 
     /// A pull asks for what is on chain now: every screen whose figures come from the reads the screens share (the launch
-    /// list, the Moments lists, prices: `ChainCache`) forgets them first, so its reads go to the chain rather than take a
-    /// copy another screen read seconds ago; a pull never waits for that (it is a synchronous call). A transaction of the
-    /// user's that settled does the same, once, in the one sheet every plan runs in, before the caller records or reloads;
-    /// and an erase of this device's data forgets them with what is kept on the device.
+    /// list, the Moments lists, prices: `ChainCache`, and the head: `HeadClock`) forgets them first, so its reads go to the
+    /// chain rather than take a copy another screen read seconds ago; a pull never waits for that (it is a synchronous
+    /// call). A transaction of the user's that settled does the same, once, in the one sheet every plan runs in, before
+    /// the caller records or reloads; and an erase of this device's data forgets them with what is kept on the device.
     func testAPullAndASettledTransactionReadTheSharedReadsAgain() throws {
         let pulls = try pulls()
         let sharing: Set<String> = ["HomeView.swift", "LaunchpadView.swift", "LaunchpadProfileView.swift", "MomentsView.swift", "MomentsPortfolioView.swift", "RecentActivityView.swift"]
@@ -140,7 +140,8 @@ final class PullToRefreshTests: XCTestCase {
         let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
         XCTAssertTrue(environment.contains("let chainCache = ChainCache()"))
         XCTAssertTrue(environment.contains("chainStore = isFork ? ChainStore(directory: nil) : ChainStore.applicationSupport()"), "a fork keeps nothing on disk")
-        XCTAssertTrue(environment.contains("func invalidateChainReads() {\n        chainCache.invalidate()\n    }"))
+        XCTAssertTrue(environment.contains("func invalidateChainReads() {\n        chainCache.invalidate()\n        clock.head.forget()\n    }"),
+                      "the shared reads, and the shared head they are measured from (`HeadClock.forget`)")
         XCTAssertEqual(environment.components(separatedBy: "cache: chainCache, store: chainStore").count - 1, 4, "prices, the launchpad, Moments, past cohorts")
 
         let sheet = try DocsLinksTests.appSource("Wallet/TransactionRun.swift")

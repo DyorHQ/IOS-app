@@ -93,6 +93,17 @@ public actor SupabaseClient {
     /// The URL of one of the project's Edge Functions.
     public nonisolated func functionURL(_ name: String) -> URL { baseURL.appending(path: "functions/v1/\(name)") }
 
+    /// Opens the connection to the project before the first read needs it (speed work, 2026-10-10): a `HEAD` of its root,
+    /// which carries no key, reads no table and changes nothing, its answer unread. A new connection cost 0.4–0.8 s of
+    /// handshakes (measured 2026-10-08), paid by the app's first sign-in, settings and profile reads otherwise; every
+    /// request of this client goes over the one it opens (the same session, the same host).
+    public nonisolated func warm() async {
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = RPCClient.readTimeout
+        _ = try? await session.data(for: request)
+    }
+
     /// Headers that authenticate a request to an Edge Function as the signed-in wallet (publishable key + session
     /// JWT). Throws when there is no valid session.
     public func sessionHeaders() throws -> [String: String] {

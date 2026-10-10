@@ -1,10 +1,12 @@
 import BigInt
 import Foundation
 
-/// Asks every venue at once and ranks by output. MON ↔ WMON is a 1:1 wrap and never needs a venue.
+/// Asks every venue at once and ranks by output, publishing each venue's quote as it arrives (`quoteUpdates`). MON ↔ WMON
+/// is a 1:1 wrap and never needs a venue.
 public actor SwapEngine {
     public static let quoteVenues: [Venue] = [.kuru, .uniswap, .monday]
-    /// Every venue is quoted independently with this budget, so a slow venue never hides the others.
+    /// Every venue is quoted independently with this budget, so a slow venue never hides the others: their quotes show as
+    /// they arrive, and the slow one's is waited for this long at most before the round is final.
     public static let quoteTimeout: TimeInterval = 20
 
     public let rpc: RPCClient
@@ -15,14 +17,16 @@ public actor SwapEngine {
 
     /// `launchpadFactories` enables routes through graduated launchpad pools on Uniswap v4 — the live factory plus any
     /// retired one with the current 17-field record; each token's pool key is read from its own factory. `moments`
-    /// enables routes through graduated Moment pools (coin ↔ USDC, hooked, 1.5% all-in).
-    public init(rpc: RPCClient, session: URLSession = .shared, launchpadFactories: [Address] = [], moments: MomentsAddresses? = nil) {
+    /// enables routes through graduated Moment pools (coin ↔ USDC, hooked, 1.5% all-in). `cache`, the app's shared
+    /// reads, keeps what the route search finds for a minute (`SwapRouteCache`), so an amount change or a re-quote costs
+    /// each venue its one quote read; nil searches every time.
+    public init(rpc: RPCClient, session: URLSession = .shared, launchpadFactories: [Address] = [], moments: MomentsAddresses? = nil, cache: ChainCache? = nil) {
         self.rpc = rpc
         let multicall = Multicall(rpc: rpc)
         self.multicall = multicall
-        let v3 = V3Router(multicall: multicall)
+        let v3 = V3Router(multicall: multicall, cache: cache)
         kuru = KuruFlowClient(session: session)
-        uniswap = UniswapVenue(multicall: multicall, v3: v3, launchpadFactories: launchpadFactories, moments: moments)
+        uniswap = UniswapVenue(multicall: multicall, v3: v3, launchpadFactories: launchpadFactories, moments: moments, cache: cache)
         monday = MondayVenue(v3: v3)
     }
 
@@ -30,40 +34,95 @@ public actor SwapEngine {
         (tokenIn.isNative && tokenOut.address == Monad.wmon) || (tokenIn.address == Monad.wmon && tokenOut.isNative)
     }
 
-    /// Every venue's answer, best output first, with a readable reason for each venue that gave none. A pair with a
-    /// retired cohort's Moment coin on either side gets no quote from any venue, and no venue is even asked; nor does a
-    /// buy of a coin still on a retired launchpad's curve (`buyRefusal`).
+    /// Gets ready to quote for `account` when Swap opens: asks for its Kuru Flow access token now, so the first quote
+    /// doesn't wait a round trip for it (`KuruFlowClient.prepare(for:)`). Never fails; a quote that still needs the token
+    /// asks for it itself.
+    public func prepare(for account: Address) async {
+        await kuru.prepare(for: account)
+    }
+
+    /// Every venue's answer, best output first, with a readable reason for each venue that gave none: the final result
+    /// of `quoteUpdates` (`QuoteResult.isFinal`), for a caller that has no use for the answers as they arrive. A pair
+    /// with a retired cohort's Moment coin on either side gets no quote from any venue, and no venue is even asked; nor
+    /// does a buy of a coin still on a retired launchpad's curve (`buyRefusal`, asked alongside the on-chain venues, and
+    /// before Kuru Flow).
     public func quotes(for request: SwapRequest) async -> QuoteResult {
+        await round(request) { _ in }
+    }
+
+    /// One round of quotes for `request`, as it fills in: an update each time a venue answers, its quote ranked among
+    /// those so far, its reason, or its timeout (`quoteTimeout`), with the venues still asked in `pending`; the last
+    /// update is the final result (`QuoteResult.isFinal`), and the stream ends after it. An update before the last is
+    /// only the best so far, which a slower venue may still beat: a screen may show it, but must review and sign only
+    /// the final one. Cancelling the consumer's task ends the round and the stream without a final result.
+    ///
+    /// The check of the coin bought (`buyRefusal`) runs alongside the on-chain venues instead of before them: no update is
+    /// published until it has cleared the coin, and a refusal ends the round at once with its reason under every venue
+    /// and no quote, whatever a venue answered. Kuru Flow, a third party's API that is told the wallet and the pair, is
+    /// asked a coin that may be a launchpad's only once the check has cleared it, so a refused buy never reaches it
+    /// (`RetiredLaunchpads.swift`). A pair with a retired cohort's Moment coin on either side, an amount of zero and a
+    /// wrap are answered at once, final, with no venue asked.
+    public nonisolated func quoteUpdates(for request: SwapRequest) -> AsyncStream<QuoteResult> {
+        // Only the newest update matters to a screen that falls behind; the final one is always the newest.
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let task = Task {
+                let final = await self.round(request) { continuation.yield($0) }
+                if !Task.isCancelled { continuation.yield(final) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// What a round's tasks answer: the coin check's refusal (nil: the coin may be bought), or one venue's outcome.
+    private enum RoundAnswer: Sendable {
+        case checked(SwapError?)
+        case answered(Venue, Result<VenueQuote?, Error>)
+    }
+
+    /// One round (`quoteUpdates`): `publish` gets each update before the last, and the final result is returned.
+    private func round(_ request: SwapRequest, publish: @escaping @Sendable (QuoteResult) -> Void) async -> QuoteResult {
         if let closed = Self.tradingClosed(request.tokenIn, request.tokenOut) {
             return Self.refusedEverywhere(closed)
         }
         guard Self.isQuotable(request) else { return QuoteResult() }
         if Self.isWrap(request.tokenIn, request.tokenOut) { return QuoteResult(quotes: [Self.wrapQuote(request)]) }
-        if let refused = await buyRefusal(request.tokenOut) { return Self.refusedEverywhere(refused) }
-        var outcomes: [Venue: Result<VenueQuote?, Error>] = [:]
-        await withTaskGroup(of: (Venue, Result<VenueQuote?, Error>).self) { group in
-            for venue in Self.quoteVenues {
+        // The venues asked only once the coin bought is cleared: Kuru Flow, for a coin that may be a launchpad's. The
+        // on-chain venues read their pools alongside the check, telling no one the wallet, and show nothing before it.
+        let afterCheck: Set<Venue> = Self.mayBeLaunchCoin(request.tokenOut) ? [.kuru] : []
+        return await withTaskGroup(of: RoundAnswer.self) { group in
+            func askVenue(_ venue: Venue) {
                 group.addTask {
-                    do { return (venue, .success(try await self.ask(venue, for: request))) } catch { return (venue, .failure(error)) }
+                    do { return .answered(venue, .success(try await self.ask(venue, for: request))) } catch { return .answered(venue, .failure(error)) }
                 }
             }
-            for await (venue, outcome) in group { outcomes[venue] = outcome }
-        }
-        var quotes: [VenueQuote] = []
-        var errors: [Venue: String] = [:]
-        for venue in Self.quoteVenues {
-            switch outcomes[venue] {
-            case .success(let quote?)?: quotes.append(quote)
-            case .failure(let error)?: errors[venue] = SwapMath.describe(error)
-            default: errors[venue] = L10n.tr("No route for this pair.")
+            group.addTask { .checked(await self.buyRefusal(request.tokenOut)) }
+            for venue in Self.quoteVenues where !afterCheck.contains(venue) { askVenue(venue) }
+            var tally = QuoteTally(venues: Self.quoteVenues)
+            var cleared = false
+            for await answer in group {
+                switch answer {
+                case .checked(let refused?):
+                    // Nothing a venue answered for a coin that may not be bought is shown: the venues still asked are
+                    // stopped, and the quotes so far dropped.
+                    group.cancelAll()
+                    return Self.refusedEverywhere(refused)
+                case .checked(nil):
+                    cleared = true
+                    for venue in Self.quoteVenues where afterCheck.contains(venue) { askVenue(venue) }
+                case .answered(let venue, let outcome):
+                    tally.record(venue, outcome)
+                }
+                if cleared, !tally.isComplete { publish(tally.result) }
             }
+            return tally.result
         }
-        return QuoteResult(quotes: Self.rank(quotes), errors: errors)
     }
 
     /// One venue's quote, or nil when it has no route. Throws with a readable message on failure or timeout, and —
     /// before any venue is asked — `SwapError.tradingClosed` when a retired cohort's Moment coin is on either side, and
-    /// `buyRefusal`'s answer when the coin bought is still on a retired launchpad's curve.
+    /// `buyRefusal`'s answer when the coin bought is still on a retired launchpad's curve. One venue alone (no screen
+    /// shows it as it arrives) checks the coin first, so a refused buy asks no venue.
     public func quote(_ venue: Venue, for request: SwapRequest) async throws -> VenueQuote? {
         if let closed = Self.tradingClosed(request.tokenIn, request.tokenOut) { throw closed }
         guard Self.isQuotable(request) else { return nil }
@@ -73,7 +132,8 @@ public actor SwapEngine {
         return try await ask(venue, for: request)
     }
 
-    /// One venue's quote once the engine's checks passed, within `quoteTimeout`.
+    /// One venue's quote, within `quoteTimeout`: asked once the pair's checks passed, alongside the coin's in a round
+    /// (`round`; Kuru Flow after it for a coin that may be a launchpad's), after it for one venue alone (`quote(_:for:)`).
     private func ask(_ venue: Venue, for request: SwapRequest) async throws -> VenueQuote? {
         try await Self.withTimeout(Self.quoteTimeout, venue: venue) {
             switch venue {
@@ -135,10 +195,12 @@ public actor SwapEngine {
 
     /// Why `token` may not be bought, or nil when it may. A coin still on a retired launchpad's curve (bonding, migrating
     /// or refund mode) is sell-only (owner decision 2026-09-28): its holders sell, nobody buys, so a buy of it gets
-    /// `SwapError.retiredLaunchpad` and no venue is asked. Read on-chain from every retired factory's record
-    /// (`RetiredLaunchpad.sellOnlyCoins`); a coin that graduated into a pool trades both ways, and selling one is never
-    /// checked. The app's own tokens (`Token.core`) and MON are no launchpad coin and need no read. A read that fails
-    /// refuses too (`SwapError.launchpadUnchecked`): nothing could rule the coin out.
+    /// `SwapError.retiredLaunchpad` under every venue and no quote. A round of quotes asks this alongside the on-chain
+    /// venues, shows nothing they answer until it clears the coin, and asks Kuru Flow only then (`quoteUpdates`); one
+    /// venue alone asks it first (`quote(_:for:)`). Read on-chain from every retired factory's record (`RetiredLaunchpad.sellOnlyCoins`); a coin
+    /// that graduated into a pool trades both ways, and selling one is never checked. The app's own tokens (`Token.core`)
+    /// and MON are no launchpad coin and need no read. A read that fails refuses too (`SwapError.launchpadUnchecked`):
+    /// nothing could rule the coin out.
     public func buyRefusal(_ token: Token) async -> SwapError? {
         guard Self.mayBeLaunchCoin(token) else { return nil }
         do {
@@ -194,5 +256,44 @@ public actor SwapEngine {
             group.cancelAll()
             return first
         }
+    }
+}
+
+/// One round's answers as they arrive (`SwapEngine.quoteUpdates`): each venue's quote, or the reason it has none, and the
+/// venues not heard from yet.
+struct QuoteTally: Sendable {
+    /// The venues asked, in the order ties are ranked and pending venues listed.
+    let venues: [Venue]
+    private var quotes: [Venue: VenueQuote] = [:]
+    private var errors: [Venue: String] = [:]
+    private var answered: Set<Venue> = []
+
+    init(venues: [Venue]) {
+        self.venues = venues
+    }
+
+    /// `venue`'s answer: its quote, no route (nil), or the failure or timeout that stopped it.
+    mutating func record(_ venue: Venue, _ outcome: Result<VenueQuote?, Error>) {
+        answered.insert(venue)
+        switch outcome {
+        case .success(let quote?):
+            quotes[venue] = quote
+            errors[venue] = nil
+        case .success(nil):
+            quotes[venue] = nil
+            errors[venue] = L10n.tr("No route for this pair.")
+        case .failure(let error):
+            quotes[venue] = nil
+            errors[venue] = SwapMath.describe(error)
+        }
+    }
+
+    /// Every venue has answered.
+    var isComplete: Bool { venues.allSatisfy(answered.contains) }
+
+    /// The quotes so far, best output first (ties in venue order), every answered venue's reason for having none, and the
+    /// venues still asked, in venue order: final (`QuoteResult.isFinal`) once every venue has answered.
+    var result: QuoteResult {
+        QuoteResult(quotes: SwapEngine.rank(venues.compactMap { quotes[$0] }), errors: errors, pending: venues.filter { !answered.contains($0) })
     }
 }

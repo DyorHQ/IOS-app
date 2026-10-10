@@ -31,6 +31,13 @@ public final class ChainCache: @unchecked Sendable {
         /// The block mined 24 hours before the latest, which every 24h change is measured from: a minute later the change
         /// is measured over 24 hours and a minute, which no figure on screen can show.
         public static let dayAgoBlock: TimeInterval = 60
+        /// What Swap's route search learns before it can quote a pair (`SwapRouteCache`): which Uniswap v3, v4 and Monday
+        /// Trade pools the pair trades through and how deep each v3 one is, and which pool a launchpad or Moment coin
+        /// graduated into. Pools are created and drained rarely, and each amount typed and each 15 s re-quote then costs
+        /// the one quote read instead of the search's 4–5 reads before it. No quote is kept: every amount is quoted on
+        /// chain. A pool drained within the minute fails its quote and is passed over; one created, or a coin graduated,
+        /// within it is found by the first search after the minute, or at once after a transaction of the user's settles.
+        public static let swapRoutes: TimeInterval = 60
     }
 
     private struct Entry {

@@ -3,11 +3,12 @@ import XCTest
 @testable import DyorKit
 
 /// Swap never buys a coin still on a retired launchpad's curve (owner decision 2026-09-28): for a coin on each of the four
-/// retired stacks, in each phase before graduation, every venue is refused with the same notice before any is asked —
-/// paying with MON or USDC — while selling it is never checked. A coin that graduated from a retired stack routes both
-/// ways: through its Uniswap v4 pool (0x6B1C, 0x10F3, 0x2F02) or its Monday Trade pool (the legacy 0xad3d). Contract
-/// reads are answered by `MomentsChainStub`; Kuru Flow by `SwapNetStub` (its fixed MON → USDC quote, which it blocks for
-/// any other pair).
+/// retired stacks, in each phase before graduation, every venue is refused with the same notice — paying with MON or
+/// USDC — and no quote is ever shown: a round checks the coin alongside the on-chain venues and shows nothing they answer
+/// until the check clears it, Kuru Flow is never asked, and one venue alone is never asked. Selling it is never checked.
+/// A coin that graduated from a retired stack routes both ways: through its Uniswap v4 pool (0x6B1C, 0x10F3, 0x2F02) or
+/// its Monday Trade pool (the legacy 0xad3d). Contract reads are answered by `MomentsChainStub`; Kuru Flow by
+/// `SwapNetStub` (its fixed MON → USDC quote, which it blocks for any other pair).
 final class SwapRetiredLaunchpadTests: XCTestCase {
     private let account = Address(literal: "0x1111111111111111111111111111111111111111")
     private let amount = BigUInt(10).power(18)
@@ -24,9 +25,12 @@ final class SwapRetiredLaunchpadTests: XCTestCase {
     }
 
     /// The engine as the app builds it: Uniswap v4 routes through the graduated pools of the live stack (the v2 fixture
-    /// here) and of the retired stacks with the current record.
-    private func engine() -> SwapEngine {
-        SwapEngine(rpc: MomentsChainStub.rpc(), session: SwapNetStub.session(), launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: V2Fixture.launchpad))
+    /// here) and of the retired stacks with the current record. Its reads go to `host` when given
+    /// (`MomentsChainStub.rpc(host:)`), so a check counts them alone, never a read of an earlier engine's round that was
+    /// still on its way when that round returned.
+    private func engine(host: String? = nil) -> SwapEngine {
+        SwapEngine(rpc: host.map { MomentsChainStub.rpc(host: $0) } ?? MomentsChainStub.rpc(), session: SwapNetStub.session(),
+                   launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: V2Fixture.launchpad))
     }
 
     private func coin(_ chain: RetiredCoinChain) -> Token {
@@ -37,18 +41,35 @@ final class SwapRetiredLaunchpadTests: XCTestCase {
         SwapRequest(tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amount, slippageBps: 50, account: account, exactApprovals: true)
     }
 
-    /// The only reads a refused buy makes: one aggregate asking each retired factory for the coin's record.
-    private func assertOnlyTheRecordsWereRead(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+    /// The only reads a refused buy of one venue makes, sent to `host`: one aggregate asking each retired factory for the
+    /// coin's record. Kuru Flow was never asked.
+    private func assertOnlyTheRecordsWereRead(over host: String, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
         let selector = ABI.selector(LaunchpadABI.Factory.getLaunchedToken).hexString
-        XCTAssertEqual(MomentsChainStub.batches().map { $0.map(\.to) }, [LaunchpadAddresses.retiredFactories], label, file: file, line: line)
-        XCTAssertTrue(MomentsChainStub.calls().allSatisfy { $0.selector == selector }, label, file: file, line: line)
+        let batches = MomentsChainStub.batches(host: host)
+        XCTAssertEqual(batches.map { $0.map(\.to) }, [LaunchpadAddresses.retiredFactories], label, file: file, line: line)
+        XCTAssertTrue(batches.joined().allSatisfy { $0.selector == selector }, label, file: file, line: line)
+        XCTAssertEqual(SwapNetStub.recorded(), [], "\(label): Kuru Flow was never asked", file: file, line: line)
+    }
+
+    /// A round's refused buy, sent to `host`: the coin's record was read from each retired factory, in one aggregate of
+    /// those records alone (the on-chain venues, asked alongside, read in reads of their own, Uniswap's launchpad pools
+    /// among them), no update of the round ever carried a quote, and Kuru Flow was never asked.
+    private func assertRefusedWithoutAQuote(_ updates: [QuoteResult], over host: String, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        let selector = ABI.selector(LaunchpadABI.Factory.getLaunchedToken).hexString
+        let check = MomentsChainStub.batches(host: host).filter { $0.map(\.to) == LaunchpadAddresses.retiredFactories && $0.allSatisfy { $0.selector == selector } }
+        XCTAssertEqual(check.count, 1, "\(label): the coin's check", file: file, line: line)
+        XCTAssertTrue(updates.allSatisfy(\.quotes.isEmpty), "\(label): a quote was shown", file: file, line: line)
+        XCTAssertEqual(updates.filter(\.isFinal).count, 1, label, file: file, line: line)
+        XCTAssertTrue(updates.last?.isFinal ?? false, label, file: file, line: line)
         XCTAssertEqual(SwapNetStub.recorded(), [], "\(label): Kuru Flow was never asked", file: file, line: line)
     }
 
     // MARK: Sell-only coins
 
-    func testNoVenueQuotesABuyOfACoinOnARetiredCurve() async {
-        let engine = engine()
+    func testNoVenueQuotesABuyOfACoinOnARetiredCurve() async throws {
+        // Each engine reads over a host of its own, so each check counts its own reads alone.
+        var engines = 0
+        func host() -> String { engines += 1; return "rpc-\(engines).moments-stub.invalid" }
         for stack in LaunchpadAddresses.retiredStacks {
             for phase in [LaunchPhase.bonding, .migrating, .refund] {
                 let chain = RetiredCoinChain(stack: stack, phase: phase)
@@ -57,23 +78,30 @@ final class SwapRetiredLaunchpadTests: XCTestCase {
                     let label = "\(stack.factory.short) \(phase.title) \(pay.symbol) → coin"
                     MomentsChainStub.install(chain.answer)
                     SwapNetStub.reset()
-                    let result = await engine.quotes(for: request(pay, coin))
+                    let streamed = host()
+                    var updates: [QuoteResult] = []
+                    for await update in engine(host: streamed).quoteUpdates(for: request(pay, coin)) { updates.append(update) }
+                    let result = updates.last ?? QuoteResult(pending: SwapEngine.quoteVenues)
                     XCTAssertTrue(result.quotes.isEmpty, label)
                     XCTAssertEqual(Set(result.errors.keys), Set(SwapEngine.quoteVenues), label)
                     for venue in SwapEngine.quoteVenues { XCTAssertEqual(result.errors[venue], RetiredLaunchpad.notice, "\(label) \(venue)") }
-                    assertOnlyTheRecordsWereRead(label)
+                    assertRefusedWithoutAQuote(updates, over: streamed, label)
+                    let whole = await engine(host: host()).quotes(for: request(pay, coin))
+                    XCTAssertTrue(whole.quotes.isEmpty, label)
+                    for venue in SwapEngine.quoteVenues { XCTAssertEqual(whole.errors[venue], RetiredLaunchpad.notice, "\(label) \(venue)") }
+                    XCTAssertEqual(SwapNetStub.recorded(), [], "\(label): Kuru Flow was never asked")
 
                     for venue in SwapEngine.quoteVenues {
-                        MomentsChainStub.install(chain.answer)
+                        let alone = host()
                         do {
-                            let quote = try await engine.quote(venue, for: request(pay, coin))
+                            let quote = try await engine(host: alone).quote(venue, for: request(pay, coin))
                             XCTFail("\(label): \(venue) quoted \(String(describing: quote?.route))")
                         } catch {
                             XCTAssertEqual(error as? SwapError, .retiredLaunchpad(chain.coin), "\(label) \(venue)")
                         }
-                        assertOnlyTheRecordsWereRead("\(label) \(venue)")
+                        assertOnlyTheRecordsWereRead(over: alone, "\(label) \(venue)")
                     }
-                    let refusal = await engine.buyRefusal(coin)
+                    let refusal = await engine().buyRefusal(coin)
                     XCTAssertEqual(refusal, .retiredLaunchpad(chain.coin), label)
                 }
             }

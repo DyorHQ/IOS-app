@@ -5,7 +5,10 @@ import Foundation
 /// Contract reads answered from memory, with every sub-call recorded. A Multicall3 `aggregate3` is split into its
 /// sub-calls and each is answered by the installed `answer(to, calldata)` (nil reverts that sub-call, as a missing getter
 /// does on chain); a plain `eth_call` is answered the same way. `batches()` lists what each request asked, as
-/// (target, selector) pairs, so a test can check which contract was asked for what, and in which aggregate.
+/// (target, selector) pairs, so a test can check which contract was asked for what, and in which aggregate;
+/// `batches(host:)` only those sent to one host, a client of its own (`rpc(host:)`), so a test can tell its reads from
+/// those of an earlier client's task still finishing. A request whose read a test holds (`hold(_:)`) is recorded as it
+/// arrives and answered only once the test lets it go (`releaseHeld()`).
 /// `eth_getLogs` is answered from the installed `logs` (filtered by address, topics and range, like a node), every
 /// filter is recorded (`logQueries()`), `eth_getBlockByNumber` reports `head`, and `eth_getTransactionReceipt` the
 /// installed `receipts`.
@@ -18,6 +21,8 @@ final class MomentsChainStub: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var answer: Answer = { _, _ in nil }
     nonisolated(unsafe) private static var asked: [[Call]] = []
+    /// The host each of `asked` was sent to, in the same order.
+    nonisolated(unsafe) private static var askedHosts: [String] = []
     nonisolated(unsafe) private static var chainLogs: [Log] = []
     nonisolated(unsafe) private static var receipts: [Data: [Log]] = [:]
     nonisolated(unsafe) private static var filters: [LogQuery] = []
@@ -27,6 +32,11 @@ final class MomentsChainStub: URLProtocol {
     nonisolated(unsafe) private static var starving: Set<Address> = []
     nonisolated(unsafe) private static var nativeBalances: [Address: BigUInt] = [:]
     nonisolated(unsafe) private static var responseCap: Int?
+    /// Which reads are held (`hold(_:)`), and the requests held so far.
+    nonisolated(unsafe) private static var holding: (@Sendable ([Call]) -> Bool)?
+    nonisolated(unsafe) private static var heldStubs: [MomentsChainStub] = []
+    /// This request's answer while it is held, and the thread it is given on.
+    private var heldReply: (response: HTTPURLResponse, body: Data, thread: Thread)?
 
     struct Call: Hashable, CustomStringConvertible {
         let to: Address
@@ -51,9 +61,11 @@ final class MomentsChainStub: URLProtocol {
     /// than an `eth_call` may use).
     static func install(_ answer: @escaping Answer, logs: [Log] = [], receipts: [Data: [Log]] = [:], refusing: Set<String> = [], breaking: Set<Address> = [],
                         breakingSelectors: Set<Data> = [], starving: Set<Address> = [], native: [Address: BigUInt] = [:], responseCap: Int? = nil) {
+        releaseHeld()
         lock.lock(); defer { lock.unlock() }
         self.answer = answer
         asked = []
+        askedHosts = []
         chainLogs = logs
         self.receipts = receipts
         filters = []
@@ -79,10 +91,50 @@ final class MomentsChainStub: URLProtocol {
 
     static func calls() -> [Call] { batches().flatMap { $0 } }
 
+    /// Holds the answer of every request with a read that `matches` (an aggregate's sub-calls, or a single call), recorded
+    /// as it arrives, until `releaseHeld()`: a read that comes back late, while the reads after it are answered. Until the
+    /// next `install` or `releaseHeld()`.
+    static func hold(_ matches: @escaping @Sendable ([Call]) -> Bool) {
+        lock.lock(); defer { lock.unlock() }
+        holding = matches
+    }
+
+    /// Answers every request held, and holds none from now on.
+    static func releaseHeld() {
+        lock.lock()
+        let stubs = heldStubs
+        heldStubs = []
+        holding = nil
+        lock.unlock()
+        for stub in stubs {
+            guard let thread = stub.heldReply?.thread else { continue }
+            stub.perform(#selector(deliverHeld), on: thread, with: nil, waitUntilDone: false, modes: [RunLoop.Mode.common.rawValue])
+        }
+    }
+
+    /// How many requests are held now.
+    static func heldCount() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return heldStubs.count
+    }
+
+    /// `batches()`, only those sent to `host` (`rpc(host:)`).
+    static func batches(host: String) -> [[Call]] {
+        lock.lock(); defer { lock.unlock() }
+        return zip(asked, askedHosts).filter { $0.1 == host }.map(\.0)
+    }
+
     static func rpc() -> RPCClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MomentsChainStub.self]
         return RPCClient(url: rpcURL, session: URLSession(configuration: configuration))
+    }
+
+    /// A client of this chain at `host` of its own, whose reads `batches(host:)` lists.
+    static func rpc(host: String) -> RPCClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MomentsChainStub.self]
+        return RPCClient(url: URL(string: "https://\(host)")!, session: URLSession(configuration: configuration))
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -91,15 +143,30 @@ final class MomentsChainStub: URLProtocol {
 
     override func startLoading() {
         let decoded = (try? JSONDecoder().decode(JSON.self, from: Self.body(request))) ?? .null
-        let replies = (decoded.array ?? [decoded]).map(Self.reply)
+        let host = request.url?.host() ?? ""
+        var held = false
+        let replies = (decoded.array ?? [decoded]).map { Self.reply($0, host: host, held: &held) }
         let body = (try? JSONEncoder().encode(decoded.array == nil ? replies[0] : .array(replies))) ?? Data()
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        if held {
+            heldReply = (response, body, Thread.current)
+            Self.lock.lock(); Self.heldStubs.append(self); Self.lock.unlock()
+            return
+        }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    private static func reply(_ call: JSON) -> JSON {
+    /// Gives a held request its answer (`releaseHeld()`), on the thread it arrived on.
+    @objc private func deliverHeld() {
+        guard let heldReply else { return }
+        client?.urlProtocol(self, didReceive: heldReply.response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: heldReply.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    private static func reply(_ call: JSON, host: String, held: inout Bool) -> JSON {
         let id = call["id"]
         func result(_ data: Data) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": .string(hex(data))]) }
         func json(_ value: JSON) -> JSON { .object(["jsonrpc": .string("2.0"), "id": id, "result": value]) }
@@ -147,7 +214,7 @@ final class MomentsChainStub: URLProtocol {
                 let returned = starved ? nil : answer(target, calldata)
                 out.append(.tuple([.bool(returned != nil), .bytes(returned ?? Data())]))
             }
-            record(batch)
+            held = record(batch, host: host) || held
             if batch.contains(where: { breaking.contains($0.to) || breakingSelectors.contains(Data(hex: $0.selector) ?? Data()) }) { return outOfGas }
             let encoded = (try? ABI.encode([.array(out)], "(bool,bytes)[]")) ?? Data()
             if let cap, encoded.count > cap {
@@ -156,7 +223,7 @@ final class MomentsChainStub: URLProtocol {
             return result(encoded)
         }
         if breaking.contains(to) || breakingSelectors.contains(Data(data.prefix(4))) { return outOfGas }
-        record([Call(to: to, selector: data.prefix(4).hexString)])
+        held = record([Call(to: to, selector: data.prefix(4).hexString)], host: host) || held
         return answer(to, data).map(result) ?? reverted
     }
 
@@ -181,9 +248,12 @@ final class MomentsChainStub: URLProtocol {
                  "logIndex": .string(BigUInt(log.logIndex).hexQuantity)])
     }
 
-    private static func record(_ batch: [Call]) {
+    /// Records `batch`, sent to `host`; true when a test holds it (`hold(_:)`).
+    private static func record(_ batch: [Call], host: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         asked.append(batch)
+        askedHosts.append(host)
+        return holding?(batch) ?? false
     }
 
     private static func body(_ request: URLRequest) -> Data {

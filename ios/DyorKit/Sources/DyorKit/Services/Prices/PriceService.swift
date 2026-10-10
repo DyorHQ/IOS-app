@@ -268,11 +268,12 @@ public actor PriceService {
     /// The block mined 24 hours before the latest, which every 24h change is measured from (`BlockClock.block(at:head:)`),
     /// nil when the latest is less than a day after 1970 (a test chain). Throws only when the latest block can't be read.
     /// With the shared reads (`cache`), one read serves every price read for `ChainCache.TTL.dayAgoBlock` seconds, so a
-    /// warm price read is one round trip.
+    /// warm price read is one round trip. The latest block is the session's shared head (`HeadClock`), read once for every
+    /// reader within a second.
     private func dayAgoBlock() async throws -> UInt64? {
-        let rpc = rpc, clock = clock
+        let clock = clock
         let read: @Sendable () async throws -> UInt64? = {
-            let head = try await rpc.block(.latest)
+            let head = try await clock.head.latest()
             return head.timestamp > 86_400 ? try? await clock.block(at: Date(timeIntervalSince1970: TimeInterval(head.timestamp - 86_400)), head: head) : nil
         }
         guard let cache else { return try await read() }
@@ -302,13 +303,13 @@ public actor PriceService {
     }
 
     /// Samples the token's pool at `points` evenly spaced blocks over `span` seconds (blocks from the session's measured
-    /// pace), ending at the latest block, in one batched JSON-RPC request; each sample's time is estimated from the latest
-    /// block's own timestamp. A DyorHQ coin is sampled on its own venue: a launch that graduated inside the span on its
-    /// curve before then, a Moment from when it graduated. Samples the node cannot serve are dropped, so fewer than
-    /// `points` may come back.
+    /// pace), ending at the latest block (the session's shared head, `HeadClock`), in one batched JSON-RPC request; each
+    /// sample's time is estimated from the latest block's own timestamp. A DyorHQ coin is sampled on its own venue: a
+    /// launch that graduated inside the span on its curve before then, a Moment from when it graduated. Samples the node
+    /// cannot serve are dropped, so fewer than `points` may come back.
     public func history(for token: Token, points: Int = 48, span: TimeInterval = 86_400) async throws -> [PricePoint] {
         guard points > 0 else { return [] }
-        let head = try await rpc.block(.latest)
+        let head = try await clock.head.latest()
         let latest = head.number
         let secondsPerBlock = await clock.secondsPerBlock()
         let spanBlocks = BlockClock.blocks(in: max(0, span), secondsPerBlock: secondsPerBlock)
