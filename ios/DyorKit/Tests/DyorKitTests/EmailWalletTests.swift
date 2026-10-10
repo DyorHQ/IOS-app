@@ -113,4 +113,16 @@ final class EmailWalletTests: XCTestCase {
         XCTAssertFalse(EmailWallet.isValidPrivateKey(Data(repeating: 0xFF, count: 32)))       // > n
         XCTAssertFalse(EmailWallet.isValidPrivateKey(Data(repeating: 0x01, count: 31)))       // wrong length
     }
+
+    // MARK: The sign-up strength meter (the app's `PasswordStrength`, in ios/DyorHQ/Wallet/PasswordWallet.swift)
+
+    /// A run of sequential characters (abcd / 1234) is measured in `Int`: in `UInt8`, `a - 1` trapped on a NUL (U+0000),
+    /// crashing sign-up as such a password was pasted. The step reads every other ASCII pair as before.
+    func testTheStrengthMeterNeverTrapsOnANul() throws {
+        let password = try DocsLinksTests.appSource("Wallet/PasswordWallet.swift")
+        XCTAssertTrue(password.contains("guard let a = chars[i - 1].asciiValue, let b = chars[i].asciiValue else { run = 1; continue }"))
+        XCTAssertTrue(password.contains("let step = Int(b) - Int(a)"))
+        XCTAssertTrue(password.contains("if step == 1 || step == -1 { run += 1; longestRun = max(longestRun, run) } else { run = 1 }"))
+        XCTAssertFalse(password.contains("b == a - 1"), "UInt8 arithmetic on an ASCII value traps at 0")
+    }
 }

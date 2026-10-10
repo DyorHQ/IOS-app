@@ -19,7 +19,14 @@ struct MomentDetailView: View {
     @State private var account: MomentAccountView?
     @State private var quote: CollectQuote?
     @State private var quoteReason: String?
+    /// The `quoteKey` the shown quote (or `quoteReason`) was read for: Collect is offered only while it is the one on
+    /// screen, so a change of the quantity or the reserve waits for its own quote before anything is signed.
+    @State private var quotedFor: String?
     @State private var quantity = 1
+    /// The Moment's editions (`info.editions`, the NFT's `totalMinted`) when Collect was tapped. The collect mints the
+    /// ranks after them, so the settled sheet's View opens the newest of those, the collector's own, even after a read
+    /// moved `info.editions` on (provided nobody else collected in between).
+    @State private var collectBase: Int?
     @State private var editionHolders: MomentEditionHolders?
     @State private var holderStats: MomentHolderStats?
     /// When the newest block the shown coin holder statistics count was made, while they are what the device kept from
@@ -58,6 +65,8 @@ struct MomentDetailView: View {
     private var now: Int { clock.now }
     private var isCreator: Bool { session.address != nil && session.address == m.creator }
     private var canCollect: Bool { info.isCollecting(at: now) }
+    /// What a quote is read for: the quantity, the reserve and the state (`refreshQuote`, keyed by it).
+    private var quoteKey: String { "\(quantity)-\(info.ledger.reserve)-\(info.state.rawValue)" }
 
     var body: some View {
         // A Moment of a retired cohort never reaches the collect / expire / retry / buyback / beneficiary / trade
@@ -94,7 +103,7 @@ struct MomentDetailView: View {
         .refreshable { await load() }
         .task { await clock.run(showing: { MomentPageTimes(info, at: $0) }) }
         .task(id: reloads) { await load() }
-        .task(id: "\(quantity)-\(info.ledger.reserve)-\(info.state.rawValue)") { await refreshQuote() }
+        .task(id: quoteKey) { await refreshQuote() }
         .sheet(item: $action) { which in sheet(for: which) }
     }
 
@@ -215,12 +224,13 @@ struct MomentDetailView: View {
             if session.canSign {
                 Button {
                     Haptics.tap()
+                    collectBase = info.editions
                     action = .collect
                 } label: {
                     Label(quote?.terminal == true ? "Collect and Graduate" : "Collect \(quantity) Editions", systemImage: "camera.aperture")
                         .fontWeight(.semibold)
                 }
-                .disabled(quote == nil || insufficient)
+                .disabled(quote == nil || quotedFor != quoteKey || insufficient)
             } else {
                 Text(session.address == nil ? "Sign in to collect." : "You are watching this address. Sign in to collect.").font(.footnote).foregroundStyle(.secondary)
             }
@@ -474,8 +484,13 @@ struct MomentDetailView: View {
                     // Recorded in the language in use; `section` is an identifier, never translated.
                     Activity.record(ActivityRecord(kind: .moment, title: tr("Collected \(info.name)"), subtitle: tr("\(quantity) editions · \(MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))"), hash: hash, section: "moments", usd: MomentsMath.usdc(quote?.gross ?? m.price * BigUInt(quantity)), reference: m.id.description), owner: session.address)
                 },
-                // The settled sheet's View control opens the newest edition on OpenSea, where the NFT now lives.
-                onView: { _ in openURL(OpenSea.item(contract: m.nft, tokenId: BigUInt((detail?.supply.collects ?? 0) + quantity))) },
+                // The settled sheet's View control opens the newest edition this collect minted on OpenSea, where the NFT
+                // now lives: the NFT mints ranks after the editions there were (`collectBase`), as many as the quote says.
+                // Counted in BigUInt, as token ids are: no sum of chain values can overflow.
+                onView: { _ in
+                    let minted = quote?.editions ?? BigUInt(quantity)
+                    openURL(OpenSea.item(contract: m.nft, tokenId: BigUInt(collectBase ?? info.editions) + minted))
+                },
                 intent: .momentsCollect(pay: .init(token: env.config.moments.usdc, amount: collectGross), usd: MomentsMath.usdc(collectGross))
             ) {
                 DetailRow("Moment", verbatim: "\(info.name) ($\(info.symbol))")
@@ -647,14 +662,23 @@ struct MomentDetailView: View {
         }
     }
 
+    /// The quote for the quantity and reserve on screen, noted with what it was read for (`quotedFor`). A read whose task
+    /// was cancelled (the quantity, the reserve or the state changed, or the page closed) writes nothing: its quote is of
+    /// another collect, and its error is only the cancellation.
     private func refreshQuote() async {
-        guard canCollect else { quote = nil; quoteReason = nil; return }
+        let key = quoteKey
+        guard canCollect else { quote = nil; quoteReason = nil; quotedFor = key; return }
         do {
-            quote = try await env.moments.quote(id: m.id, quantity: quantity)
+            let read = try await env.moments.quote(id: m.id, quantity: quantity)
+            guard !Task.isCancelled else { return }
+            quote = read
             quoteReason = nil
+            quotedFor = key
         } catch {
+            guard !Task.isCancelled else { return }
             quote = nil
             quoteReason = describe(error)
+            quotedFor = key
         }
     }
 }

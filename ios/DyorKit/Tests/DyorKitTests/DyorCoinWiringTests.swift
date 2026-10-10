@@ -429,6 +429,18 @@ final class DyorCoinWiringTests: XCTestCase {
         }
     }
 
+    /// The launch logo's upload reads the signed-in wallet once, as every other upload does: read twice, on two hops to
+    /// the Supabase client, a session that ended in between crashed the launch on a force unwrap instead of saying the
+    /// wallet isn't signed in (`SupabaseError.notSignedIn`, which the create form shows).
+    func testTheLogoUploadReadsTheSignedInWalletOnce() throws {
+        let social = try Self.source("Social/SocialSession.swift")
+        let upload = try Self.between(social, "func uploadLaunchImage(jpeg: Data) async throws -> URL {", "struct MomentUpload: Sendable {")
+        XCTAssertTrue(upload.contains("guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn } let name = UUID().uuidString.lowercased()"))
+        for file in try Self.sources() {
+            XCTAssertFalse(file.text.contains("signedInWallet!"), "\(file.path): the session can end between two reads")
+        }
+    }
+
     /// The create forms say the guard's refusal under the field it is about and keep Review off; a launch's name is held to
     /// 32 characters, a Moment's to 48. The upload is the middle 512-pixel square, under the object name migration 26 pins.
     func testTheCreateFormsSayTheGuard() throws {

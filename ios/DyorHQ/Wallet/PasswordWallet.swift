@@ -66,7 +66,9 @@ enum PasswordStrength {
         var longestRun = 1, run = 1
         for i in 1..<chars.count {
             guard let a = chars[i - 1].asciiValue, let b = chars[i].asciiValue else { run = 1; continue }
-            if b == a + 1 || b == a - 1 { run += 1; longestRun = max(longestRun, run) } else { run = 1 }
+            // In Int, not UInt8: `a - 1` would trap on a NUL (U+0000).
+            let step = Int(b) - Int(a)
+            if step == 1 || step == -1 { run += 1; longestRun = max(longestRun, run) } else { run = 1 }
         }
         return longestRun >= max(4, chars.count - 2)
     }

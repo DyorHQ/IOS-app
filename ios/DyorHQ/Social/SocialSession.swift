@@ -310,8 +310,7 @@ final class SocialSession {
     /// public URL — which the caller writes on-chain as the token's logo. Requires a DyorHQ Social session. The bucket
     /// is write-once (its URLs go on-chain) and every logo gets a fresh name.
     func uploadLaunchImage(jpeg: Data) async throws -> URL {
-        guard await client.signedInWallet != nil else { throw SupabaseError.notSignedIn }
-        let wallet = await client.signedInWallet!
+        guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn }
         let name = UUID().uuidString.lowercased()
         return try await client.uploadPublic(bucket: "launch-media", path: "\(wallet)/\(name).jpg", data: jpeg, contentType: "image/jpeg", upsert: false)
     }

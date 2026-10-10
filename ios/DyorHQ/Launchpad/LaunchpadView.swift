@@ -506,7 +506,8 @@ final class LaunchpadModel {
     /// launches can all be read again while the balances behind this section aren't, and until they are, the section says
     /// when it was read and its coins open by reference, so their pages read them now.
     private(set) var heldSellOnlySavedAt: Date?
-    /// The account `heldSellOnly` belongs to.
+    /// The account the board's per-account reads belong to: `heldSellOnly`, and the terms (`protocolInfo`, which say
+    /// whether it may launch). Both are cleared when it changes, and a read made for another account is dropped.
     private var loadedFor: Address?
     private(set) var loading = false
     private(set) var error: String?
@@ -534,14 +535,17 @@ final class LaunchpadModel {
     }
 
     /// Takes in `account` before the board's first frame (`LaunchpadView`'s `onAppear`) and at the start of every load:
-    /// another account's sell-only coins go, and a board with nothing on it yet shows what was saved for this one when it
-    /// was last read in full — a small file on the device, read on the spot — said to be (`restoreSaved`). So the tab
-    /// opens on the coins it last showed rather than on a spinner until its first read's task starts.
+    /// another account's sell-only coins and its terms go, and a board with nothing on it yet shows what was saved for
+    /// this one when it was last read in full — a small file on the device, read on the spot — said to be
+    /// (`restoreSaved`). So the tab opens on the coins it last showed rather than on a spinner until its first read's
+    /// task starts.
     func showSaved(env: AppEnvironment, account: Address?) {
-        // Another account: none of the previous one's coins may stay on screen, even when a read below fails (RS-10).
+        // Another account: none of the previous one's coins may stay on screen, even when a read below fails (RS-10), nor
+        // its terms (`protocolInfo` carries whether that account may launch), which a failed read would otherwise keep.
         if account != loadedFor {
             heldSellOnly = []
             heldSellOnlySavedAt = nil
+            protocolInfo = nil
             loadedFor = account
         }
         // A board with nothing on it yet shows what was saved for this account when last read, said to be (`restoreSaved`).
@@ -568,7 +572,15 @@ final class LaunchpadModel {
         if listing.complete { savedAt = nil }
         // A read cut short because the tab went off screen isn't a failure to show: the board reloads when it's back.
         guard !Task.isCancelled else { return }
-        protocolInfo = try? await info
+        do {
+            // Nil for a launchpad not deployed yet. Taken only for the account it was read for: it says whether that
+            // account may launch.
+            let read = try await info
+            if account == loadedFor { protocolInfo = read }
+        } catch {
+            // A failed read keeps the last good terms, so the Create form open over the board keeps its pairs and fee
+            // (`launchPlan` reads the fee, the terms hash and the blocker again before anything is signed).
+        }
         error = listing.firstError.map(describe)
         if !listed { listed = true }
         let held = await Self.heldSellOnly(env: env, account: account, listing: listing)
@@ -1108,6 +1120,8 @@ struct LaunchDetailView: View {
         async let t = env.launchpad.trades(curve: launch.curve, pair: launch.pair)
         async let h = env.launchpad.holders(token: launch.token, excluding: [launch.curve], launchedAt: launch.launchedAt)
         async let pu = pairUSDPrice()
+        // A failed read hides the wallet's balances and claims rather than keep ones a trade or claim since may have
+        // changed: Your Holdings, Max, the balance check and the claims act on them.
         if let address = session.address { account = try? await env.launchpad.accountView(launch, account: address) }
         // A launch that can't be read keeps the last good detail and says so (`LaunchpadService.launch`); one that isn't
         // recorded reads as nil, as before.
@@ -1118,7 +1132,8 @@ struct LaunchDetailView: View {
             // A read cut short because the page went off screen (a pushed view) isn't a failure: it reloads on return.
             if !Task.isCancelled { detailUnread = true }
         }
-        pairUSD = await pu
+        // A failed read keeps the pair's last good dollar price, and with it the dollar price, market cap and volume.
+        if let usd = await pu { pairUSD = usd }
         let curveTrades = await t
         // Nor are its empty answers: the chart keeps the trades it has.
         guard !Task.isCancelled else { return }
@@ -1132,7 +1147,10 @@ struct LaunchDetailView: View {
             // A read that failed outright keeps the last good trades, and says so.
             tradesUnread = true
         }
-        priceSeries = Self.priceSeries(trades: trades, launch: launch, unit: pairUSD ?? 1)
+        // In dollars only: the chart's axis reads "$". A USD-stable pair (USDC, AUSD) is $1 by definition, read or not
+        // (`PriceService.definedPrices`); any other pair asset once its dollar price was read, so prices in MON are never
+        // drawn under it.
+        if let unit = pairUSD ?? PriceService.definedPrices(for: [pairToken])[pairToken.address]?.usd { priceSeries = Self.priceSeries(trades: trades, launch: launch, unit: unit) }
         loadingTrades = false
         let count = await h
         guard !Task.isCancelled else { return }
