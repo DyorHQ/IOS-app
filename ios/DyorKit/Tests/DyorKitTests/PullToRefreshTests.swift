@@ -61,6 +61,7 @@ final class PullToRefreshTests: XCTestCase {
         """))
         XCTAssertTrue(profile.contains("""
                     .refreshable {
+                        env.invalidateChainReads()
                         await model.load(env: env, address: session.address)
                         env.history.kick(env: env)
                     }
@@ -121,6 +122,44 @@ final class PullToRefreshTests: XCTestCase {
         XCTAssertEqual(HistoryCadence.freshFor, 180)
     }
 
+    /// A pull asks for what is on chain now: every screen whose figures come from the reads the screens share (the launch
+    /// list, the Moments lists, prices: `ChainCache`) forgets them first, so its reads go to the chain rather than take a
+    /// copy another screen read seconds ago; a pull never waits for that (it is a synchronous call). A transaction of the
+    /// user's that settled does the same, once, in the one sheet every plan runs in, before the caller records or reloads;
+    /// and an erase of this device's data forgets them with what is kept on the device.
+    func testAPullAndASettledTransactionReadTheSharedReadsAgain() throws {
+        let pulls = try pulls()
+        let sharing: Set<String> = ["HomeView.swift", "LaunchpadView.swift", "LaunchpadProfileView.swift", "MomentsView.swift", "MomentsPortfolioView.swift", "RecentActivityView.swift"]
+        for pull in pulls where sharing.contains(pull.file) {
+            let body = pull.body.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            XCTAssertEqual(body.dropFirst().first, "env.invalidateChainReads()", "\(pull.file): first, before any read")
+        }
+        XCTAssertEqual(Set(pulls.filter { $0.body.contains("env.invalidateChainReads()") }.map(\.file)), sharing)
+        XCTAssertTrue(try DocsLinksTests.appSource("Portfolio/PortfolioView.swift").contains("if force {\n            env.invalidateChainReads()"), "the Portfolio's, through its reload")
+
+        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        XCTAssertTrue(environment.contains("let chainCache = ChainCache()"))
+        XCTAssertTrue(environment.contains("chainStore = isFork ? ChainStore(directory: nil) : ChainStore.applicationSupport()"), "a fork keeps nothing on disk")
+        XCTAssertTrue(environment.contains("func invalidateChainReads() {\n        chainCache.invalidate()\n    }"))
+        XCTAssertEqual(environment.components(separatedBy: "cache: chainCache, store: chainStore").count - 1, 4, "prices, the launchpad, Moments, past cohorts")
+
+        let sheet = try DocsLinksTests.appSource("Wallet/TransactionRun.swift")
+        XCTAssertTrue(sheet.contains("""
+                    completed = true
+                    // The plan changed what is on chain (a buy, a sell, a launch, a collect, a claim, a swap): every read the
+                    // screens share is read again (`AppEnvironment.invalidateChainReads`), before the caller records or reloads.
+                    env.invalidateChainReads()
+                    onCompleted?(hash)
+        """))
+
+        let session = try DocsLinksTests.appSource("Wallet/Session.swift")
+        let erase = try XCTUnwrap(session.range(of: "func eraseLocalData() async {"))
+        let signedOut = try XCTUnwrap(session.range(of: "state = .signedOut", range: erase.upperBound ..< session.endIndex))
+        let wipe = session[erase.upperBound ..< signedOut.lowerBound]
+        XCTAssertTrue(wipe.contains("chainStore?.erase()\n        chainCache?.invalidate()"), "with no suspension before the sign-out")
+        XCTAssertTrue(environment.contains("session.chainStore = chainStore\n        session.chainCache = chainCache"))
+    }
+
     /// Home's pull reads Home's figures and the Portfolio's side by side, not one after the other. The Portfolio's pull
     /// still reads all three of its parts again in full (`force`), side by side, with the history kicked on behind them.
     func testAPullReadsTheScreensPartsSideBySide() throws {
@@ -139,7 +178,10 @@ final class PullToRefreshTests: XCTestCase {
         XCTAssertTrue(portfolio.contains(".refreshable { await reload(force: true) }"))
         XCTAssertTrue(portfolio.contains("""
             private func reload(force: Bool) async {
-                if force { env.history.kick(env: env) }
+                if force {
+                    env.invalidateChainReads()
+                    env.history.kick(env: env)
+                }
                 async let portfolio: () = model.load(env: env, address: session.address, perplKey: perplTrading.key, force: force, passkey: session.isPasskeyAccount)
                 async let holdings: () = assets.load(env: env, address: session.address, force: force)
                 async let past: () = pastMoments.load(env: env, address: session.address, force: force)

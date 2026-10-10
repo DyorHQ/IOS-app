@@ -74,10 +74,10 @@ final class RemoteFlagsTests: XCTestCase {
         XCTAssertFalse(gate.contains("client.minimumBuild()"), "one read of the row")
 
         let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
-        for part in ["clock = BlockClock(rpc: rpc)", "prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true)",
-                     "launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock)",
-                     "moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock)",
-                     "RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock)",
+        for part in ["clock = BlockClock(rpc: rpc)", "prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true, cache: chainCache, store: chainStore)",
+                     "launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)",
+                     "moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)",
+                     "RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)",
                      "activity = TokenActivityService(rpc: logsClient, clock: clock)",
                      "swapHistory = SwapHistoryService(rpc: logsClient, clock: clock, archive: archiveClient)",
                      "walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock,",

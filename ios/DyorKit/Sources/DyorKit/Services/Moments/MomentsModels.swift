@@ -219,7 +219,7 @@ public enum MomentsConstants {
 }
 
 /// `MomentTypes.State`.
-public enum MomentState: Int, Sendable, Hashable, CaseIterable {
+public enum MomentState: Int, Sendable, Hashable, Codable, CaseIterable {
     case collecting = 0
     case graduationPending
     case graduated
@@ -392,7 +392,11 @@ public struct PendingMomentPolicy: Sendable, Hashable {
     public func hasLapsed(at now: Date) -> Bool { lapsesAt.map { now > $0 } ?? false }
 }
 
-/// What the Moments tab reads (`MomentsService.board`): the newest Moments, and the policy or why it couldn't be read.
+/// What the Moments tab reads: the newest Moments (`MomentsService.moments(limit:)`), and the terms
+/// (`MomentsService.policy()`) or why they couldn't be read, each read apart and shown as it lands (`MomentsModel.load`).
+/// A policy that can't be read — a link base that isn't text is refused (`ABI.StringDecoding.strict`), since it is
+/// compared with DyorHQ's and hashed into `termsHash()` — leaves Publish unavailable (`policyUnread`) while the Moments
+/// still show.
 public struct MomentsBoard: Sendable {
     public let moments: [MomentInfo]
     public let policy: Result<MomentPolicy?, any Error>
@@ -410,7 +414,7 @@ public struct MomentsBoard: Sendable {
 }
 
 /// `MomentTypes.Provenance`: what the NFT records about the moment itself.
-public struct MomentProvenance: Sendable, Hashable {
+public struct MomentProvenance: Sendable, Hashable, Codable {
     public let mediaURI: String
     public let mediaHash: Data
     public let place: String
@@ -446,7 +450,7 @@ public struct MomentKey: Sendable, Hashable, CustomStringConvertible {
 }
 
 /// `MomentTypes.Moment`: everything fixed at publish. There is no setter on chain.
-public struct Moment: Sendable, Hashable, Identifiable {
+public struct Moment: Sendable, Hashable, Codable, Identifiable {
     public let id: BigUInt
     public let creator: Address
     public let platform: Address
@@ -500,7 +504,7 @@ public struct Moment: Sendable, Hashable, Identifiable {
 }
 
 /// `MomentCollect.Ledger`: the live money state of a Moment.
-public struct MomentLedger: Sendable, Hashable {
+public struct MomentLedger: Sendable, Hashable, Codable {
     public let state: MomentState
     public let completedAt: Int
     public let stuckSince: Int
@@ -527,7 +531,7 @@ public struct MomentLedger: Sendable, Hashable {
 }
 
 /// A graduated Moment's pool: the locked v4 position, its live price and the hook fees waiting to be pulled.
-public struct MomentPool: Sendable, Hashable {
+public struct MomentPool: Sendable, Hashable, Codable {
     public let key: PoolKey
     public let poolId: Data
     public let usdcIs0: Bool
@@ -593,8 +597,9 @@ public struct MomentPool: Sendable, Hashable {
     public func buybackReady(at now: Int) -> Bool { buybackBudget >= buybackMin && now >= lastBuyback + buybackInterval }
 }
 
-/// A Moment as the board and the detail page show it.
-public struct MomentInfo: Sendable, Hashable, Identifiable {
+/// A Moment as the board and the detail page show it. Codable, so the screens that list it can keep what they last showed
+/// (`SavedScreens`); its media is still checked against `provenance.mediaHash` wherever it loads.
+public struct MomentInfo: Sendable, Hashable, Codable, Identifiable {
     public let moment: Moment
     public let name: String
     public let symbol: String
@@ -777,7 +782,7 @@ public struct MomentAccountView: Sendable, Hashable {
 }
 
 /// One Moment the account has a stake in.
-public struct MomentPortfolioRow: Sendable, Hashable, Identifiable {
+public struct MomentPortfolioRow: Sendable, Hashable, Codable, Identifiable {
     public let moment: MomentInfo
     /// Everything this account will be able to claim in total: its collects plus, for the creator, the allocation.
     public let entitlement: BigUInt
@@ -898,6 +903,32 @@ public struct MomentHolderStats: Sendable, Hashable {
         self.poolBps = poolBps
         self.mintedCoins = mintedCoins
         self.scannedTo = scannedTo
+        self.complete = complete
+    }
+}
+
+/// A Moment's edition holders (`MomentsService.editionHolders`): the wallets holding its editions, from each edition's
+/// owner as read.
+public struct MomentEditionHolders: Sendable, Hashable {
+    /// Distinct wallets holding an edition: their number when `complete`, else a minimum.
+    public let holders: Int
+    /// The wallet holding the most editions (of equal counts, the lowest address, so two reads name the same one), and
+    /// how many it holds.
+    public let topHolder: Address?
+    public let topCount: Int
+    /// Every edition's owner was read. False: the Moment has more editions than one read counts
+    /// (`MomentsService.maxEditionsRead`), so `holders` is a minimum and the largest holder is of the editions read only,
+    /// which the page doesn't show.
+    public let complete: Bool
+
+    /// From each edition's owner, as read (`owners`, one per edition).
+    public init(owners: [Address], complete: Bool) {
+        var counts: [Address: Int] = [:]
+        for owner in owners { counts[owner, default: 0] += 1 }
+        let top = counts.max { a, b in a.value != b.value ? a.value < b.value : a.key.hex > b.key.hex }
+        holders = counts.count
+        topHolder = top?.key
+        topCount = top?.value ?? 0
         self.complete = complete
     }
 }
@@ -1034,6 +1065,69 @@ public struct MomentsAccountHistory: Sendable, Hashable {
             withdrawals: histories.flatMap(\.withdrawals).sorted { $0.block > $1.block },
             publishes: histories.flatMap(\.publishes).sorted { $0.block > $1.block }
         )
+    }
+}
+
+// MARK: - Time on screen
+
+/* What the Moments screens show that changes with the time alone (speed work, build 23). Until build 22 the board and a
+   Moment's page each kept a clock ticking every second and drew their whole screen again on every tick — every card,
+   every section and some fifteen formatters — to move a countdown that changes once a minute. Now a countdown is drawn
+   again alone, at the instants its text changes (`MomentCountdown`), and a screen as a whole only when one of the values
+   below changes (`Clock.run(showing:)` in the app). */
+
+/// When a Moment's countdown ("2d 3h left", "45m left", "1m left", then closed) reads differently. It shows the whole
+/// minutes left (at least one) in the largest units that fit, so its text is a function of `shownMinutes` alone.
+public enum MomentCountdown {
+    /// The whole minutes the countdown shows `secondsLeft` before the deadline: at least 1 while open, 0 once closed.
+    public static func shownMinutes(secondsLeft: Int) -> Int {
+        secondsLeft > 0 ? max(1, secondsLeft / 60) : 0
+    }
+
+    /// The first second after `now` at which the countdown to `deadline` reads differently (`shownMinutes` changes), the
+    /// deadline itself last; nil once it has passed.
+    public static func nextChange(after now: Int, deadline: Int) -> Int? {
+        let left = deadline - now
+        guard left > 0 else { return nil }
+        let minutes = left / 60
+        return minutes >= 2 ? deadline - 60 * minutes + 1 : deadline
+    }
+}
+
+/// What the board shows that changes with the time alone: which Moments are still collecting (the Collecting filter),
+/// and whether the queued terms lapsed (the header's notice). The board is drawn again when it changes.
+public struct MomentBoardTimes: Hashable, Sendable {
+    public let collecting: [Bool]
+    public let pendingLapsed: Bool
+
+    public init(moments: [MomentInfo], policy: MomentPolicy?, at now: Int) {
+        collecting = moments.map { $0.isCollecting(at: now) }
+        pendingLapsed = policy?.pending?.hasLapsed(at: Date(timeIntervalSince1970: TimeInterval(now))) ?? false
+    }
+}
+
+/// What a Moment's page (live or past cohort) shows that changes with the time alone: whether it is collecting and its
+/// window open (the collect ticket, the progress rows), whether it can be expired, whether it missed graduation, the
+/// vested shares (at the monthly cliffs) and whether a buyback can run. The page is drawn again when one changes; its
+/// badge's countdown moves on its own (`MomentCountdown`).
+public struct MomentPageTimes: Hashable, Sendable {
+    public let collecting: Bool
+    public let windowOpen: Bool
+    public let expirable: Bool
+    public let missedGraduation: Bool
+    public let collectorVestedBps: Int
+    public let creatorVestedBps: Int
+    public let buybackReady: Bool
+
+    public init(_ info: MomentInfo, at now: Int) {
+        collecting = info.isCollecting(at: now)
+        windowOpen = now < info.moment.deadline
+        expirable = info.isExpirable(at: now)
+        missedGraduation = info.missedGraduation(at: now)
+        let graduatedAt = info.pool?.graduatedAt ?? 0
+        collectorVestedBps = MomentsMath.collectorVestedBps(graduatedAt: graduatedAt, now: now)
+        creatorVestedBps = MomentsMath.creatorVestedBps(graduatedAt: graduatedAt, now: now)
+        buybackReady = info.pool?.buybackReady(at: now) ?? false
     }
 }
 

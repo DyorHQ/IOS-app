@@ -14,6 +14,19 @@ final class AppEnvironment {
     /// reads — prices (the 24h change and charts), the launchpad, Moments (live and retired), swap history and token
     /// activity — so the session measures it once.
     let clock: BlockClock
+    /// The chain reads several screens make at about the same time, made once and shared (`ChainCache`): the launch list,
+    /// the Moments lists (live and retired) and prices, each kept a few seconds. A transaction of the user's that settled
+    /// and a pull to refresh forget them (`invalidateChainReads`), so the next read goes to the chain.
+    let chainCache = ChainCache()
+    /// What never changes once read — each settled launch's token and text, each settled Moment's record and text — and
+    /// where tokens are priced, kept between launches (`ChainStore`), so a refresh reads only what moves. Public chain
+    /// data only; erased with this device's data (`Session.eraseLocalData`). A fork keeps it in memory only.
+    let chainStore: ChainStore
+    /// What Home, the Portfolio, the Launch and Moments boards and My Launchpad last showed for each wallet, kept on the
+    /// device (`SavedScreens`): a screen opened paints it at once, says when it was read, and reads everything again
+    /// behind it. Never another wallet's, never one over a day old; erased with this device's data
+    /// (`Session.eraseLocalData`). A fork saves none.
+    let savedScreens: SavedScreens
     /// Prices. DyorHQ coins are priced on their own curve or pool (`DyorListing`), never another pool, unless the owner's
     /// remote switch turns that off (`apply(_:)`); Home counts each coin once (`HomeTotals`).
     let prices: PriceService
@@ -100,6 +113,11 @@ final class AppEnvironment {
         // A local fork (a Debug build pointed at 127.0.0.1) keeps its own logs and its own registry file.
         let host = config.rpcURL.host() ?? ""
         let isFork = host == "127.0.0.1" || host == "localhost"
+        chainStore = isFork ? ChainStore(directory: nil) : ChainStore.applicationSupport()
+        // A saved screen is shown only by the build that saved it (its version and build number).
+        let info = Bundle.main.infoDictionary
+        let build = "\(info?["CFBundleShortVersionString"] as? String ?? "")-\(info?["CFBundleVersion"] as? String ?? "")"
+        savedScreens = isFork ? SavedScreens(directory: nil, build: build) : SavedScreens.applicationSupport(build: build)
         // History reads go across the public endpoints, in ranges each answers, through one gate (`LogsRouter`): one
         // client for every reader. A local fork keeps its own logs, so a development build pointed at 127.0.0.1 scans the
         // fork instead.
@@ -131,15 +149,19 @@ final class AppEnvironment {
         // The registry reads every factory on the failover RPC; a Debug build on a local fork keeps its own file. The
         // price service asks it which tokens are DyorHQ coins, and which factory made each.
         let registry = DyorCoinRegistry(rpc: rpc, live: config.launchpad, liveMoments: config.moments, store: .applicationSupport(fork: isFork))
-        prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true)
+        prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true, cache: chainCache, store: chainStore)
         // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools (once v2 is
         // deployed) and those of the retired factories with the current record (the legacy 0xad3d… launches all
         // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0.
         swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments)
         perpl = PerplService(rpc: rpc)
-        launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock)
-        moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock)
-        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, logsClient, clock] in RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock) }
+        // The launch list and the Moments lists are read once for every screen that asks within a few seconds, and what
+        // never changes of a settled launch or Moment is read once and kept (`chainCache`, `chainStore`).
+        launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)
+        moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)
+        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, logsClient, clock, chainCache, chainStore] in
+            RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)
+        }
         // The block of a wallet's first transaction, kept on the device once found.
         let keptFirstBlock: @Sendable (Address) -> UInt64? = { wallet in
             UserDefaults.standard.string(forKey: "history.v1.firstBlock.\(wallet.hex.lowercased())").flatMap { UInt64($0) }
@@ -173,6 +195,11 @@ final class AppEnvironment {
         session = Session(config: config, backend: social)
         // An erase of this device's data deletes the registry's file and the image caches too.
         session.dyorCoins = dyorCoins
+        // An erase of this device's data deletes the chain facts kept between launches and forgets the shared reads.
+        session.chainStore = chainStore
+        session.chainCache = chainCache
+        // An erase of this device's data deletes every screen saved for every wallet.
+        session.savedScreens = savedScreens
         // An erase of this device's data saves App Lock as a new install has it, and sets it here too (R4).
         session.settings = settings
         // An erase of this device's data sets the language back to English, as on a new install.
@@ -216,6 +243,13 @@ final class AppEnvironment {
             await previous?.value
             await prices.setUsesDyorVenues(flags.dyorVenuePrices)
         }
+    }
+
+    /// Forgets every chain read the screens share (`chainCache`): a transaction of the user's settled (`ConfirmationSheet`),
+    /// or a pull to refresh asked for what is on chain now. The next read of the launch list, the Moments lists and every
+    /// price goes to the chain, and no read begun before this is joined or kept. What never changes (`chainStore`) stays.
+    func invalidateChainReads() {
+        chainCache.invalidate()
     }
 
     /// A transaction sender for `chain`: Monad reuses the app's configured endpoint (and multicall); every other

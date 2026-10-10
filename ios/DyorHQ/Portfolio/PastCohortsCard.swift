@@ -43,15 +43,32 @@ final class PastMomentsModel {
         // its own, newest first (`RetiredMoments.positions`).
         let snapshot = env.history.snapshot
         let history = env.history.wallet == address && snapshot.status(WalletHistoryScans.momentsId).complete ? snapshot.moments : nil
-        for cohort in env.retiredMoments {
-            do {
-                let read = try await cohort.positions(account: address, history: history)
-                found += read.positions
-                if !read.complete { cut = true }
-            } catch {
+        // The cohorts side by side, kept in their order: each one's list is shared with the Portfolio's and My Holdings'
+        // reads, and its Moments' records and text are kept on the device (`RetiredMoments`), so only what moves is read.
+        let cohorts = env.retiredMoments
+        let reads = await withTaskGroup(of: (Int, [RetiredMomentPosition], Bool, (any Error)?).self) { group in
+            for (i, cohort) in cohorts.enumerated() {
+                group.addTask {
+                    do {
+                        let read = try await cohort.positions(account: address, history: history)
+                        return (i, read.positions, read.complete, nil)
+                    } catch {
+                        return (i, [], true, error)
+                    }
+                }
+            }
+            var out = [(positions: [RetiredMomentPosition], complete: Bool, error: (any Error)?)](repeating: ([], true, nil), count: cohorts.count)
+            for await (i, positions, complete, error) in group { out[i] = (positions, complete, error) }
+            return out
+        }
+        for (cohort, read) in zip(cohorts, reads) {
+            if let error = read.error {
                 // Keep what this cohort showed before rather than dropping a claim on a transient read failure.
                 failure = describe(error)
                 found += positions.filter { $0.key.factory == cohort.factory }
+            } else {
+                found += read.positions
+                if !read.complete { cut = true }
             }
         }
         guard requested == address else { return }

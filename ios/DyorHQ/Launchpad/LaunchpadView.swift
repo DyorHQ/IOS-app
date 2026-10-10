@@ -47,7 +47,11 @@ struct LaunchpadView: View {
                 }
             }
             .searchable(text: $query, prompt: tr("Search coins"))
-            .refreshable { await model.load(env: env, account: session.address) }
+            // A pull reads what is on chain now: the list and prices the screens share are read again first.
+            .refreshable {
+                env.invalidateChainReads()
+                await model.load(env: env, account: session.address)
+            }
             // Restarts with the wallet: whether it may launch is part of what the create screen is given.
             .task(id: session.address) { await model.poll(env: env, account: session.address) }
             // Another account can take over in place (a Privy session adopted over a watch-only one, say) without the
@@ -68,11 +72,30 @@ struct LaunchpadView: View {
             }
             // The tab is built lazily: a page sent before it first appears opens then, over the board.
             .onAppear {
+                // The board saved for the wallet is in the first frame the tab draws, never a spinner under what it has
+                // (`LaunchpadModel.showSaved`): read here, before that frame, rather than in the poll's task, which starts
+                // after it. Never animated: nothing of the board moves as it comes in.
+                withTransaction(\.disablesAnimations, true) { model.showSaved(env: env, account: session.address) }
                 if let launch = router.pendingLaunch { path = [.launch(launch)]; router.pendingLaunch = nil }
                 if let reference = router.pendingLaunchReference { path = [.reference(reference)]; router.pendingLaunchReference = nil }
             }
         }
     }
+
+    /// A card's page: the launch as read, or, while its section shows what was saved when the board was last read
+    /// (`saved`: the board's coins while `LaunchpadModel.savedAt` is set, the wallet's sell-only coins while
+    /// `heldSellOnlySavedAt` is), the coin's reference, so its page reads it now: a launch page shows the launch it is
+    /// given as current — its price, its phase, which trades are open.
+    private func page(for launch: Launch, saved: Bool) -> LaunchPage {
+        saved ? .reference(LaunchReference(token: launch.token, factory: launch.factory)) : .launch(launch)
+    }
+
+    /// The board's coins show what was saved when it was last read (`LaunchpadModel.savedAt`).
+    private var boardSaved: Bool { model.savedAt != nil }
+
+    /// The wallet's sell-only coins show what was saved when the board was last read (`LaunchpadModel.heldSellOnlySavedAt`):
+    /// the balances behind them may be unread when every launch has been read again.
+    private var sellOnlySaved: Bool { model.heldSellOnlySavedAt != nil || model.savedAt != nil }
 
     /// Pushes `page`, unless its coin's page is already on top: a launch read elsewhere (Home's copy differs in every live
     /// field) or a reference to the same coin is the same page, never a second one over it.
@@ -95,50 +118,62 @@ struct LaunchpadView: View {
                         Button("Retry") { Task { await model.load(env: env, account: session.address) } }.font(.footnote.weight(.semibold))
                     }
                 }
+                // The board saved when it was last read, shown while it is read again: said to be, never taken for this read.
+                if let savedAt = model.savedAt { SavedLine(date: savedAt, reading: model.loading) }
                 if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !firstLoad {
                     // A search that found nothing says so: a coin the board doesn't list (a retired launchpad's sell-only
                     // coin) is reached from Home, the Portfolio or Swap, not found here. Only the first load hides this:
                     // a poll leaves it on screen. A board with nothing read shows the error above, never "no coins".
                     if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else if model.error == nil { emptyState }
                 } else {
-                    if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated) }
+                    if !graduated.isEmpty { section(title: "Graduated", count: graduated.count, subtitle: "Cleared the graduation threshold", coins: graduated, saved: boardSaved) }
                     exploreSection
                     // Every phase has its section (`LaunchPhase.boardSection`), among the coins the board lists: the live
                     // launchpad's in refund mode or migrating.
                     if !refundAndMigrating.isEmpty {
                         section(title: "Refund & Migrating", count: refundAndMigrating.count,
-                                subtitle: "In refund mode, holders sell back into the curve; a migrating coin trades once it graduates", coins: refundAndMigrating)
+                                subtitle: "In refund mode, holders sell back into the curve; a migrating coin trades once it graduates", coins: refundAndMigrating, saved: boardSaved)
                     }
                     // Only the signed-in wallet's own: the retired launchpads' coins it still holds, which the board
-                    // doesn't list, so the Launch tab is never a dead end for their holders.
+                    // doesn't list, so the Launch tab is never a dead end for their holders. Saved with the board, and
+                    // kept when the balances can't be read again (RS-10), it says when it was read once the board's line
+                    // has gone.
                     if !sellOnly.isEmpty {
-                        section(title: "Your Sell-Only Coins", count: sellOnly.count,
-                                subtitle: LaunchBoard.sellOnlySubtitle(sellOnly), coins: sellOnly)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if model.savedAt == nil, let heldAt = model.heldSellOnlySavedAt { SavedLine(date: heldAt, reading: model.loading) }
+                            section(title: "Your Sell-Only Coins", count: sellOnly.count,
+                                    subtitle: LaunchBoard.sellOnlySubtitle(sellOnly), coins: sellOnly, saved: sellOnlySaved)
+                        }
                     }
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+            // Nothing here is animated by a saved line: an animation keyed to one animates whatever changes with it — the
+            // launches a read brought, the tab's first layout, a `Paragraph`'s words — and drew the Moments board garbled
+            // on its first opening (build 23 speed work). A line comes and goes with the board it labels.
         }
         .background(Color(.systemGroupedBackground))
     }
 
-    private func section(title: LocalizedStringKey, count: Int, subtitle: LocalizedStringKey, coins: [Launch]) -> some View {
-        section(title: title, count: count, subtitle: Text(subtitle), coins: coins)
+    /// A section of `coins`, each opening its page (`page(for:saved:)`): `saved`, they show what was saved when the board
+    /// was last read.
+    private func section(title: LocalizedStringKey, count: Int, subtitle: LocalizedStringKey, coins: [Launch], saved: Bool) -> some View {
+        section(title: title, count: count, subtitle: Text(subtitle), coins: coins, saved: saved)
     }
 
     /// A section whose subtitle is built at run time (`LaunchBoard.sellOnlySubtitle`), shown as it is.
     @_disfavoredOverload
-    private func section<S: StringProtocol>(title: LocalizedStringKey, count: Int, subtitle: S, coins: [Launch]) -> some View {
-        section(title: title, count: count, subtitle: Text(verbatim: String(subtitle)), coins: coins)
+    private func section<S: StringProtocol>(title: LocalizedStringKey, count: Int, subtitle: S, coins: [Launch], saved: Bool) -> some View {
+        section(title: title, count: count, subtitle: Text(verbatim: String(subtitle)), coins: coins, saved: saved)
     }
 
-    private func section(title: LocalizedStringKey, count: Int, subtitle: Text, coins: [Launch]) -> some View {
+    private func section(title: LocalizedStringKey, count: Int, subtitle: Text, coins: [Launch], saved: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader(title, count: count, subtitle: subtitle)
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(coins) { launch in
-                    NavigationLink(value: LaunchPage.launch(launch)) { LaunchCard(launch: launch) }
+                    NavigationLink(value: page(for: launch, saved: saved)) { LaunchCard(launch: launch) }
                         .buttonStyle(.plain)
                         .onAppear { prefetch(after: launch, in: coins) }
                 }
@@ -174,7 +209,7 @@ struct LaunchpadView: View {
                 LazyVGrid(columns: columns, spacing: 12) {
                     let coins = climbing
                     ForEach(coins) { launch in
-                        NavigationLink(value: LaunchPage.launch(launch)) { LaunchCard(launch: launch) }
+                        NavigationLink(value: page(for: launch, saved: boardSaved)) { LaunchCard(launch: launch) }
                             .buttonStyle(.plain)
                             .onAppear { prefetch(after: launch, in: coins) }
                     }
@@ -247,9 +282,10 @@ struct LaunchpadView: View {
 
     private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    /// The first read hasn't answered yet: the spinner shows over the board, and nothing says "empty" or "not found".
-    /// Every later poll keeps what is on screen.
-    private var firstLoad: Bool { model.loading && model.launches.isEmpty }
+    /// The board has no coin to show and no read has answered yet (nor a save been shown), or one is under way: the
+    /// spinner shows over the board, and nothing says "empty" or "not found" (`BoardFirstRead`) — in the frames before the
+    /// first read's task starts too. Every later poll keeps what is on screen.
+    private var firstLoad: Bool { BoardFirstRead.isLoading(empty: model.launches.isEmpty, answered: model.listed, reading: model.loading) }
 
     private func searched(_ launches: [Launch]) -> [Launch] {
         let q = query.trimmingCharacters(in: .whitespaces)
@@ -463,18 +499,53 @@ final class LaunchpadModel {
     private(set) var pairUSD: [Address: Double] = [:]
     /// The retired launchpads' sell-only coins the signed-in wallet holds, which the board doesn't list: its "Your
     /// Sell-Only Coins" (`LaunchBoard.heldSellOnly`). Cleared on an account change; a read that failed, of a factory
-    /// or a balance, keeps it.
+    /// or a balance, keeps it (RS-10: a held coin never drops from the section unsaid).
     private(set) var heldSellOnly: [Launch] = []
+    /// When `heldSellOnly` was read, while it is what was saved for the wallet when the board was last read in full
+    /// (`restoreSaved`); nil once a read of the wallet's sell-only coins landed in this session. Apart from `savedAt`: the
+    /// launches can all be read again while the balances behind this section aren't, and until they are, the section says
+    /// when it was read and its coins open by reference, so their pages read them now.
+    private(set) var heldSellOnlySavedAt: Date?
     /// The account `heldSellOnly` belongs to.
     private var loadedFor: Address?
     private(set) var loading = false
     private(set) var error: String?
+    /// When the board on screen was read, while it shows what was saved for the wallet when last read in full
+    /// (`restoreSaved`); nil once a read of every launchpad landed. The board says it ("Updated 3 min ago").
+    private(set) var savedAt: Date?
+    /// A read of the launchpads has answered in this session — every one, some or none of them (`error` says which) — or
+    /// the board saved for the wallet is shown: until then an empty board is loading (`BoardFirstRead`), never "No
+    /// Launches Yet".
+    private(set) var listed = false
+
+    /// What the board saves for a wallet once read in full (`SavedScreens.Screen.launchBoard`): the launches, each pair
+    /// asset's price, and the wallet's sell-only coins.
+    struct Saved: Codable, Sendable {
+        let launches: [Launch]
+        let pairUSD: [Address: Double]
+        let heldSellOnly: [Launch]
+    }
 
     func poll(env: AppEnvironment, account: Address?) async {
         while !Task.isCancelled {
             await load(env: env, account: account)
             try? await Task.sleep(for: .seconds(20))
         }
+    }
+
+    /// Takes in `account` before the board's first frame (`LaunchpadView`'s `onAppear`) and at the start of every load:
+    /// another account's sell-only coins go, and a board with nothing on it yet shows what was saved for this one when it
+    /// was last read in full — a small file on the device, read on the spot — said to be (`restoreSaved`). So the tab
+    /// opens on the coins it last showed rather than on a spinner until its first read's task starts.
+    func showSaved(env: AppEnvironment, account: Address?) {
+        // Another account: none of the previous one's coins may stay on screen, even when a read below fails (RS-10).
+        if account != loadedFor {
+            heldSellOnly = []
+            heldSellOnlySavedAt = nil
+            loadedFor = account
+        }
+        // A board with nothing on it yet shows what was saved for this account when last read, said to be (`restoreSaved`).
+        restoreSaved(env: env, account: account)
     }
 
     /// `account` is the signed-in wallet: whether it may launch (`canLaunch`) comes with the factory's terms. A launchpad
@@ -484,22 +555,47 @@ final class LaunchpadModel {
         // Runs while the live stack is pending too: the retired stacks' launches are still read (and `protocolInfo` is nil).
         loading = true
         defer { loading = false }
-        // Another account: none of the previous one's coins may stay on screen, even when a read below fails (RS-10).
-        if account != loadedFor {
-            heldSellOnly = []
-            loadedFor = account
-        }
+        // Already done before the board's first frame (`showSaved`), unless the account changed since.
+        showSaved(env: env, account: account)
+        // Saved only while this device's data isn't erased meanwhile (`SavedScreens.epoch`).
+        let epoch = env.savedScreens.epoch
         async let info = env.launchpad.protocolInfo(extraPairTokens: Token.launchpadPairAssets, account: account)
         let listing = await env.launchpad.launchListing(limit: 60)
         launches = listing.keeping(launches)
+        let readAt = Date()
+        // Every launchpad read now: nothing saved is left on the board. One that couldn't be read keeps its saved coins,
+        // still said to be saved.
+        if listing.complete { savedAt = nil }
         // A read cut short because the tab went off screen isn't a failure to show: the board reloads when it's back.
         guard !Task.isCancelled else { return }
         protocolInfo = try? await info
         error = listing.firstError.map(describe)
-        if let held = await Self.heldSellOnly(env: env, account: account, listing: listing), !Task.isCancelled, account == loadedFor {
+        if !listed { listed = true }
+        let held = await Self.heldSellOnly(env: env, account: account, listing: listing)
+        if let held, !Task.isCancelled, account == loadedFor {
             heldSellOnly = held
+            heldSellOnlySavedAt = nil
         }
-        if let prices = await Self.pairPrices(env: env, launches: launches) { pairUSD = prices }
+        let prices = await Self.pairPrices(env: env, launches: launches)
+        if let prices { pairUSD = prices }
+        // Saved for the next opening once every part was read: the launches of every launchpad, the wallet's sell-only
+        // coins and the prices.
+        if listing.complete, held != nil, prices != nil, !Task.isCancelled, account == loadedFor {
+            env.savedScreens.save(Saved(launches: launches, pairUSD: pairUSD, heldSellOnly: heldSellOnly), .launchBoard, wallet: account, savedAt: readAt, epoch: epoch)
+        }
+    }
+
+    /// The board saved for `account` when last read in full (`SavedScreens`), while the board has nothing on it (nothing read
+    /// in this session, or no read answered yet): shown at once, said to be (`savedAt`), until a read of every launchpad
+    /// replaces it.
+    private func restoreSaved(env: AppEnvironment, account: Address?) {
+        guard launches.isEmpty, let saved = env.savedScreens.load(Saved.self, .launchBoard, wallet: account) else { return }
+        launches = saved.value.launches
+        pairUSD = saved.value.pairUSD
+        heldSellOnly = saved.value.heldSellOnly
+        heldSellOnlySavedAt = saved.savedAt
+        savedAt = saved.savedAt
+        listed = true
     }
 
     /// The sell-only coins among a listing's launches that `account` holds, in one balanceOf multicall; none without an

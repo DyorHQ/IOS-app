@@ -73,7 +73,8 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertTrue(prices.contains("Notifications.priceAlert(symbol: alert.symbol, above: alert.above, target: alert.target, price: price) firedPriceAlerts.insert(alert.id)"))
         XCTAssertTrue(prices.contains("PriceAlertStore.removeFired(Set(firing.map(\\.id)), owner: owner)"))
         let environment = try app("App/AppEnvironment.swift")
-        XCTAssertTrue(environment.contains("prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true)"), "the venue prices (C3)")
+        XCTAssertTrue(environment.contains("prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true, cache: chainCache, store: chainStore)"),
+                      "the venue prices (C3), shared with every screen")
     }
 
     /// Fills and closes come from the watcher only, on any screen: the fill notice respects "Swaps & Fills", an ending is

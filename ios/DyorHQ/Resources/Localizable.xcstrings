@@ -12861,6 +12861,34 @@
         }
       }
     },
+    "Counted from this Moment's earliest editions only, so there may be more holders." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se cuentan solo a partir de las primeras ediciones de este Moment, así que puede haber más holders."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calculé uniquement à partir des premières éditions de ce Moment : il peut donc y avoir davantage de détenteurs."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Moment의 초기 에디션만으로 집계해서 홀더가 더 있을 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅根据此 Moment 最早的部分份数统计，因此持有者可能更多。"
+          }
+        }
+      }
+    },
     "Counted from this coin's most recent transfers only, so there may be more holders." : {
       "localizations" : {
         "es" : {

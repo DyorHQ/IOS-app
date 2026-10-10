@@ -453,8 +453,16 @@ final class NewestFirstScreenPinTests: XCTestCase {
         XCTAssertTrue(moment.contains(".task(id: reloads) { await load() }"))
         XCTAssertTrue(moment.contains("private func finished() { reloads += 1 onChanged() }"))
         XCTAssertFalse(moment.contains("Task {"), "no read outlives the page")
-        // A failed read keeps the last good statistics.
-        XCTAssertTrue(moment.contains("if let stats { holderStats = stats } holderStatsUnread = stats == nil"))
+        // A failed read keeps the last good statistics; a read that lands replaces the ones kept from the last opening,
+        // which show until then, said to be saved.
+        XCTAssertTrue(moment.contains("if let stats { holderStats = stats; holderStatsSavedAt = nil } holderStatsUnread = stats == nil"))
+        XCTAssertTrue(moment.contains("if holderStats == nil, let saved = await env.moments.savedHolderStats(coin: m.coin) { holderStats = saved.stats holderStatsSavedAt = saved.asOf }"))
+        XCTAssertTrue(moment.contains("if let savedAt = holderStatsSavedAt { SavedLine(date: savedAt, reading: !holderStatsUnread) }"))
+        // The edition holders: "—" until read, a failure in the header with Retry, a minimum past the editions one read counts.
+        XCTAssertTrue(moment.contains("LabeledContent(\"Edition holders\", value: editionHoldersText)"))
+        XCTAssertTrue(moment.contains("guard let editions = editionHolders else { return \"—\" } return editions.complete ? \"\\(editions.holders)\" : \"\\(editions.holders)+\""))
+        XCTAssertTrue(moment.contains("if let loadError { HStack(alignment: .firstTextBaseline) { InlineError(message: loadError) Spacer(minLength: 8) Button(\"Retry\") { reloads += 1 }"))
+        XCTAssertFalse(moment.contains("nftHolders"), "a failed read is never 0 holders")
     }
 }
 

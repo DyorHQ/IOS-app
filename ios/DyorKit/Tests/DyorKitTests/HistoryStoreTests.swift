@@ -152,7 +152,8 @@ final class HistoryStoreTests: XCTestCase {
         snapshot.status = [WalletHistoryScans.transfersInId: HistoryStatus(complete: false, progress: 0, reachedChain: true, updatedAt: nil, floor: nil, head: nil)]
         XCTAssertTrue(snapshot.read)
         let home = try? DocsLinksTests.appSource("Home/HomeView.swift")
-        XCTAssertEqual(home?.contains("if env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {"), true)
+        // Beside the live figure only: a saved one says when it was read instead (`SavedLine`).
+        XCTAssertEqual(home?.contains("if liveVolume, env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {"), true)
     }
 
     func testAStalledHistorySaysTheRestCouldntBeRead() {

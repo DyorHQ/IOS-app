@@ -5,8 +5,12 @@ import SwiftUI
 /// My Moments: every Moment the wallet has a stake in — editions collected, coins promised, claimable now, still
 /// vesting, claimed — with one Claim All for everything vested. Moments of the retired cohorts follow as Past Cohorts:
 /// outside the totals and Claim All, each opens its own claim-only page.
+///
+/// Every Moment is checked, from the list the screens share (`MomentsService.moments(limit:)`, its newest
+/// `MomentsService.listingLimit`, as Home and the Portfolio check them): until build 23 it checked the board's newest 60,
+/// and the board's saved copy while the board showed one. Each cohort's list is read once for the screen: the positions,
+/// the past cohorts and the proceeds all take theirs from it.
 struct MomentsPortfolioView: View {
-    let moments: [MomentInfo]
     let onOpen: (MomentInfo) -> Void
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
@@ -87,14 +91,17 @@ struct MomentsPortfolioView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             // A pull awaits the screen's own reads only: the history reads on behind it (`HistoryModel.kick`), and the
-            // proceeds follow it.
+            // proceeds follow it. The reads the screens share are read again first (`invalidateChainReads`).
             .refreshable {
+                env.invalidateChainReads()
                 env.history.kick(env: env)
                 await load()
             }
-            .task { await load() }
-            // The history fills in behind the screen (`HistoryModel`): the proceeds follow it.
-            .task(id: env.history.version) { await loadEarnings() }
+            .task { await loadPositions() }
+            // The proceeds, read on opening and again whenever the wallet's Moments history moves (`HistoryModel`): its own
+            // scan, not every scan's rounds, and once on opening rather than twice (until build 23 the opening read ran
+            // beside this one).
+            .task(id: env.history.snapshot.status(WalletHistoryScans.momentsId)) { await loadEarnings() }
             .sheet(isPresented: $showClaimAll) {
                 ConfirmationSheet(title: "Claim All", confirmTitle: "Claim All", build: { await env.moments.claimAllPlan(momentIds: portfolio?.claimableIds ?? []) }, onDone: { Task { await load() } },
                                   // Recorded in the language in use; `section` is an identifier, never translated.
@@ -201,28 +208,45 @@ struct MomentsPortfolioView: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// Everything on the screen, read again (a pull, a Claim All done): the positions and the proceeds side by side.
     private func load() async {
+        async let positions: () = loadPositions()
+        async let earningsLoad: () = loadEarnings()
+        _ = await (positions, earningsLoad)
+    }
+
+    /// The live cohort's positions and the past cohorts', side by side.
+    private func loadPositions() async {
         async let live: () = loadLive()
         async let pastLoad: () = past.load(env: env, address: session.address, force: true)
-        async let earningsLoad: () = loadEarnings()
-        _ = await (live, pastLoad, earningsLoad)
+        _ = await (live, pastLoad)
     }
 
     /// The proceeds of every cohort, read together: the live cohort's and each retired one's, each from the wallet's
-    /// Moments history as the history model has it (no scan of its own) and the contracts' balances. A cohort whose
-    /// history isn't read to the head leaves nothing shown in part: the section says how far the history has got.
+    /// Moments history as the history model has it (no scan of its own) and what the contracts still hold for it, taken
+    /// from the cohort's list the screen reads anyway (the list the screens share, a past cohort's `list`), which the
+    /// positions read at the same time share. Only a Moment it published that isn't in the list is read on its own; a list
+    /// that can't be read leaves every one to be read so. A cohort whose history isn't read to the head leaves nothing
+    /// shown in part: the section says how far the history has got.
     private func loadEarnings() async {
         guard let address = session.address else { earnings = nil; earningsError = nil; return }
         let cohorts = env.retiredMoments
         do {
-            let liveLogs = await env.walletHistory.momentsLogs(wallet: address, cohort: env.config.moments)
+            async let liveLogsRead = env.walletHistory.momentsLogs(wallet: address, cohort: env.config.moments)
+            async let liveListRead = env.moments.moments(limit: MomentsService.listingLimit)
+            let liveLogs = await liveLogsRead
+            let liveList = (try? await liveListRead) ?? []
             async let live = env.moments.creatorEarnings(account: address, published: liveLogs.published, withdrawn: liveLogs.withdrawn, feesWithdrawn: liveLogs.feesWithdrawn,
-                                                         complete: liveLogs.complete)
+                                                         complete: liveLogs.complete, known: liveList)
             let retired = try await withThrowingTaskGroup(of: MomentsCreatorEarnings.self) { group in
                 for cohort in cohorts {
                     group.addTask {
-                        let logs = await env.walletHistory.momentsLogs(wallet: address, cohort: cohort.cohort)
-                        return try await cohort.creatorEarnings(account: address, published: logs.published, withdrawn: logs.withdrawn, feesWithdrawn: logs.feesWithdrawn, complete: logs.complete)
+                        async let logsRead = env.walletHistory.momentsLogs(wallet: address, cohort: cohort.cohort)
+                        async let listRead = cohort.moments()
+                        let logs = await logsRead
+                        let list = (try? await listRead) ?? []
+                        return try await cohort.creatorEarnings(account: address, published: logs.published, withdrawn: logs.withdrawn, feesWithdrawn: logs.feesWithdrawn, complete: logs.complete,
+                                                                known: list)
                     }
                 }
                 var all = MomentsCreatorEarnings.none
@@ -242,10 +266,11 @@ struct MomentsPortfolioView: View {
         }
     }
 
+    /// The live cohort's positions, over the list the screens share (`MomentsService.listingLimit` Moments, newest first).
     private func loadLive() async {
         guard let address = session.address else { portfolio = .empty; return }
         do {
-            portfolio = try await env.moments.portfolio(account: address, moments: moments.isEmpty ? (try await env.moments.moments(limit: 200)) : moments)
+            portfolio = try await env.moments.portfolio(account: address, moments: try await env.moments.moments(limit: MomentsService.listingLimit))
             error = nil
         } catch {
             self.error = describe(error)

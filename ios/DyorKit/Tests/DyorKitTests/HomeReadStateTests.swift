@@ -82,21 +82,33 @@ final class HomeReadStateTests: XCTestCase {
         return String(home[model..<end])
     }
 
-    /// Each part is recorded from its own read in Home's load, after the load is known to stand (the account unchanged,
-    /// not cancelled), and starts again for another account. A failed Perps read is nil (unread), and an account
-    /// without a Perpl account is $0 read; every figure is nil while its part can't be told.
+    /// Each part is recorded from its own read in Home's load as that read lands, and published then — only while the load
+    /// stands (the account unchanged, not cancelled) — and starts again for another account. A failed Perps read is nil
+    /// (unread), and an account without a Perpl account is $0 read; every figure is nil while its part can't be told.
     func testHomeRecordsEachPartAndNeverTakesUnreadForZero() throws {
         let home = try DocsLinksTests.appSource("Home/HomeView.swift")
         let model = try Self.homeModel(home)
         XCTAssertTrue(model.contains("perpEquity = nil; momentRows = []; updatedAt = nil; reads = HomeReadState()"), "another account starts unread")
-        let publish = try XCTUnwrap(model.range(of: "guard !Task.isCancelled, address == loadedFor else { return }"))
-        for record in ["next.record(.spot, answered: priceMap != nil && balanceMap != nil)", "next.record(.perps, answered: perpState != nil)",
-                       "next.record(.launch, answered: holdings != nil && priceMap != nil && listing.factories.allSatisfy(listedFactories.contains))",
-                       "next.record(.moments, answered: momentState != nil)", "if next != reads { reads = next }"] {
-            let at = try XCTUnwrap(model.range(of: record), record)
-            XCTAssertLessThan(publish.upperBound, at.lowerBound, "recorded only for a load that stands: \(record)")
+        // Each read publishes its part as it lands, only while the load stands (RS-10), never held back by the slowest.
+        XCTAssertTrue(model.contains("await withTaskGroup(of: Answer.self) { group in"))
+        XCTAssertTrue(model.contains("while let answer = await group.next() {\n                let stands = !Task.isCancelled && address == loadedFor"))
+        for publish in ["if stands, balancesIn { publishSpot(tokens: tokens, priceMap: priceMap, balanceMap: balanceMap, notTrading: notTrading) }",
+                        "if stands, pricesIn { publishSpot(tokens: tokens, priceMap: priceMap, balanceMap: balanceMap, notTrading: notTrading) }",
+                        "if stands, let listing { publishLaunch(holdings, priceMap: priceMap, listing: listing) }",
+                        "if stands { publishPerps(state) }", "if stands { publishMoments(state) }"] {
+            XCTAssertTrue(model.contains(publish), publish)
         }
-        XCTAssertTrue(model.contains("listedFactories.formUnion(listing.factories.filter { listing.unread[$0] == nil })"))
+        XCTAssertTrue(model.contains("if stands, !holdingsAsked, pricesIn, let listing {"), "the launch coins are read once the launches and the prices are in")
+        for record in ["record(.spot, answered: priceMap != nil && balanceMap != nil)", "record(.perps, answered: state != nil)",
+                       "record(.launch, answered: holdings != nil && priceMap != nil && listing.factories.allSatisfy(listedFactories.contains))",
+                       "record(.moments, answered: state != nil)", "if next != reads { reads = next }"] {
+            XCTAssertTrue(model.contains(record), record)
+        }
+        XCTAssertTrue(model.contains("listedFactories.formUnion(read.factories.filter { read.unread[$0] == nil })"))
+        // What is decided once every read is in waits for the load to stand as well.
+        let publish = try XCTUnwrap(model.range(of: "guard !Task.isCancelled, address == loadedFor, let listing else { return }"))
+        let errors = try XCTUnwrap(model.range(of: "if let priceError {", range: publish.upperBound..<model.endIndex))
+        XCTAssertLessThan(publish.upperBound, errors.lowerBound)
         XCTAssertTrue(model.contains("var perpsValue: Double? { reads.showsValue(of: .perps) ? perpEquity : nil }"))
         XCTAssertFalse(model.contains("perpEquity ?? 0"), "a Perps figure not read is never $0.00")
         XCTAssertTrue(model.contains("guard let account = found else { return ([], 0) }"), "no Perpl account: $0, read")
@@ -131,9 +143,12 @@ final class HomeReadStateTests: XCTestCase {
         XCTAssertTrue(modifierBody.contains(".accessibilityLabel(Text(\"Loading…\"))"), "never read out as $0.00")
         XCTAssertTrue(home.contains("if let split = model.split, split.total > 0 || !model.holdings.isEmpty { allocationCard(split) }"))
 
+        // A tab says "none" only once its part has figures: read, or saved when last read (said so above the balance). The
+        // Perps positions are never saved, so that tab waits for a read.
         for (part, empty, reading) in [("spot", "No spot balances", "Reading your balances…"), ("perps", "No open positions", "Reading your positions…"),
                                        ("launch", "No launch holdings", "Reading your balances…"), ("moments", "No Moments yet", "Reading your Moments…")] {
-            XCTAssertTrue(home.contains("if model.reads.isRead(.\(part)) { holdingsEmpty(\"\(empty)\""), "\(part): none only once read")
+            let shown = part == "perps" ? "isRead" : "hasFigures"
+            XCTAssertTrue(home.contains("if model.reads.\(shown)(.\(part)) { holdingsEmpty(\"\(empty)\""), "\(part): none only once read")
             XCTAssertTrue(home.contains("else { holdingsUnreadRow(.\(part), reading: \"\(reading)\") }"), "\(part): a loading row before")
             XCTAssertEqual(home.components(separatedBy: "holdingsEmpty(\"\(empty)\"").count - 1, 1, empty)
         }

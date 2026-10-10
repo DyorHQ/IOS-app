@@ -151,8 +151,10 @@ final class DyorCoinWiringTests: XCTestCase {
         let top = try Self.between(model, "func topTokens(_ tab: HomeTokenTab) -> [MarketRow] {", "private var discoveredFor")
         XCTAssertTrue(top.contains("let priced = rows.filter { $0.usd != nil && !unverified.contains($0.id) }"))
         XCTAssertFalse(top.contains("dyorCoins") || top.contains("badge"), "no label decides what ranks")
-        XCTAssertEqual(model.components(separatedBy: "unverified = ").count - 1, 1, "set in one place")
-        XCTAssertTrue(model.contains("unverified = KnownTokenStore.unverified(owner: address)"))
+        // Set from the store's mark only: before the reads (each part is published as its read lands, so received tokens
+        // never rank meanwhile), and again once the wallet's own coins were marked.
+        XCTAssertEqual(model.components(separatedBy: "unverified = ").count - 1, 2, "set in two places")
+        XCTAssertEqual(model.components(separatedBy: "unverified = KnownTokenStore.unverified(owner: address)").count - 1, 2, "both from the store's mark")
         XCTAssertFalse(model.contains("unverified.subtract") || model.contains("unverified.remove"))
 
         let funds = try Self.source("Home/AddFundsCard.swift")
@@ -170,16 +172,22 @@ final class DyorCoinWiringTests: XCTestCase {
     }
 
     /// Home's balances and prices never wait on the registry taking in the launches and Moments it read: those reads run
-    /// on their own, one at a time, and only the proof of the wallet's tokens (which the own-coin mark needs) is awaited
-    /// before the rows are published.
+    /// on their own, one at a time, after the reads. The rows are published as their reads land, beside the proof of the
+    /// wallet's tokens (whose labels follow as the coins model re-renders the rows), and only the own-coin mark waits for
+    /// that proof: the reads, the proof among them, all answer before it.
     func testHomesRowsNeverWaitOnTheRegistrysIngests() throws {
         let home = try Self.source("Home/HomeView.swift")
-        let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// The wallet's Moments stakes")
-        let publish = try XCTUnwrap(load.range(of: "guard !Task.isCancelled, address == loadedFor else { return }"))
-        let started = try XCTUnwrap(load.range(of: "if ingesting == nil { let readMoments = momentState?.map(\\.moment) ?? [] ingesting = Task { await env.dyorCoins.ingest(launchList) await env.dyorCoins.ingest(readMoments) ingesting = nil } }"))
-        XCTAssertLessThan(started.upperBound, publish.lowerBound)
+        let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// One of `load`'s reads, as it answers.")
+        let proof = try XCTUnwrap(load.range(of: "group.addTask { await env.dyorCoins.prove(tokens); return .proven }"))
+        let rows = try XCTUnwrap(load.range(of: "if stands, balancesIn { publishSpot("))
+        XCTAssertLessThan(proof.upperBound, rows.lowerBound, "the proof runs beside the reads, never ahead of the rows")
+        let started = try XCTUnwrap(load.range(of: "if ingesting == nil { let readLaunches = launchList let readMoments = momentState?.map(\\.moment) ?? [] ingesting = Task { await env.dyorCoins.ingest(readLaunches) await env.dyorCoins.ingest(readMoments) ingesting = nil } }"))
+        let own = try XCTUnwrap(load.range(of: "let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)"))
+        let publish = try XCTUnwrap(load.range(of: "guard !Task.isCancelled, address == loadedFor, let listing else { return }"))
+        XCTAssertLessThan(rows.upperBound, started.lowerBound, "the rows never wait on an ingest")
+        XCTAssertLessThan(started.upperBound, own.lowerBound)
+        XCTAssertLessThan(own.upperBound, publish.lowerBound)
         XCTAssertEqual(load.components(separatedBy: "dyorCoins.ingest(").count - 1, 2, "only inside the task")
-        XCTAssertTrue(load[..<publish.lowerBound].contains("await proven"), "the wallet's tokens are proven before the own-coin mark")
         XCTAssertTrue(home.contains("@ObservationIgnored private var ingesting: Task<Void, Never>?"))
     }
 
@@ -190,9 +198,12 @@ final class DyorCoinWiringTests: XCTestCase {
         let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// The wallet's Moments stakes")
         let own = try XCTUnwrap(load.range(of: "let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)"))
         let mark = try XCTUnwrap(load.range(of: "if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }"))
-        let read = try XCTUnwrap(load.range(of: "unverified = KnownTokenStore.unverified(owner: address)"))
+        let read = try XCTUnwrap(load.range(of: "unverified = KnownTokenStore.unverified(owner: address)", range: mark.upperBound..<load.endIndex))
         XCTAssertLessThan(own.upperBound, mark.lowerBound)
         XCTAssertLessThan(mark.upperBound, read.lowerBound, "marked before the mark is read")
+        // The rows published before then carry the mark as the store has it already: received tokens never rank meanwhile.
+        let early = try XCTUnwrap(load.range(of: "unverified = KnownTokenStore.unverified(owner: address)"))
+        XCTAssertLessThan(early.upperBound, try XCTUnwrap(load.range(of: "await withTaskGroup(of: Answer.self)")).lowerBound)
         XCTAssertFalse(load.contains("KnownTokenStore.markChosen"), "no way of its own")
 
         let tokens = try Self.source("Wallet/WalletTokens.swift")
@@ -375,7 +386,10 @@ final class DyorCoinWiringTests: XCTestCase {
     /// hosts and the gateways for a picture nobody is looking at yet (`ImagePipelineTests`).
     func testTheBoardsWarmTheirNextRows() throws {
         let moments = try Self.source("Moments/MomentsView.swift")
-        XCTAssertTrue(moments.contains("NavigationLink(value: info) { MomentCard(info: info, now: clock.now) } .buttonStyle(.plain) .onAppear { prefetch(after: info) }"))
+        XCTAssertTrue(moments.contains("ForEach(shown) { info in card(info) .buttonStyle(.plain) .onAppear { prefetch(after: info) } }"))
+        // Each card the board draws, opening the Moment as read, or its link while the board shows what it saved.
+        XCTAssertTrue(moments.contains("if model.savedAt != nil, let link = MomentLink(key: info.key) { NavigationLink(value: link) { MomentCard(info: info) } } "
+                                       + "else { NavigationLink(value: info) { MomentCard(info: info) } }"))
         XCTAssertTrue(moments.contains(".onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }"))
         XCTAssertTrue(moments.contains("private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]"), "two columns, 12 pt apart")
         XCTAssertTrue(moments.contains("let side = (gridWidth - 12) / 2 for next in BoardPrefetch.following(info.id, in: shown) { MomentArtwork.prefetch(next, side: side) }"))

@@ -84,12 +84,45 @@ struct MomentArtwork: View {
 }
 
 /// Where a Moment is in its life: collecting (with the time left), window closed, graduation pending, graduated,
-/// expired. Colour never stands alone — the word is always there.
+/// expired. Colour never stands alone — the word is always there. A collecting Moment's badge keeps its own time: it is
+/// drawn again, alone, at each instant its countdown reads differently (`MomentCountdown`, about once a minute) and at
+/// the deadline, so the card or page around it isn't.
 struct MomentStateBadge: View {
     let info: MomentInfo
-    let now: Int
     /// On top of a photo the badge sits on a material so it stays legible whatever the image.
     var onMedia = false
+
+    var body: some View {
+        if info.state == .collecting {
+            TimelineView(CountdownSchedule(deadline: info.moment.deadline)) { context in
+                MomentStateLabel(info: info, now: Int(context.date.timeIntervalSince1970), onMedia: onMedia)
+            }
+        } else {
+            MomentStateLabel(info: info, now: Int(Date().timeIntervalSince1970), onMedia: onMedia)
+        }
+    }
+}
+
+/// The instants a collecting Moment's badge reads differently, from when it is drawn to its deadline
+/// (`MomentCountdown.nextChange`); none after it.
+struct CountdownSchedule: TimelineSchedule {
+    let deadline: Int
+
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
+        var next: Date? = startDate
+        return AnyIterator {
+            guard let current = next else { return nil }
+            next = MomentCountdown.nextChange(after: Int(current.timeIntervalSince1970), deadline: deadline).map { Date(timeIntervalSince1970: TimeInterval($0)) }
+            return current
+        }
+    }
+}
+
+/// `MomentStateBadge` at one time.
+private struct MomentStateLabel: View {
+    let info: MomentInfo
+    let now: Int
+    var onMedia: Bool
 
     /// The badge's words, in the app's language.
     private var text: String {
@@ -134,10 +167,10 @@ struct MomentStateBadge: View {
     }
 }
 
-/// A discovery-grid card: square media with the state badge, then name, ticker, the collect price and progress.
+/// A discovery-grid card: square media with the state badge, then name, ticker, the collect price and progress. Only its
+/// badge moves with the time (`MomentStateBadge`): the card itself is drawn again only when its Moment changes.
 struct MomentCard: View {
     let info: MomentInfo
-    let now: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -146,7 +179,7 @@ struct MomentCard: View {
                     .aspectRatio(1, contentMode: .fit)
                     .overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator) }
                     .clipped()
-                MomentStateBadge(info: info, now: now, onMedia: true).padding(8)
+                MomentStateBadge(info: info, onMedia: true).padding(8)
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -264,14 +297,22 @@ enum MomentsFormat {
     }
 }
 
-/// The unix time now, refreshed every second, for countdowns and vesting math.
+/// The unix time a Moments screen is drawn at, for what it shows that changes with the time alone: whether a Moment is
+/// collecting, can be expired, how much has vested (`MomentBoardTimes`, `MomentPageTimes`). It is checked every second
+/// but moves on only when what the screen shows would change (`run(showing:)`): until build 23 it moved every second,
+/// drawing the whole board or page again each time. Countdowns keep their own time (`MomentStateBadge`).
 @Observable
 @MainActor
 final class Clock {
     private(set) var now = Int(Date().timeIntervalSince1970)
-    func run() async {
+
+    /// Every second, moves `now` to the time if `face` — everything the screen shows that depends on the time alone, at a
+    /// given time — differs there from at `now`; `face` reads the screen's current values each time, so a Moment read
+    /// again is checked as it is now. Until cancelled (the screen closed).
+    func run<Face: Equatable>(showing face: @escaping @MainActor (Int) -> Face) async {
         while !Task.isCancelled {
-            now = Int(Date().timeIntervalSince1970)
+            let time = Int(Date().timeIntervalSince1970)
+            if time != now, face(time) != face(now) { now = time }
             try? await Task.sleep(for: .seconds(1))
         }
     }

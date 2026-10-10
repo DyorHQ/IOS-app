@@ -64,10 +64,12 @@ public struct RetiredMoments: Sendable {
     public let addresses: MomentsAddresses
     let service: MomentsService
 
-    /// `clock` turns its history's blocks into times: the app's one session clock, or its own when nil.
-    public init(rpc: RPCClient, addresses: MomentsAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil) {
+    /// `clock` turns its history's blocks into times: the app's one session clock, or its own when nil. `cache` shares the
+    /// cohort's list between the screens that read it (`ChainCache`), and `store` keeps its Moments' records and text,
+    /// frozen like the cohort, on the device (`MomentStatics`), so only their state is read again.
+    public init(rpc: RPCClient, addresses: MomentsAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil, cache: ChainCache? = nil, store: ChainStore? = nil) {
         self.addresses = addresses
-        service = MomentsService(rpc: rpc, addresses: addresses, logsRPC: logsRPC, clock: clock)
+        service = MomentsService(rpc: rpc, addresses: addresses, logsRPC: logsRPC, clock: clock, cache: cache, store: store)
     }
 
     public var factory: Address { addresses.factory }
@@ -95,16 +97,25 @@ public struct RetiredMoments: Sendable {
     /// cohort in all (its newest 200), so whatever the counts, every id build 16 read is read here too.
     static let laterLimit = 200
 
-    /// Every Moment of `cohorts`, cohort by cohort (`moments`), and whether every cohort was read. A cohort whose read
-    /// fails keeps its Moments from `previous` (an earlier read's, of any cohorts; none when there was none) and makes
-    /// `complete` false: a cohort is never left out unsaid.
+    /// Every Moment of `cohorts`, in their order (`moments`), the cohorts read side by side, and whether every cohort was
+    /// read. A cohort whose read fails keeps its Moments from `previous` (an earlier read's, of any cohorts; none when there
+    /// was none) and makes `complete` false: a cohort is never left out unsaid.
     public static func moments(of cohorts: [RetiredMoments], keeping previous: [MomentInfo] = []) async -> (moments: [MomentInfo], complete: Bool) {
+        let reads = await withTaskGroup(of: (Int, Result<[MomentInfo], Error>).self) { group in
+            for (i, cohort) in cohorts.enumerated() {
+                group.addTask { (i, await ERC20.captured { try await cohort.moments() }) }
+            }
+            var out = [Result<[MomentInfo], Error>](repeating: .failure(ChainListUnread(.moment)), count: cohorts.count)
+            for await (i, read) in group { out[i] = read }
+            return out
+        }
         var out: [MomentInfo] = []
         var complete = true
-        for cohort in cohorts {
-            do {
-                out += try await cohort.moments()
-            } catch {
+        for (cohort, read) in zip(cohorts, reads) {
+            switch read {
+            case .success(let moments):
+                out += moments
+            case .failure:
                 complete = false
                 out += previous.filter { $0.moment.factory == cohort.factory }
             }

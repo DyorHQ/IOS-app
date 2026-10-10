@@ -11,21 +11,33 @@ struct MomentDetailView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
     @Environment(Router.self) private var router
+    /// The time the page is drawn at: it moves on only when what the page shows of the time changes (`MomentPageTimes`:
+    /// the window closing, a vesting cliff, a buyback coming due); the badge's countdown keeps its own
+    /// (`MomentStateBadge`). Until build 23 the whole page was drawn again every second.
     @State private var clock = Clock()
     @State private var detail: MomentDetail?
     @State private var account: MomentAccountView?
     @State private var quote: CollectQuote?
     @State private var quoteReason: String?
     @State private var quantity = 1
-    @State private var nftHolders: (holders: Int, topHolder: Address?, topCount: Int)?
+    @State private var editionHolders: MomentEditionHolders?
     @State private var holderStats: MomentHolderStats?
+    /// When the newest block the shown coin holder statistics count was made, while they are what the device kept from
+    /// the last opening (`MomentsService.savedHolderStats`): the section says so ("Updated 3 min ago") until this opening's
+    /// read lands.
+    @State private var holderStatsSavedAt: Date?
     /// The latest read of `holderStats` failed: the last good statistics stay, and the holders section says so.
     @State private var holderStatsUnread = false
     /// The page's reads asked for after the first — Retry, an action done — which key its read (`.task(id:)`): a new one
     /// cancels the one under way, and closing the page cancels it, rather than a `Task` of its own reading on after the
     /// page closed (the coin's holders are a scan of up to 80 requests).
     @State private var reloads = 0
-    @State private var loadError: String?
+    /// Each part of the page whose latest read failed, and why (`load`): the header says the first, with Retry, and the
+    /// part keeps what it last read.
+    @State private var failures: [Part: String] = [:]
+    /// The page's reads have answered once: the Share button looks the Moment's name up only then (`MomentShareButton`),
+    /// so the link directory's reads never hold the page's up.
+    @State private var loaded = false
     @State private var action: MomentAction?
     @Environment(\.openURL) private var openURL
 
@@ -33,6 +45,14 @@ struct MomentDetailView: View {
         case collect, claim, creatorProceeds, creatorFees, platformProceeds, platformFees, treasuryProceeds, retry, expire, buyback
         var id: Int { hashValue }
     }
+
+    /// The parts of the page read on their own (`load`), in the order the header names a failure.
+    private enum Part: CaseIterable {
+        case moment, supply, account, editionHolders
+    }
+
+    /// The first part whose latest read failed, said in the header with Retry.
+    private var loadError: String? { Part.allCases.lazy.compactMap { failures[$0] }.first }
 
     private var m: Moment { info.moment }
     private var now: Int { clock.now }
@@ -69,10 +89,10 @@ struct MomentDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             // The Moment's own link (m.dyorhq.fun), which opens this page in the app; OpenSea stays a row in About.
-            ToolbarItem(placement: .topBarTrailing) { MomentShareButton(info: info) }
+            ToolbarItem(placement: .topBarTrailing) { MomentShareButton(info: info, ready: loaded) }
         }
         .refreshable { await load() }
-        .task { await clock.run() }
+        .task { await clock.run(showing: { MomentPageTimes(info, at: $0) }) }
         .task(id: reloads) { await load() }
         .task(id: "\(quantity)-\(info.ledger.reserve)-\(info.state.rawValue)") { await refreshQuote() }
         .sheet(item: $action) { which in sheet(for: which) }
@@ -94,14 +114,21 @@ struct MomentDetailView: View {
                         Text(info.name).font(.title2.weight(.semibold)).lineLimit(2)
                         Text(verbatim: "$\(info.symbol)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                     }
-                    MomentStateBadge(info: info, now: now)
+                    MomentStateBadge(info: info)
                     HStack(spacing: 6) {
                         if !info.provenance.place.isEmpty { Label(info.provenance.place, systemImage: "mappin.and.ellipse").lineLimit(1) }
                         if info.provenance.date > 0 { Label(MomentsFormat.day(info.provenance.date), systemImage: "calendar") }
                     }
                     .font(.footnote).foregroundStyle(.secondary)
                 }
-                if let loadError { InlineError(message: loadError) }
+                // A part whose read failed keeps what it last showed; the first such failure is said here, with Retry.
+                if let loadError {
+                    HStack(alignment: .firstTextBaseline) {
+                        InlineError(message: loadError)
+                        Spacer(minLength: 8)
+                        Button("Retry") { reloads += 1 }.font(.footnote.weight(.semibold))
+                    }
+                }
             }
             .padding(.vertical, 4)
         }
@@ -359,11 +386,19 @@ struct MomentDetailView: View {
 
     private var holdersSection: some View {
         Section("Holders") {
-            LabeledContent("Edition holders", value: nftHolders.map { "\($0.holders)" } ?? "—")
-            if let top = nftHolders?.topHolder, let count = nftHolders?.topCount, count > 0 {
+            // "—" until read (a read that failed says so in the header, with Retry), a minimum ("+") for a Moment with more
+            // editions than one read counts, whose largest holder isn't shown (`MomentEditionHolders.complete`).
+            LabeledContent("Edition holders", value: editionHoldersText)
+            if let editions = editionHolders, editions.complete, let top = editions.topHolder, editions.topCount > 0 {
+                let count = editions.topCount
                 LabeledContent("Largest", value: tr("\(top.short) · \(count) editions"))
+            } else if let editions = editionHolders, !editions.complete {
+                Paragraph("Counted from this Moment's earliest editions only, so there may be more holders.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             if info.graduated {
+                // What the device kept from the last opening shows at once, said to be, until this opening's read lands.
+                if let savedAt = holderStatsSavedAt { SavedLine(date: savedAt, reading: !holderStatsUnread) }
                 // A read that stopped short of the publish gives the holders as a minimum ("+", and "—" for a minimum of
                 // none), and the figures only the whole history gives — the top wallet and its share, the pool's share —
                 // not at all (`MomentHolderStats.complete`).
@@ -520,22 +555,60 @@ struct MomentDetailView: View {
 
     // MARK: Loading
 
+    /// The page's reads, side by side, each part shown as its own read lands: the Moment itself, then its edition holders
+    /// (as many editions as it now counts) and, once graduated, its coin's holders; its supply (`MomentsService.detail`);
+    /// and the account's stake. The supply and the stake take only what is fixed at publish from the Moment the page was
+    /// given, so neither waits for the Moment to be read. A part whose read fails keeps what it showed and says so
+    /// (`failures`), the others still land. Until build 23 one await held every part until the slowest answered, after the
+    /// Moment was read twice over, and one failure hid them all.
     private func load() async {
+        async let moment: Void = loadMoment()
+        async let supply: Void = loadSupply()
+        async let stake: Void = loadAccount()
+        _ = await (moment, supply, stake)
+        if !Task.isCancelled { loaded = true }
+    }
+
+    private func loadMoment() async {
         do {
             // Only ever the same Moment (factory, id) back: the live service's id could name a different cohort's Moment.
-            if let fresh = try await env.moments.info(id: m.id), fresh.key == info.key { info = fresh }
-            async let detailTask = env.moments.moment(id: m.id)
-            async let holdersTask = env.moments.nftHolders(nft: m.nft, editions: info.editions)
-            async let accountTask = loadAccount()
-            let (detail, holders, account) = try await (detailTask, holdersTask, accountTask)
-            self.detail = detail
-            nftHolders = holders
-            self.account = account
-            loadError = nil
-            if info.graduated { await loadHolderStats() }
+            if let fresh = try await env.moments.info(id: m.id), fresh.key == info.key, fresh != info { info = fresh }
+            failures[.moment] = nil
         } catch {
-            loadError = describe(error)
+            if !Task.isCancelled { failures[.moment] = describe(error) }
         }
+        async let editions: Void = loadEditionHolders()
+        if info.graduated { await loadHolderStats() }
+        await editions
+    }
+
+    private func loadSupply() async {
+        do {
+            let read = try await env.moments.detail(for: info)
+            guard !Task.isCancelled else { return }
+            detail = read
+            failures[.supply] = nil
+        } catch {
+            if !Task.isCancelled { failures[.supply] = describe(error) }
+        }
+    }
+
+    private func loadEditionHolders() async {
+        do {
+            let read = try await env.moments.editionHolders(nft: m.nft, editions: info.editions)
+            guard !Task.isCancelled else { return }
+            if editionHolders != read { editionHolders = read }
+            failures[.editionHolders] = nil
+        } catch {
+            if !Task.isCancelled { failures[.editionHolders] = describe(error) }
+        }
+    }
+
+    /// The edition holders as the section shows them: "—" until read, a minimum ("+") when the Moment has more editions
+    /// than one read counts (`MomentEditionHolders.complete`).
+    private var editionHoldersText: String {
+        guard let editions = editionHolders else { return "—" }
+        return editions.complete ? "\(editions.holders)" : "\(editions.holders)+"
     }
 
     /// The coin's holders as the section shows them: "—" until read, a minimum ("+") when not every transfer since the
@@ -547,18 +620,31 @@ struct MomentDetailView: View {
         return stats.holders > 0 ? "\(stats.holders)+" : "—"
     }
 
-    /// The coin's holder statistics (`MomentsService.holderStats`, its transfers read newest first): a read that failed
-    /// keeps the last good statistics, and the holders section says so, with Retry.
+    /// The coin's holder statistics (`MomentsService.holderStats`, its transfers read newest first, what was counted
+    /// kept on the device so the next opening reads only what is new): what the device kept from the last opening shows at
+    /// once, said to be (`holderStatsSavedAt`), until this read lands. A read that failed keeps the last good statistics,
+    /// and the holders section says so, with Retry.
     private func loadHolderStats() async {
+        if holderStats == nil, let saved = await env.moments.savedHolderStats(coin: m.coin) {
+            holderStats = saved.stats
+            holderStatsSavedAt = saved.asOf
+        }
         let stats = await env.moments.holderStats(coin: m.coin, publishedAt: m.publishedAt)
         guard !Task.isCancelled else { return }
-        if let stats { holderStats = stats }
+        if let stats { holderStats = stats; holderStatsSavedAt = nil }
         holderStatsUnread = stats == nil
     }
 
-    private func loadAccount() async throws -> MomentAccountView? {
-        guard let address = session.address else { return nil }
-        return try await env.moments.accountView(info, account: address)
+    private func loadAccount() async {
+        guard let address = session.address else { account = nil; failures[.account] = nil; return }
+        do {
+            let read = try await env.moments.accountView(info, account: address)
+            guard !Task.isCancelled, session.address == address else { return }
+            account = read
+            failures[.account] = nil
+        } catch {
+            if !Task.isCancelled { failures[.account] = describe(error) }
+        }
     }
 
     private func refreshQuote() async {

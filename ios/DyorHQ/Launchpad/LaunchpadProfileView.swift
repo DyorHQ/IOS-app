@@ -83,14 +83,24 @@ struct LaunchpadProfileView: View {
             .navigationTitle(tr("My Launchpad"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            // What was saved for the wallet when it was last read in full is in the sheet's first frame, never
+            // placeholders under figures the phone has (`LaunchpadProfileModel.showSaved`): a small file on the device,
+            // read here, before that frame, rather than in the load's task, which starts after it. Never animated.
+            .onAppear {
+                if let address = session.address {
+                    withTransaction(\.disablesAnimations, true) { model.showSaved(env: env, address: address) }
+                }
+            }
             .task(id: session.address) { await model.load(env: env, address: session.address) }
             // The history fills in behind the screen (`HistoryModel`): the fee tiles, the holdings' profit and loss and the
             // Activity tab follow it.
             .task(id: env.history.version) { model.applyHistory(env.history.snapshot, wallet: env.history.wallet) }
             // A pull awaits the screen's own reads only: the history reads on behind it (`HistoryModel.kick`), and what
             // comes from it follows `env.history.version`. Kicked after them, so the round reads a head at or after the
-            // block the balances were read at, which each holding's profit and loss waits for.
+            // block the balances were read at, which each holding's profit and loss waits for. The reads the screens share
+            // are read again first (`invalidateChainReads`).
             .refreshable {
+                env.invalidateChainReads()
                 await model.load(env: env, address: session.address)
                 env.history.kick(env: env)
             }
@@ -112,6 +122,8 @@ struct LaunchpadProfileView: View {
             }
             .padding(.vertical, 6)
             if let address = session.address { AddressRow(title: "Address", address: address) }
+            // What was saved for the wallet when last read, shown while it is read again: said to be, never taken for it.
+            if let savedAt = model.savedAt { SavedLine(date: savedAt, reading: model.loading) }
             if let incomplete = model.incomplete {
                 HStack(alignment: .firstTextBaseline) {
                     InlineError(message: incomplete)
@@ -375,9 +387,16 @@ struct LaunchpadProfileView: View {
         .padding(.vertical, 4)
     }
 
+    /// A coin's page. While the launches on screen are those saved when the wallet was last read
+    /// (`LaunchpadProfileModel.launchesSaved`), by reference, so the page reads it now: a launch page shows the launch it
+    /// is given as current — its price, its phase, which trades are open.
     private func open(_ launch: Launch) {
         dismiss()
-        router.openLaunch(launch)
+        if model.launchesSaved {
+            router.openLaunch(LaunchReference(token: launch.token, factory: launch.factory))
+        } else {
+            router.openLaunch(launch)
+        }
     }
 
     @ViewBuilder private func claimSheet(for target: ClaimTarget) -> some View {
@@ -652,6 +671,33 @@ final class LaunchpadProfileModel {
     /// Monad's pace, for estimating a coin's launch block from its launch time (`WalletHistorySnapshot.launchBlock`).
     @ObservationIgnored private var secondsPerBlock = BlockClock.fallbackSecondsPerBlock
 
+    /// A read My Launchpad saves, while what is on screen of it is still the saved one (`restoreSaved`).
+    enum SavedPart: Hashable {
+        case launches, holdings, escrows, prices
+    }
+
+    /// The reads still showing what was saved for the wallet when it was last read in full (`restoreSaved`), each until its
+    /// own read answers in this session; and when that was. The header says it ("Updated 3 min ago") while any is.
+    private var savedParts: Set<SavedPart> = []
+    private var savedTime: Date?
+    /// When what is on screen still saved was read; nil once every read answered in this session.
+    var savedAt: Date? { savedParts.isEmpty ? nil : savedTime }
+    /// The launches on screen are still those saved (`restoreSaved`): no launchpad's were read in full yet.
+    var launchesSaved: Bool { savedParts.contains(.launches) }
+
+    /// What My Launchpad saves for a wallet once a load read all of it (`SavedScreens.Screen.myLaunchpad`): the launches it
+    /// read and the launchpads they came from, the balances and holder rewards (`LaunchHoldings`), every escrow's balances
+    /// and the prices. What comes from the wallet's history — fees received, profit and loss, the Activity tab — isn't:
+    /// the device keeps the history itself (`HistoryModel`).
+    struct Saved: Codable, Sendable {
+        let launches: [Launch]
+        let factories: [Address]
+        let held: LaunchHoldings
+        let escrows: [LaunchpadEscrowRead]
+        let pairUSD: [Address: Double]
+        let spotUSD: [Address: Double]
+    }
+
     /// The Activity tab's rows at most.
     static let activityRows = 100
 
@@ -763,9 +809,11 @@ final class LaunchpadProfileModel {
     var rewardClaimables: [RewardClaim] {
         guard let held else { return [] }
         let byToken = Dictionary(lastLaunches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
+        // Rewards saved when last read, not read again yet, are as last read: never claimed by Claim All.
+        let saved = savedParts.contains(.holdings)
         let claims = held.rewards.compactMap { coin, amount -> RewardClaim? in
             guard amount > 0, let launch = byToken[coin] else { return nil }
-            return RewardClaim(launch: launch, amount: amount, current: !held.rewardsUnread.contains(coin))
+            return RewardClaim(launch: launch, amount: amount, current: !saved && !held.rewardsUnread.contains(coin))
         }
         func usd(_ claim: RewardClaim) -> Double {
             Amount.units(claim.amount, decimals: claim.launch.pair.decimals) * (pairUSD[claim.launch.pair.isNative ? Monad.native : claim.launch.pairToken] ?? 0)
@@ -965,6 +1013,24 @@ final class LaunchpadProfileModel {
         income = nil; incomeUnread = false; incomeFilling = false; incomeProgress = 0; rewardPairs = [:]
         pairUSD = [:]; pairMeta = [:]; spotUSD = [:]; pricesRead = false; pricesFailed = false
         history = .empty
+        savedParts = []; savedTime = nil
+    }
+
+    /// Takes in `address` before the sheet's first frame (`LaunchpadProfileView`'s `onAppear`) and at the start of every
+    /// load, when it isn't the wallet shown: another wallet's coins, rewards, fees and activity go, and what was saved for
+    /// this one when it was last read in full — a small file on the device, read on the spot — shows at once, said to be,
+    /// until each read in `load` replaces its part (`restoreSaved`). So the sheet opens on the wallet's figures rather
+    /// than on placeholders until the load's task starts.
+    func showSaved(env: AppEnvironment, address: Address) {
+        // Another wallet's coins, rewards, fees and activity never show while this one's load, or a failed read, is under
+        // way. The same wallet's last good state stays on screen while it is read again.
+        if shownFor != address {
+            reset()
+            shownFor = address
+            // What was saved for this wallet when it was last read in full shows at once, said to be, until each read
+            // in `load` replaces its part (`restoreSaved`).
+            restoreSaved(env: env, address: address)
+        }
     }
 
     func load(env: AppEnvironment, address: Address?) async {
@@ -978,14 +1044,13 @@ final class LaunchpadProfileModel {
             reset()
             return
         }
-        // Another wallet's coins, rewards, fees and activity never show while this one's load, or a failed read, is under
-        // way. The same wallet's last good state stays on screen while it is read again.
-        if shownFor != address {
-            reset()
-            shownFor = address
-        }
+        // Already done before the sheet's first frame (`showSaved`), unless the wallet changed since.
+        showSaved(env: env, address: address)
         loading = true
         defer { if load == loads { loading = false } }
+        // Saved only while this device's data isn't erased meanwhile (`SavedScreens.epoch`), dated when its reads began.
+        let epoch = env.savedScreens.epoch
+        let began = Date()
 
         async let pace = env.clock.secondsPerBlock()
         let listing = await env.launchpad.launchListing(limit: 100)
@@ -993,6 +1058,8 @@ final class LaunchpadProfileModel {
         guard current() else { return }
         let launches = listing.keeping(lastLaunches)
         lastLaunches = launches
+        // Every launchpad read now: no launch on screen is a saved one.
+        if listing.complete { savedParts.remove(.launches) }
         var unread = !listing.complete
         // A launchpad whose launches were never read for the wallet (every one, on a first load offline, or a retired one
         // that timed out) is no answer either: what the wallet launched and holds there is unread, with Retry, never "none".
@@ -1031,6 +1098,8 @@ final class LaunchpadProfileModel {
         lastEscrowReads = kept
         escrowsFor = address
         escrows = Self.holdings(kept)
+        // An escrow that couldn't be read keeps its saved balances, marked as last read, and out of Claim All.
+        savedParts.remove(.escrows)
         feesUnread = escrowReads.contains(where: { $0.balances == nil })
         if escrowReads.contains(where: { $0.balances == nil }) { unread = true }
 
@@ -1052,21 +1121,62 @@ final class LaunchpadProfileModel {
             spotUSD = Dictionary(heldCoins.compactMap { launch in DyorPrice.valid(priceMap[launch.token]?.usd).map { (launch.token, $0) } }, uniquingKeysWith: { first, _ in first })
             pricesRead = true
             pricesFailed = false
+            savedParts.remove(.prices)
         } else {
             pricesFailed = true
             unread = true
         }
-        // Multiple launches share a pair asset (MON / USDC / AUSD), so keys repeat — dedupe instead of
-        // Dictionary(uniqueKeysWithValues:), which traps on the first duplicate key and crashed this screen. A pair asset
-        // no launch read uses takes its symbol and decimals from the curated list.
-        pairMeta = Dictionary(launches.map { ($0.pairToken, ($0.pair.symbol, $0.pair.decimals)) }, uniquingKeysWith: { first, _ in first })
-        for token in Token.launchpadPairAssets where pairMeta[token] == nil {
-            if let core = Token.core(token) { pairMeta[token] = (core.symbol, core.decimals) }
-        }
+        rebuildPairMeta(launches)
         incomplete = unread ? tr("Part of your launchpad couldn't be read just now, so some coins or fees may be missing. Pull to refresh.") : nil
 
         // Fees received, each holding's value and profit and loss, and the Activity tab: from the wallet's history as the
         // history model has it (`HistoryModel`), which fills in behind the screen; `applyHistory` follows it.
+        rebuildCreated(for: address)
+        applyHistory(env.history.snapshot, wallet: env.history.wallet)
+
+        // Saved for the next opening once every part was read: every launchpad's launches, every balance and reward, every
+        // escrow and the prices. A part that couldn't be read leaves the last save as it was.
+        if !unread, launchesRead, let held, held.complete {
+            let saved = Saved(launches: launches, factories: Array(listedFactories), held: held, escrows: lastEscrowReads, pairUSD: pairUSD, spotUSD: spotUSD)
+            env.savedScreens.save(saved, .myLaunchpad, wallet: address, savedAt: began, epoch: epoch)
+        }
+    }
+
+    /// Each pair asset's symbol and decimals, from the launches that use it. Multiple launches share a pair asset (MON /
+    /// USDC / AUSD), so keys repeat — dedupe instead of Dictionary(uniqueKeysWithValues:), which traps on the first
+    /// duplicate key and crashed this screen. A pair asset no launch read uses takes its symbol and decimals from the
+    /// curated list.
+    private func rebuildPairMeta(_ launches: [Launch]) {
+        pairMeta = Dictionary(launches.map { ($0.pairToken, ($0.pair.symbol, $0.pair.decimals)) }, uniquingKeysWith: { first, _ in first })
+        for token in Token.launchpadPairAssets where pairMeta[token] == nil {
+            if let core = Token.core(token) { pairMeta[token] = (core.symbol, core.decimals) }
+        }
+    }
+
+    /// What was saved for `address` when it was last read in full (`SavedScreens`), shown at once: its launches, holdings,
+    /// escrows and prices, each said to be saved (`savedAt`) until its read in `load` answers. The escrows' balances are
+    /// marked as last read (`LaunchpadEscrowRead.kept`) and the holder rewards not current, so Claim All never claims
+    /// them; a claim of one withdraws what the chain holds, never the saved amount. Fees received, profit and loss and the
+    /// Activity tab follow from the wallet's history (`applyHistory`).
+    private func restoreSaved(env: AppEnvironment, address: Address) {
+        guard let saved = env.savedScreens.load(Saved.self, .myLaunchpad, wallet: address) else { return }
+        let value = saved.value
+        lastLaunches = value.launches
+        listedFactories = Set(value.factories)
+        launchesRead = true
+        launchesUnread = false
+        rewardPairs = Dictionary(value.launches.map { ($0.token, $0.pairToken) }, uniquingKeysWith: { first, _ in first })
+        held = value.held
+        holdingsFailed = false
+        lastEscrowReads = value.escrows.map { LaunchpadEscrowRead(escrow: $0.escrow, factory: $0.factory, retired: $0.retired, balances: $0.balances, kept: true) }
+        escrowsFor = address
+        escrows = Self.holdings(lastEscrowReads)
+        pairUSD = value.pairUSD
+        spotUSD = value.spotUSD
+        pricesRead = true
+        rebuildPairMeta(value.launches)
+        savedParts = [.launches, .holdings, .escrows, .prices]
+        savedTime = saved.savedAt
         rebuildCreated(for: address)
         applyHistory(env.history.snapshot, wallet: env.history.wallet)
     }
@@ -1078,6 +1188,7 @@ final class LaunchpadProfileModel {
         if let read {
             held = LaunchHoldings.keeping(read, previous: held)
             holdingsFailed = false
+            savedParts.remove(.holdings)
         } else if let previous = held {
             let coins = Set(previous.balances.keys).union(launches.map(\.token))
             let sharing = Set(previous.rewards.keys).union(launches.filter(\.holderFeeSharing).map(\.token))

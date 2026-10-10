@@ -109,13 +109,24 @@ final class VenueChainStub: URLProtocol {
         Self.update { $0.requests += 1 }
         var asked: Set<Data> = []
         let response: JSON = json.array.map { .array($0.map { Self.reply($0, asked: &asked) }) } ?? Self.reply(json, asked: &asked)
-        if let gate = Self.takeGate(asked: asked) {
+        let body = try! JSONEncoder().encode(response)
+        guard let gate = Self.takeGate(asked: asked) else { return deliver(body) }
+        // Held without blocking the thread it was asked on, which every custom protocol in the process shares: the other
+        // requests are answered meanwhile, and this one's answer is sent on that thread once the gate is released.
+        let thread = Thread.current
+        DispatchQueue.global().async { [self] in
             gate.arrived.signal()
             _ = gate.release.wait(timeout: .now() + 30)
+            perform(#selector(deliverHeld(_:)), on: thread, with: body, waitUntilDone: false, modes: [RunLoop.Mode.common.rawValue])
         }
+    }
+
+    @objc private func deliverHeld(_ body: Data) { deliver(body) }
+
+    private func deliver(_ body: Data) {
         let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["content-type": "application/json"])!
         client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: try! JSONEncoder().encode(response))
+        client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
 
