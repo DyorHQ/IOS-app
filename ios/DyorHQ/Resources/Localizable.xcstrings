@@ -7996,6 +7996,34 @@
         }
       }
     },
+    "Bridge tokens load only for a wallet signed in to DyorHQ, since a bridge sends from it. Sign in to bridge." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los tokens del puente solo se cargan para una billetera con sesión iniciada en DyorHQ, porque el puente envía desde ella. Inicia sesión para usar el puente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les jetons du bridge ne se chargent que pour un portefeuille connecté à DyorHQ, car le bridge envoie depuis celui-ci. Connectez-vous pour utiliser le bridge."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "브리지 토큰은 DyorHQ에 로그인한 지갑에서만 불러와요. 브리지는 그 지갑에서 보내기 때문이에요. 브리지하려면 로그인하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跨链桥的代币只为已登录 DyorHQ 的钱包加载，因为跨链从该钱包发送。登录后即可跨链。"
+          }
+        }
+      }
+    },
     "Bridge unavailable" : {
       "localizations" : {
         "es" : {
@@ -27195,6 +27223,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有匹配的代币。粘贴合约地址即可添加任意 Monad 代币。"
+          }
+        }
+      }
+    },
+    "No tokens are listed for bridging right now. Try again shortly." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ahora mismo no hay tokens disponibles para el puente. Vuelve a intentarlo en breve."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun jeton n'est disponible pour le bridge pour le moment. Réessayez sous peu."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 브리지할 수 있는 토큰이 없어요. 잠시 후 다시 시도하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前没有可跨链的代币。请稍后重试。"
           }
         }
       }

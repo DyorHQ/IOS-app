@@ -220,15 +220,17 @@ struct BridgeView: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    /// A chain chip beside a token chip — the source/destination identity for one side, each with its logo.
+    /// A chain chip beside a token chip — the source/destination identity for one side, each with its logo. A watched
+    /// address opens neither: the bridge lists its tokens for a wallet signed in to the backend only, and the screen
+    /// already says so (`AuroraError.signInRequired`).
     private func selectorStack(chain: EVMChain, token: AuroraToken?, tokenAction: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
             Button { if !chain.isMonad { showChainPicker = true } } label: {
                 chainChip(chain)
             }
-            .buttonStyle(.plain).disabled(chain.isMonad || !model.canEdit)
+            .buttonStyle(.plain).disabled(chain.isMonad || !model.canEdit || !session.canSign)
             Button(action: tokenAction) { tokenChip(token) }
-                .buttonStyle(.plain).disabled(!model.canEdit)
+                .buttonStyle(.plain).disabled(!model.canEdit || !session.canSign)
         }
         .layoutPriority(1) // keep the pills at their intrinsic width; the amount field yields instead
     }
@@ -454,7 +456,9 @@ struct BridgeView: View {
             }
             .listStyle(.plain)
             .overlay {
-                if model.loadingBalances && model.sourceAssets.allSatisfy({ !model.held($0) }) {
+                if model.sourceAssets.isEmpty {
+                    tokensUnavailable
+                } else if model.loadingBalances && model.sourceAssets.allSatisfy({ !model.held($0) }) {
                     ProgressView("Reading your balances…").font(.footnote)
                 }
             }
@@ -489,9 +493,33 @@ struct BridgeView: View {
                 }
                 .buttonStyle(.plain)
             }
+            .overlay { if model.tokens(on: chain).isEmpty { tokensUnavailable } }
             .navigationTitle(tr("\(chain.name) token"))
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
+    }
+
+    /// What a token picker shows with no token to list, never a blank sheet: a watched address is told why (the bridge
+    /// lists its tokens for a wallet signed in to the backend only), the tokens still loading show progress, and a load
+    /// that failed or listed nothing says so, with Retry.
+    @ViewBuilder private var tokensUnavailable: some View {
+        if !session.canSign {
+            ContentUnavailableView {
+                Label("Watching this address", systemImage: "eye")
+            } description: {
+                Paragraph("Bridge tokens load only for a wallet signed in to DyorHQ, since a bridge sends from it. Sign in to bridge.")
+            }
+        } else if model.loadingTokens {
+            ProgressView("Loading…")
+        } else {
+            ContentUnavailableView {
+                Label("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted")
+            } description: {
+                if let error = model.loadError { Paragraph(verbatim: error) } else { Paragraph("No tokens are listed for bridging right now. Try again shortly.") }
+            } actions: {
+                Button("Retry", systemImage: "arrow.clockwise") { Task { await model.load() } }
+            }
+        }
     }
 }

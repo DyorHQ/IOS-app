@@ -41,6 +41,9 @@ struct RootView: View {
             }
         }
         .animation(.default, value: session.state)
+        // The router outlives the session: what the account signed out had open is closed, so the next sign-in starts on
+        // Home (`Router.endSession`).
+        .onChange(of: session.state) { _, state in if state == .signedOut { router.endSession() } }
         // Moment links (universal links on m.dyorhq.fun, and dyorhq://moments/…) arrive here, on the one view that is
         // mounted in every session state; the router only parses and stores. The gate below opens the Moment once the
         // app may navigate — signed in, not behind the update gate, no confirmation on screen or action running — and

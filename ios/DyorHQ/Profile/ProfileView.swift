@@ -109,6 +109,18 @@ struct ProfileView: View {
                             Label("Forget This Device", systemImage: "iphone.slash")
                         }
                         .disabled(signingOut)
+                        .confirmationDialog("Forget this device?", isPresented: $confirmForget, titleVisibility: .visible) {
+                            Button("Forget This Device", role: .destructive) {
+                                guard let address = session.address else { return }
+                                signingOut = true
+                                Task {
+                                    await AccountDeletion.eraseThisDevice(address: address, session: session, social: social, env: env)
+                                    signingOut = false
+                                }
+                            }
+                        } message: {
+                            Text("This iPhone's copy of the account is erased. Your passkey keeps the account and its funds; sign in with it again anytime.")
+                        }
                     } footer: {
                         Paragraph("Removes this account from this iPhone. Your passkey keeps it — sign in again anytime.")
                     }
@@ -120,6 +132,26 @@ struct ProfileView: View {
                             Label(session.canSign ? "Sign Out" : "Stop Watching", systemImage: "rectangle.portrait.and.arrow.right")
                         }
                         .disabled(signingOut)
+                        // On the button, so the dialog's popover points at it, not at the top of the list.
+                        .confirmationDialog(session.canSign ? "Sign out of DyorHQ?" : "Stop watching this address?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+                            Button(session.canSign ? "Sign Out" : "Stop Watching", role: .destructive) {
+                                let address = session.address
+                                Task { @MainActor in
+                                    // Signing out can delete the only copy of an imported key, so with App Lock on it
+                                    // asks for the device owner first, like key export (audit F5).
+                                    if session.canSign, settings.appLockApplies(to: session.account),
+                                       !(await BiometricGate.authenticate(reason: "Sign out of DyorHQ")) { return }
+                                    signingOut = true
+                                    // The Perpl trading key on this device is a delegate for this wallet: it goes with
+                                    // the session.
+                                    if let address { perplTrading.forget(address: address) }
+                                    await session.signOut()
+                                    signingOut = false
+                                }
+                            }
+                        } message: {
+                            Text(signOutMessage)
+                        }
                     }
                     Button(role: .destructive) { showDeleteAccount = true } label: {
                         Label("Delete Account", systemImage: "person.crop.circle.badge.xmark")
@@ -145,36 +177,6 @@ struct ProfileView: View {
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showAppearance) { AppearanceSheet() }
             .sheet(isPresented: $showDeleteAccount) { DeleteAccountView() }
-            .confirmationDialog(session.canSign ? "Sign out of DyorHQ?" : "Stop watching this address?", isPresented: $confirmSignOut, titleVisibility: .visible) {
-                Button(session.canSign ? "Sign Out" : "Stop Watching", role: .destructive) {
-                    let address = session.address
-                    Task { @MainActor in
-                        // Signing out can delete the only copy of an imported key, so with App Lock on it asks for the
-                        // device owner first, like key export (audit F5).
-                        if session.canSign, settings.appLockApplies(to: session.account),
-                           !(await BiometricGate.authenticate(reason: "Sign out of DyorHQ")) { return }
-                        signingOut = true
-                        // The Perpl trading key on this device is a delegate for this wallet: it goes with the session.
-                        if let address { perplTrading.forget(address: address) }
-                        await session.signOut()
-                        signingOut = false
-                    }
-                }
-            } message: {
-                Text(signOutMessage)
-            }
-            .confirmationDialog("Forget this device?", isPresented: $confirmForget, titleVisibility: .visible) {
-                Button("Forget This Device", role: .destructive) {
-                    guard let address = session.address else { return }
-                    signingOut = true
-                    Task {
-                        await AccountDeletion.eraseThisDevice(address: address, session: session, social: social, env: env)
-                        signingOut = false
-                    }
-                }
-            } message: {
-                Text("This iPhone's copy of the account is erased. Your passkey keeps the account and its funds; sign in with it again anytime.")
-            }
         }
     }
 

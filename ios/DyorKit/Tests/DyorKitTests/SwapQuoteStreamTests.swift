@@ -404,7 +404,8 @@ final class SwapQuoteStreamTests: XCTestCase {
         XCTAssertTrue(swap.contains("var currentResult: QuoteResult? { resultKey == quoteKey ? result : nil }"))
         XCTAssertTrue(swap.contains(#"var quoteKey: String { "\(tokenIn.address.hex)-\(tokenOut.address.hex)-\(amountIn)-\(slippageBps)-\(account?.hex ?? "")" }"#),
                       "the wallet is one of the inputs")
-        XCTAssertTrue(swap.contains("PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient) { reviewing = model.review }"))
+        // A watched address can't sign, so it reviews nothing either (`WatchOnlySessionTests`).
+        XCTAssertTrue(swap.contains("PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient || !session.canSign) { reviewing = model.review }"))
         XCTAssertTrue(swap.contains("var review: SwapReview? { guard let quote = selectedQuote else { return nil }"))
         XCTAssertTrue(swap.contains(#"if let quote = model.selectedQuote { Paragraph("Minimum received \("#), "the minimum shown is the one Review signs")
         // The amounts shown follow the best so far.
