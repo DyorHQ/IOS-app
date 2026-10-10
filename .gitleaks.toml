@@ -227,6 +227,20 @@ regexTarget = "match"
 regexes = ['''(?i)your|replace|example|changeme|change_me|placeholder|xxxx|redacted|dummy''']
 
 [[allowlists]]
+description = "Reviewed fake values in the wallet-history backend's tests: the redactor's sample key (supabase/functions/history-indexer/redact_test.ts) and the cron-secret shape (supabase/tests/history_cache_test.ts). Only these exact values, only in these files. scripts/dev/secret-scan.sh does not flag them, so .leakguard needs no @allow line."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+  '''^supabase/functions/history-indexer/redact_test\.ts$''',
+  '''^supabase/tests/history_cache_test\.ts$''',
+]
+regexTarget = "secret"
+regexes = [
+  '''^Q-KEY-0123456789abcdef$''',
+  '''^0123456789abcdef$''',
+]
+
+[[allowlists]]
 description = "Reviewed test vectors of DyorKit's unit tests (BIP-39/BIP-32 vectors, HKDF and signing fixtures), the same files as the @allow lines of .leakguard. A new test vector gets its own entry in both."
 targetRules = ["generic-api-key", "dyorhq-eth-private-key", "dyorhq-eth-key-assignment", "dyorhq-eth-key-literal", "dyorhq-eth-key-call", "dyorhq-eth-key-array"]
 paths = [
