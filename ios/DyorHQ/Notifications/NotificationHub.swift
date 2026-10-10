@@ -186,7 +186,7 @@ final class NotificationHub {
             content.body = body
             content.sound = .default
             content.userInfo = userInfo
-            center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
         }
     }
 }

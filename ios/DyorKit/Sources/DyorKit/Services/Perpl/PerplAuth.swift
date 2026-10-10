@@ -81,7 +81,11 @@ public enum PerplAuth {
 /// Runs the two-step enrollment and signs REST requests. The wallet EIP-712 signature is supplied by the caller
 /// (the app asks Privy to `secp256k1Sign` the same digest), so this stays free of any wallet dependency.
 public actor PerplAuthClient {
-    public struct Payload: Sendable {
+    /// `@unchecked`: `typedData` is the server's JSON object from `v1/api-key/payload` (immutable `JSONSerialization`
+    /// output), never mutated after `requestPayload` reads it, and echoed back unchanged to `/enroll` under its `mac`.
+    /// Its type stays `[String: Any]` on purpose: decoding it into a typed model and re-encoding it could change the
+    /// bytes the mac covers.
+    public struct Payload: @unchecked Sendable {
         /// The server's typed data, echoed back unchanged to `/enroll` (its `mac` covers it). Validated, never signed as is.
         public let typedData: [String: Any]
         public let mac: String

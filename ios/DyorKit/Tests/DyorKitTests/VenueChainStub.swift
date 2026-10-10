@@ -44,11 +44,15 @@ final class VenueChainStub: URLProtocol {
         /// Waits, without blocking a thread, until the request is held.
         func arrival() async throws {
             for _ in 0 ..< 2_000 {
-                if arrived.wait(timeout: .now()) == .success { return }
+                if takeArrival() { return }
                 try await Task.sleep(for: .milliseconds(5))
             }
             throw URLError(.timedOut)
         }
+
+        /// Takes the arrival signal if the request is held (a zero-timeout wait that never blocks); true at most once per
+        /// arrival.
+        private func takeArrival() -> Bool { arrived.wait(timeout: .now()) == .success }
     }
 
     private static let lock = NSLock()

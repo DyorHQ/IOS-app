@@ -404,7 +404,7 @@ struct LaunchpadProfileView: View {
         case .creator(let asset):
             ConfirmationSheet(
                 title: "Claim \(asset.symbol) Fees", confirmTitle: "Claim \(asset.symbol)",
-                build: { env.launchpad.claimEscrowPlan(native: asset.isNative, tokens: asset.isNative ? [] : [asset.token], escrow: asset.escrow) },
+                build: { await env.launchpad.claimEscrowPlan(native: asset.isNative, tokens: asset.isNative ? [] : [asset.token], escrow: asset.escrow) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
                 onCompleted: { hash in
                     Activity.record(ActivityRecord(kind: .fees, title: tr("Collected \(asset.symbol) creator fees"), subtitle: asset.current ? asset.amountText : "", hash: hash, section: "launch"), owner: session.address)
@@ -420,7 +420,7 @@ struct LaunchpadProfileView: View {
         case .rewards(let reward):
             ConfirmationSheet(
                 title: "Claim \(reward.launch.symbol) Rewards", confirmTitle: "Claim",
-                build: { env.launchpad.claimRewardsPlan(launch: reward.launch, view: nil) },
+                build: { await env.launchpad.claimRewardsPlan(launch: reward.launch, view: nil) },
                 onDone: { Task { await model.load(env: env, address: session.address) } },
                 onCompleted: { hash in
                     Activity.record(ActivityRecord(kind: .claim, title: tr("Claimed \(reward.launch.symbol) rewards"), subtitle: reward.amountText, hash: hash, section: "launch"), owner: session.address)

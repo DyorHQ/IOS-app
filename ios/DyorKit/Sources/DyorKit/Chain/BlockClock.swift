@@ -37,7 +37,7 @@ public actor BlockClock {
 
     /// A clock for the chain `rpc` reads. `now` is the device clock, only used to space out retries and to age a head.
     /// `head`: where the latest header comes from (nil: a `HeadClock` of `rpc`).
-    public init(rpc: RPCClient, sampleBlocks: UInt64 = BlockClock.sampleBlocks, now: @escaping @Sendable () -> Date = Date.init, head: HeadClock? = nil) {
+    public init(rpc: RPCClient, sampleBlocks: UInt64 = BlockClock.sampleBlocks, now: @escaping @Sendable () -> Date = { Date() }, head: HeadClock? = nil) {
         self.rpc = rpc
         self.head = head ?? HeadClock(rpc: rpc, now: now)
         self.sampleBlocks = max(1, sampleBlocks)
@@ -49,7 +49,7 @@ public actor BlockClock {
         self.rpc = rpc
         head = HeadClock(rpc: rpc)
         sampleBlocks = Self.sampleBlocks
-        now = Date.init
+        now = { Date() }
         measured = secondsPerBlock
     }
 

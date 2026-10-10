@@ -24,11 +24,10 @@ final class HeadClockTests: XCTestCase {
         var reads: Int { lock.lock(); defer { lock.unlock() }; return count }
         func mine() { lock.lock(); number += 1; lock.unlock() }
         func read() async throws -> BlockHeader {
-            lock.lock(); count += 1; let failing = failing, delay = delay; lock.unlock()
+            let (failing, delay) = lock.withLock { count += 1; return (self.failing, self.delay) }
             if delay > .zero { try? await Task.sleep(for: delay) }
             if failing { throw URLError(.timedOut) }
-            lock.lock(); defer { lock.unlock() }
-            return BlockHeader(number: number, timestamp: 1_800_000_000 + Int(number))
+            return lock.withLock { BlockHeader(number: number, timestamp: 1_800_000_000 + Int(number)) }
         }
     }
 

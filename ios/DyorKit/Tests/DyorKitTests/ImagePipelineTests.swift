@@ -894,10 +894,10 @@ final class FakeImageHost: @unchecked Sendable {
     }
 
     private func serve(_ url: URL, _ maxBytes: Int, _ timeout: TimeInterval, _ sent: @Sendable () -> Void, _ responded: @Sendable () -> Void) async throws -> Data {
-        lock.lock()
-        made.append((url, timeout, maxBytes))
-        let reply = replies[url]
-        lock.unlock()
+        let reply = lock.withLock {
+            made.append((url, timeout, maxBytes))
+            return replies[url]
+        }
         sent()
         switch reply {
         case .image(let data, let respondAfter, let finishAfter, let answer, let finish):
@@ -906,15 +906,11 @@ final class FakeImageHost: @unchecked Sendable {
                 try await answer?.wait()
                 guard data.count <= maxBytes else { throw RemoteMedia.Failure.tooLarge }
                 responded()
-                lock.lock()
-                responses.append(url)
-                lock.unlock()
+                lock.withLock { responses.append(url) }
                 if finishAfter > .zero { try await Task.sleep(for: finishAfter) }
                 try await finish?.wait()
             } catch is CancellationError {
-                lock.lock()
-                cancellations.append(url)
-                lock.unlock()
+                lock.withLock { cancellations.append(url) }
                 throw CancellationError()
             }
             return data

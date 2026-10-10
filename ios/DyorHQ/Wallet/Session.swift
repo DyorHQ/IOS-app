@@ -163,6 +163,8 @@ final class Session {
                 return
             }
             try? await adoptOnce(user) // a failure is already recorded in lastError and the Privy session ended
+        @unknown default:
+            break // a state added by a newer Privy SDK leaves the session as it is
         }
     }
 

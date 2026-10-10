@@ -726,7 +726,7 @@ struct LaunchDetailView: View {
         .task(id: "\(side)-\(rawAmount)") { await quote() }
         .sheet(isPresented: $showConfirm) { confirmation }
         .sheet(isPresented: $showGraduate) {
-            ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { env.launchpad.graduatePlan(launch: launch) }, onDone: { reloads += 1 },
+            ConfirmationSheet(title: "Retry Graduation", confirmTitle: "Graduate", build: { await env.launchpad.graduatePlan(launch: launch) }, onDone: { reloads += 1 },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .graduate, title: tr("\(launch.symbol) graduated"), subtitle: launch.graduationVenue.title, hash: hash, section: "launch"), owner: session.address) }) {
                 DetailRow("Venue", launch.graduationVenue.title)
                 DetailRow("Who pays", "You (gas only)")
@@ -739,7 +739,7 @@ struct LaunchDetailView: View {
             }
         }
         .sheet(isPresented: $showCreatorClaim) {
-            ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { reloads += 1 },
+            ConfirmationSheet(title: "Claim Creator Fees", confirmTitle: "Claim Fees", build: { await env.launchpad.claimEscrowPlan(launch: launch) }, onDone: { reloads += 1 },
                               onCompleted: { hash in Activity.record(ActivityRecord(kind: .fees, title: tr("Collected \(launch.symbol) creator fees"), subtitle: account.map { "\(NumberStyle.units($0.escrowBalance, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)" } ?? tr("creator fees"), hash: hash, section: "launch"), owner: session.address) }) {
                 if let account { DetailRow("Claimable", verbatim: "\(NumberStyle.units(account.escrowBalance, decimals: launch.pair.decimals)) \(launch.pair.symbol)") }
                 DetailRow("To", session.address?.short ?? "—")
