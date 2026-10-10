@@ -2,7 +2,8 @@ import BigInt
 import DyorKit
 import SwiftUI
 
-/// Spot swaps. Every venue is asked at once and the best output is preselected; the person can still pick another.
+/// Spot swaps. Every venue is asked at once and each one's quote shows as it arrives, the best so far preselected; the
+/// person can still pick another. Review opens once every venue has answered (`SwapModel.selectedQuote`).
 struct SwapView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(Session.self) private var session
@@ -54,8 +55,14 @@ struct SwapView: View {
             }
             .sheet(item: $reviewing) { review in confirmation(review) }
             .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
-            .task(id: session.address) { await model.refreshBalances(env: env, address: session.address) }
-            .task(id: model.quoteKey) { await model.quote(env: env, account: session.address) }
+            .task(id: session.address) {
+                model.account = session.address
+                // Kuru Flow's access token for this wallet, asked for as Swap opens, so the first quote doesn't wait for it.
+                async let prepared: Void = env.swap.prepare(for: SwapModel.quoteAccount(session.address))
+                await model.refreshBalances(env: env, address: session.address)
+                await prepared
+            }
+            .task(id: model.quoteKey) { await model.quote(env: env, account: model.account) }
             .onChange(of: router.pendingSwap?.tokenOut) { _, _ in applyPending() }
             .onAppear { applyPending() }
         }
@@ -196,7 +203,7 @@ struct SwapView: View {
         Section {
             tokenRow(side: .receive, token: model.tokenOut)
             HStack {
-                if let quote = model.selectedQuote {
+                if let quote = model.shownQuote {
                     AmountText(amount: quote.amountOut, token: model.tokenOut, font: .title2.weight(.medium))
                 } else if model.awaitingQuote {
                     ProgressView().controlSize(.small)
@@ -205,6 +212,21 @@ struct SwapView: View {
                     Text(verbatim: "0").font(.title2.weight(.medium)).foregroundStyle(.tertiary)
                 }
                 Spacer()
+            }
+            // While venues are still asked, the amount above is the best of those that answered — or the venue picked,
+            // which is not called the best — said so until the others have answered too, and Review waits for them
+            // (`SwapModel.selectedQuote`).
+            if let stillAsked = model.venuesStillAsked {
+                Group {
+                    if model.showsBestSoFar {
+                        Paragraph("Best price so far. Still checking \(stillAsked) more venues.")
+                    } else {
+                        Paragraph("Still checking \(stillAsked) more venues.")
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .listRowSeparator(.hidden, edges: .top)
             }
         } header: {
             Text("You Receive")
@@ -243,12 +265,13 @@ struct SwapView: View {
         if let result = model.currentResult, model.amountIn > 0 {
             Section {
                 ForEach(result.quotes) { quote in
-                    Button { Haptics.selection(); model.selectedVenue = quote.venue; model.userPickedVenue = true } label: {
+                    Button { Haptics.selection(); model.pick(quote.venue) } label: {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
                                     Text(quote.venue.displayName).font(.headline)
-                                    if quote.venue == result.quotes.first?.venue {
+                                    // Best of every venue only once they all answered: until then it is the best so far.
+                                    if result.isFinal, quote.venue == result.quotes.first?.venue {
                                         Text("Best", comment: "Badge on the venue with the best quote [tight]").font(.caption.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.positive.opacity(0.15), in: Capsule()).foregroundStyle(Color.positive)
                                     }
                                 }
@@ -272,6 +295,16 @@ struct SwapView: View {
                         Text(venue.displayName).foregroundStyle(.secondary)
                         Spacer()
                         Text(verbatim: result.errors[venue] ?? "").font(.footnote).foregroundStyle(.tertiary).multilineTextAlignment(.trailing)
+                    }
+                }
+                // The venues not heard from yet, each until it answers or runs out of time (`SwapEngine.quoteTimeout`).
+                ForEach(result.pending, id: \.self) { venue in
+                    HStack(spacing: 6) {
+                        Text(venue.displayName).foregroundStyle(.secondary)
+                        Spacer()
+                        ProgressView().controlSize(.mini)
+                        Text("Checking…", comment: "Beside a swap venue that hasn't answered yet: its quote is still being asked for [tight]")
+                            .font(.footnote).foregroundStyle(.tertiary)
                     }
                 }
             } header: {
@@ -396,15 +429,22 @@ final class SwapModel {
     var tokenOut: Token = .usdc
     var amountText = ""
     var slippageBps = 50
-    var selectedVenue: Venue?
-    /// True once the person taps a venue row; until then the selection follows the best quote on every refresh.
-    var userPickedVenue = false
+    /// The connected wallet, which the quotes are asked for (Kuru Flow's calldata pays it), set by the view. Part of
+    /// `quoteKey`: signing in on this screen asks every venue again for the new wallet, and no quote made for another
+    /// one stays reviewable.
+    var account: Address?
+    /// The venue selected, and whether the person picked it (`VenueSelection`): until a venue row is tapped it follows the
+    /// best quote, so far or final; a pick is kept while a round is under way, and given back to the best only by a final
+    /// answer that doesn't quote it. Set through `pick(_:)`, and by every answer (`VenueSelection.following`).
+    private(set) var selection = VenueSelection()
+    var selectedVenue: Venue? { selection.venue }
     private(set) var balances: [Address: BigUInt] = [:]
     private(set) var prices: [Address: PriceInfo] = [:]
+    /// The venues' answer: as it fills in on a first round for what is on screen, then final (`QuoteResult.isFinal`).
     private(set) var result: QuoteResult?
-    /// The `quoteKey` that `result` and `error` answer. The amount, pair or slippage can change while a re-quote is on
-    /// its way (400 ms debounce, then every venue): until it lands, the old answer is kept out of sight and can't be
-    /// reviewed (`currentResult`, `selectedQuote`).
+    /// The `quoteKey` that `result` and `error` answer. The amount, pair, slippage or wallet can change while a re-quote
+    /// is on its way (400 ms debounce, then every venue): until it lands, the old answer is kept out of sight and can't
+    /// be reviewed (`currentResult`, `selectedQuote`).
     private(set) var resultKey: String?
     private(set) var quoting = false
     private(set) var error: String?
@@ -417,7 +457,11 @@ final class SwapModel {
     private(set) var checkingCurve = false
 
     var amountIn: BigUInt { Amount.parse(amountText, decimals: tokenIn.decimals) ?? 0 }
-    var quoteKey: String { "\(tokenIn.address.hex)-\(tokenOut.address.hex)-\(amountIn)-\(slippageBps)" }
+    var quoteKey: String { "\(tokenIn.address.hex)-\(tokenOut.address.hex)-\(amountIn)-\(slippageBps)-\(account?.hex ?? "")" }
+    /// Who a quote is asked for: the connected wallet, or a placeholder while none is (nothing can be signed then).
+    static func quoteAccount(_ account: Address?) -> Address {
+        account ?? Address(literal: "0x000000000000000000000000000000000000dEaD")
+    }
     /// A quote for what is on screen is on its way: the fetch, or the debounce before it after an edit (the old answer
     /// is already out of sight).
     var awaitingQuote: Bool { amountIn > 0 && tokenIn != tokenOut && (quoting || resultKey != quoteKey) }
@@ -427,11 +471,34 @@ final class SwapModel {
     var currentError: String? { resultKey == quoteKey ? error : nil }
     /// `curve`, when it answers what is on screen now.
     var currentCurve: CurveCoinRoute? { resultKey == quoteKey && curveKey == quoteKey ? curve : nil }
-    var selectedQuote: VenueQuote? {
+    /// The quote the screen shows for what is on screen now: the selected venue's once it has answered, else the best —
+    /// of the venues that answered so far while a first round fills in, or of them all once it is final
+    /// (`VenueSelection.shown(in:)`).
+    var shownQuote: VenueQuote? {
         guard let result = currentResult, amountIn > 0 else { return nil }
-        return result.quotes.first { $0.venue == selectedVenue } ?? result.quotes.first
+        return selection.shown(in: result)
     }
-    /// What the review sheet shows and signs, frozen when Review is tapped (nil without a current quote).
+    /// The quote Review takes: `shownQuote`, once every venue has answered for what is on screen now — this pair,
+    /// amount, slippage and wallet (`quoteKey`, `QuoteResult.isFinal`). Nil while any venue is still being asked, so
+    /// neither a best so far, which a slower venue may still beat, nor an answer to earlier inputs can be reviewed or
+    /// signed.
+    var selectedQuote: VenueQuote? {
+        guard currentResult?.isFinal == true else { return nil }
+        return shownQuote
+    }
+    /// How many venues are still being asked while a quote is on screen; nil once the answer is final, or while no venue
+    /// has quoted yet ("Finding the best price").
+    var venuesStillAsked: Int? {
+        guard let result = currentResult, !result.isFinal, shownQuote != nil else { return nil }
+        return result.pending.count
+    }
+    /// The quote on screen is the best of the venues that answered so far: not when it is a picked venue's that another
+    /// venue beats.
+    var showsBestSoFar: Bool {
+        guard let shown = shownQuote, let best = currentResult?.quotes.first else { return false }
+        return shown.venue == best.venue
+    }
+    /// What the review sheet shows and signs, frozen when Review is tapped (nil without a final quote).
     var review: SwapReview? {
         guard let quote = selectedQuote else { return nil }
         return SwapReview(quote: quote, tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amountIn, slippageBps: slippageBps,
@@ -439,7 +506,7 @@ final class SwapModel {
     }
     var payUSD: Double? { prices[tokenIn.address].map { Amount.units(amountIn, decimals: tokenIn.decimals) * $0.usd } }
     var receiveUSD: Double? {
-        guard let quote = selectedQuote, let price = prices[tokenOut.address] else { return nil }
+        guard let quote = shownQuote, let price = prices[tokenOut.address] else { return nil }
         return Amount.units(quote.amountOut, decimals: tokenOut.decimals) * price.usd
     }
     /// The input is more than the wallet holds (a balance that couldn't be read doesn't count).
@@ -449,6 +516,11 @@ final class SwapModel {
         if insufficient { return tr("Insufficient \(tokenIn.symbol)") }
         if SwapEngine.isWrap(tokenIn, tokenOut) { return tokenIn.isNative ? tr("Wrap MON") : tr("Unwrap WMON") }
         return tr("Review Swap")
+    }
+
+    /// The person picked `venue` (a venue row tapped): it stays selected until a final answer doesn't quote it.
+    func pick(_ venue: Venue) {
+        selection = VenueSelection(venue: venue, picked: true)
     }
 
     func select(_ token: Token, for side: Side) {
@@ -467,17 +539,18 @@ final class SwapModel {
         guard (tokenIn, tokenOut) != before else { return }
         result = nil
         curve = nil
-        userPickedVenue = false
+        selection.picked = false
     }
 
     func flip() {
-        // The quote's output becomes the new input: read it before the swap makes it answer another pair.
-        let carried = selectedQuote
+        // The quote's output becomes the new input (the best so far will do): read it before the swap makes it answer
+        // another pair.
+        let carried = shownQuote
         swap(&tokenIn, &tokenOut)
         if let carried { amountText = Amount.exact(Amount.roundedDown(carried.amountOut, decimals: tokenIn.decimals), decimals: tokenIn.decimals) }
         result = nil
         curve = nil
-        userPickedVenue = false
+        selection.picked = false
     }
 
     /// Set the pay amount to `pct`% of the wallet balance. A full send of native MON keeps Monad's fallback fee back;
@@ -501,7 +574,7 @@ final class SwapModel {
         guard tokenIn.isNative, let balance = balances[tokenIn.address], balance > 0 else { applyPercent(100); return }
         let token = tokenIn
         var route: TransactionRequest?
-        if let account, let quote = selectedQuote, let steps = try? await quote.build(account) {
+        if let account, let quote = shownQuote, let steps = try? await quote.build(account) {
             route = steps.lazy.compactMap { try? $0.request(at: Date()) }.first { $0.value > 0 }
         }
         let amount = await env.sender.maxValue(balance: balance, like: route, from: account, budget: NetworkFeeReserve.swapGasLimit)
@@ -533,6 +606,12 @@ final class SwapModel {
     /// Debounced by the caller's `.task(id:)`: the task is cancelled and restarted on every keystroke.
     /// `exactApprovals`: every account's plans approve exactly the input (`SwapRequest.exactApprovals`) — an ERC-20
     /// into Uniswap v4 costs one approval more per swap, and no unlimited Permit2 allowance is left standing (IOST-14).
+    ///
+    /// A first round for what is on screen shows each venue's quote as it arrives (`SwapEngine.quoteUpdates`): the best
+    /// so far, and the venues still asked. Review waits for the final answer (`selectedQuote`). The re-quote every 15 s
+    /// keeps the final answer on screen until its own is final, then replaces it whole, so Review never goes dark for a
+    /// refresh and never takes a half-refreshed answer. A venue the person picked stays selected through a round's
+    /// answers until its final one (`VenueSelection.following`): Review never takes a venue they didn't pick.
     func quote(env: AppEnvironment, account: Address?, exactApprovals: Bool = true) async {
         guard amountIn > 0, tokenIn != tokenOut else {
             result = nil
@@ -548,14 +627,26 @@ final class SwapModel {
         while !Task.isCancelled {
             quoting = true
             let key = quoteKey
-            let request = SwapRequest(tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amountIn, slippageBps: slippageBps, account: account ?? Address(literal: "0x000000000000000000000000000000000000dEaD"),
+            let request = SwapRequest(tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amountIn, slippageBps: slippageBps, account: Self.quoteAccount(account),
                                       exactApprovals: exactApprovals)
-            let outcome = await env.swap.quotes(for: request)
+            let refreshing = resultKey == key && result?.isFinal == true
+            var last: QuoteResult?
+            for await update in env.swap.quoteUpdates(for: request) {
+                last = update
+                // Only a first round shows its answers as they arrive; the final one is shown below, after the stream.
+                if update.isFinal || refreshing || Task.isCancelled { continue }
+                result = update
+                resultKey = key
+                error = nil
+                selection = selection.following(update)
+            }
             if Task.isCancelled { return }
+            // The stream ends with the final answer unless its task was cancelled, handled above.
+            guard let outcome = last, outcome.isFinal else { quoting = false; return }
             result = outcome
             resultKey = key
             error = outcome.quotes.isEmpty ? (outcome.errors.values.first ?? tr("No venue can route this pair right now.")) : nil
-            if !userPickedVenue || selectedVenue == nil || !outcome.quotes.contains(where: { $0.venue == selectedVenue }) { selectedVenue = outcome.quotes.first?.venue }
+            selection = selection.following(outcome)
             quoting = false
             if outcome.quotes.isEmpty {
                 // No venue routes the pair, and that answer is already on screen. A side still on a launchpad's curve,
@@ -572,6 +663,7 @@ final class SwapModel {
             try? await Task.sleep(for: .seconds(15))
         }
     }
+
 }
 
 /// Explains slippage in plain language, then lets the person pick a tolerance — presets with a one-line hint each,

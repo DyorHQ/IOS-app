@@ -68,18 +68,62 @@ public struct VenueQuote: Sendable, Identifiable {
     public var age: TimeInterval { Date().timeIntervalSince(at) }
 }
 
+/// The venues' answers for one request: every one of them once the round is over (`isFinal`), or, while it is under way
+/// (`SwapEngine.quoteUpdates`), those that answered so far and the venues still being asked (`pending`).
 public struct QuoteResult: Sendable {
     /// Best output first.
     public var quotes: [VenueQuote]
     /// A readable reason for every venue that produced no quote.
     public var errors: [Venue: String]
+    /// The venues still being asked, in `SwapEngine.quoteVenues` order: empty once every venue has answered. While any is
+    /// left, the best quote is only the best so far — a slower venue may still beat it — so nothing may be reviewed or
+    /// signed from it (`isFinal`).
+    public var pending: [Venue]
 
-    public init(quotes: [VenueQuote] = [], errors: [Venue: String] = [:]) {
+    public init(quotes: [VenueQuote] = [], errors: [Venue: String] = [:], pending: [Venue] = []) {
         self.quotes = quotes
         self.errors = errors
+        self.pending = pending
     }
 
     public var best: VenueQuote? { quotes.first }
+
+    /// Every venue has answered (or been refused), so `best` is the best of them all, not just the best so far.
+    public var isFinal: Bool { pending.isEmpty }
+}
+
+/// The venue a swap screen has selected, and whether the person picked it (a venue row tapped) or it follows the best
+/// quote. Review takes the selected venue's quote from a final answer (`QuoteResult.isFinal`), so a selection must never
+/// move to a venue the person didn't pick while they have picked one (speed work, 2026-10-10): the quotes of a round now
+/// show as they arrive, and an answer in which the pick hasn't answered yet says nothing about it.
+public struct VenueSelection: Sendable, Equatable {
+    /// The venue selected; nil before any quote.
+    public var venue: Venue?
+    /// The person picked `venue`; false while the selection follows the best quote.
+    public var picked: Bool
+
+    public init(venue: Venue? = nil, picked: Bool = false) {
+        self.venue = venue
+        self.picked = picked
+    }
+
+    /// The selection once `answer` is on screen:
+    /// - a pick is kept whatever an answer under way holds — its venue may not have answered yet, and the best so far is
+    ///   never put in its place (the screen shows the best so far meanwhile, `shown(in:)`);
+    /// - a final answer keeps a pick it quotes; one that doesn't quote it (the venue found no route, failed or ran out of
+    ///   time) gives the selection back to the best quote, which it follows from then on;
+    /// - with no pick, the selection is the best quote, so far or final.
+    public func following(_ answer: QuoteResult) -> VenueSelection {
+        if picked, let venue {
+            if !answer.isFinal || answer.quotes.contains(where: { $0.venue == venue }) { return self }
+        }
+        return VenueSelection(venue: answer.quotes.first?.venue, picked: false)
+    }
+
+    /// The quote a screen shows in `answer`: the selected venue's while `answer` quotes it, else the best (so far).
+    public func shown(in answer: QuoteResult) -> VenueQuote? {
+        answer.quotes.first { $0.venue == venue } ?? answer.quotes.first
+    }
 }
 
 public enum SwapError: Error, LocalizedError, Equatable {

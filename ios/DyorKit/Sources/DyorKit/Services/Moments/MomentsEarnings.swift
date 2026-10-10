@@ -99,19 +99,44 @@ public extension MomentsService {
 
     /// `creatorEarnings(account:)` from logs already read — the history store's (`WalletHistoryService.momentsLogs`) —
     /// with only the balances read from the chain. `complete` is whether the logs cover the cohort's whole window.
-    func creatorEarnings(account: Address, published: [Log], withdrawn: [Log], feesWithdrawn: [Log], complete: Bool) async throws -> MomentsCreatorEarnings {
+    ///
+    /// What each Moment still holds for its creator is taken from `known` when it is there: this cohort's Moments as a
+    /// list just read them (the list the screens share, `moments(limit:)`, or a retired cohort's `list`), whose ledger
+    /// holds `creatorClaimable` and whose pool, once graduated, `creatorAccrued` (`MomentPool.creatorFees`; a Moment that
+    /// hasn't graduated has no pool, and its hook takes fees only from that pool's swaps, so it holds none). Only the
+    /// Moments it published that aren't in `known` are read, in one multicall; until build 23 every one was, after the
+    /// lists My Moments had just read.
+    func creatorEarnings(account: Address, published: [Log], withdrawn: [Log], feesWithdrawn: [Log], complete: Bool, known: [MomentInfo] = []) async throws -> MomentsCreatorEarnings {
         guard isDeployed else { return .none }
         let hook = addresses.hook
         let ids = Self.createdIds(published, account: account, factory: addresses.factory)
         guard !ids.isEmpty else { return MomentsCreatorEarnings(moments: [], complete: complete) }
-        var calls: [ContractCall] = ids.map { MomentsABI.call(addresses.collect, MomentsABI.Collect.ledger, [.uint($0)], returns: MomentsABI.ledgerTuple) }
-        if !hook.isZero { calls += ids.map { MomentsABI.call(hook, MomentsABI.Hook.creatorAccrued, [.uint($0)], returns: "uint256") } }
-        let values = try await multicall.readAll(calls)
-        let held = ids.enumerated().map { i, id in
-            (id: id, proceeds: MomentsABI.ledger(values[i][0]).creatorClaimable, fees: hook.isZero ? BigUInt(0) : values[ids.count + i][0].uint)
+        // A cohort with no hook holds no pool fees for anyone.
+        var held = Self.creatorHeld(ids: ids, known: known, factory: addresses.factory).mapValues { (proceeds: $0.proceeds, fees: hook.isZero ? BigUInt(0) : $0.fees) }
+        let missing = ids.filter { held[$0] == nil }
+        if !missing.isEmpty {
+            var calls: [ContractCall] = missing.map { MomentsABI.call(addresses.collect, MomentsABI.Collect.ledger, [.uint($0)], returns: MomentsABI.ledgerTuple) }
+            if !hook.isZero { calls += missing.map { MomentsABI.call(hook, MomentsABI.Hook.creatorAccrued, [.uint($0)], returns: "uint256") } }
+            let values = try await multicall.readAll(calls)
+            for (i, id) in missing.enumerated() {
+                held[id] = (MomentsABI.ledger(values[i][0]).creatorClaimable, hook.isZero ? BigUInt(0) : values[missing.count + i][0].uint)
+            }
         }
-        return MomentsCreatorEarnings(moments: Self.creatorEarnings(held: held, withdrawn: withdrawn, feesWithdrawn: feesWithdrawn, account: account, factory: addresses.factory),
+        let rows = ids.compactMap { id in held[id].map { (id: id, proceeds: $0.proceeds, fees: $0.fees) } }
+        return MomentsCreatorEarnings(moments: Self.creatorEarnings(held: rows, withdrawn: withdrawn, feesWithdrawn: feesWithdrawn, account: account, factory: addresses.factory),
                                       complete: complete)
+    }
+
+    /// What each of `ids` still holds for its creator, from `known` (this cohort's Moments, as a list read them): the
+    /// ledger's `creatorClaimable`, and the pool's `creatorFees` once graduated (none before: no pool, no fee). An id that
+    /// isn't in `known` (another cohort's Moment of the same id included) is left out, to be read.
+    nonisolated static func creatorHeld(ids: [BigUInt], known: [MomentInfo], factory: Address) -> [BigUInt: (proceeds: BigUInt, fees: BigUInt)] {
+        let wanted = Set(ids)
+        var out: [BigUInt: (proceeds: BigUInt, fees: BigUInt)] = [:]
+        for info in known where info.moment.factory == factory && wanted.contains(info.id) {
+            out[info.id] = (info.ledger.creatorClaimable, info.graduated ? (info.pool?.creatorFees ?? 0) : 0)
+        }
+        return out
     }
 
     /// The ids of the Moments `account` published on `factory`, from its `Published` logs, oldest first, each once.
@@ -154,9 +179,10 @@ public extension RetiredMoments {
         try await service.creatorEarnings(account: account)
     }
 
-    /// The same from logs already read (`MomentsService.creatorEarnings(account:published:withdrawn:feesWithdrawn:complete:)`).
-    func creatorEarnings(account: Address, published: [Log], withdrawn: [Log], feesWithdrawn: [Log], complete: Bool) async throws -> MomentsCreatorEarnings {
-        try await service.creatorEarnings(account: account, published: published, withdrawn: withdrawn, feesWithdrawn: feesWithdrawn, complete: complete)
+    /// The same from logs already read, with what each Moment holds taken from `known` (this cohort's list as read) when
+    /// it is there (`MomentsService.creatorEarnings(account:published:withdrawn:feesWithdrawn:complete:known:)`).
+    func creatorEarnings(account: Address, published: [Log], withdrawn: [Log], feesWithdrawn: [Log], complete: Bool, known: [MomentInfo] = []) async throws -> MomentsCreatorEarnings {
+        try await service.creatorEarnings(account: account, published: published, withdrawn: withdrawn, feesWithdrawn: feesWithdrawn, complete: complete, known: known)
     }
 
     /// This cohort's addresses.

@@ -399,6 +399,21 @@ struct AddressRow: View {
     }
 }
 
+/// Said over figures a screen saved when they were last read for the wallet (`SavedScreens`), while it shows them and
+/// reads them again: when they were read ("Updated 3 min ago"), with a spinner while the read runs (`reading`). A saved
+/// figure is never taken for a fresh one; once every figure shown was read again, the screen drops the line.
+struct SavedLine: View {
+    let date: Date
+    let reading: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if reading { ProgressView().controlSize(.mini) }
+            Text("Updated \(date, style: .relative) ago").font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
 /// Inline error under a form, in sentence case with a symbol. A message written in the code is a catalog key; most come
 /// at run time (a thrown error's description, a server's message, a model's text) and are shown as they are. It wraps
 /// between words in Korean (`Paragraph`).

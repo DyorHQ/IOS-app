@@ -3,7 +3,11 @@
 DyorHQ is a SwiftUI iPhone app (`ios/DyorHQ`) over a Swift package (`ios/DyorKit`). It talks to Monad mainnet
 (chain id 143) directly: plain JSON-RPC over HTTPS to the keyless public endpoints, `rpc.monad.xyz` first and
 `rpc1.monad.xyz` as failover (`Monad.publicRPCs` in `ios/DyorKit/Sources/DyorKit/Chain/Monad.swift`; the client in
-`Core/RPCClient.swift` batches up to 40 calls per request and fails over on 429/5xx). Contract reads are bundled into
+`Core/RPCClient.swift` batches up to 40 calls per request and fails over on 429/5xx and 403 — rpc1 refuses every batch
+with a 403, so batches stay on `rpc.monad.xyz`; a read, never a broadcast, a receipt or anything a transaction is signed
+with, must start answering within 8 s on an endpoint (its body then read whole as long as it keeps coming) and is asked
+of the other endpoint as well when the first's answer hasn't started in 1.3 s; the chain head is read once for every
+reader within a second, `Chain/HeadClock.swift`). Contract reads are bundled into
 one `eth_call` through Multicall3 `aggregate3` at `0xcA11bde05977b3631167028862bE2a173976CA11` (`Core/Multicall.swift`);
 event history is `eth_getLogs` on `rpc1.monad.xyz` (`LaunchpadService.defaultLogsRPC`). Every write is a plan of
 `TransactionStep`s that a `ConfirmationSheet` (`ios/DyorHQ/Wallet/TransactionRun.swift`) hands to `TransactionSender`
@@ -38,7 +42,7 @@ News and Get Help; Home's header opens Profile and Notifications (`App/Router.sw
 
 | Screen | Reads | Writes | Source |
 | --- | --- | --- | --- |
-| Swap | Quotes from every venue at once (`SwapEngine`): Kuru Flow (`POST ws.kuru.io/api/quote`, JWT from `/api/generate-token`), Uniswap v3 `QuoterV2` and v4 `V4Quoter` / `StateView`, Monday Trade `QuoterV2` — the contract quotes via Multicall3, 20 s budget per venue, refreshed every 15 s. Balances and prices. Token picker: tokens the wallet acquired (`KnownTokenStore`), every token with a pool on Uniswap v3/v4 or Monday (pool-creation logs from genesis, `VenueTokenList`), Kuru's token directory (`GET api.kuru.io/api/v1/tokens/search`), or a pasted address (`ERC20.metadata`). Logos for tokens found on chain from Kuru's markets (`GET api.kuru.io/api/v1/markets`, kept in Caches for a day, SVGs left out; `KuruTokenListClient.logos`). History: the local activity log merged with the wallet's `Transfer` logs (`SwapHistoryService`, 24H / 7D / 30D). | The chosen venue's plan: approvals, then the venue router call (`docs/swap-spec.md`); MON ↔ WMON `deposit` / `withdraw`. | `Swap/SwapView.swift`, `Trade/TradeView.swift`, `Services/Swap/`, `Services/SwapHistory.swift`, `Services/VenueTokensService.swift` |
+| Swap | Quotes from every venue at once (`SwapEngine`): Kuru Flow (`POST ws.kuru.io/api/quote`, JWT from `/api/generate-token`), Uniswap v3 `QuoterV2` and v4 `V4Quoter` / `StateView`, Monday Trade `QuoterV2` — the contract quotes via Multicall3, 20 s budget per venue, refreshed every 15 s. Each venue's quote shows as it arrives (`SwapEngine.quoteUpdates`) and Review takes only the final answer; the route search is kept a minute in the shared reads (`SwapRouteCache`), so an amount change costs each venue one quote read (the price-impact slice included); Kuru's token is asked for as Swap opens. Balances and prices. Token picker: tokens the wallet acquired (`KnownTokenStore`), every token with a pool on Uniswap v3/v4 or Monday (pool-creation logs from genesis, `VenueTokenList`), Kuru's token directory (`GET api.kuru.io/api/v1/tokens/search`), or a pasted address (`ERC20.metadata`). Logos for tokens found on chain from Kuru's markets (`GET api.kuru.io/api/v1/markets`, kept in Caches for a day, SVGs left out; `KuruTokenListClient.logos`). History: the local activity log merged with the wallet's `Transfer` logs (`SwapHistoryService`, 24H / 7D / 30D). | The chosen venue's plan: approvals, then the venue router call (`docs/swap-spec.md`); MON ↔ WMON `deposit` / `withdraw`. | `Swap/SwapView.swift`, `Trade/TradeView.swift`, `Services/Swap/`, `Services/SwapHistory.swift`, `Services/VenueTokensService.swift` |
 | Perps · on chain | Perpl's Exchange contract via Multicall3: `getPerpetualInfo`, `getMarginFractions`, `getAccountByAddr`, `getPosition`, `getPerpOrderLocks` / `getOrderIdIndex` / `getOrder`; the wallet's AUSD balance and allowance. | `createAccount` / `depositCollateral` after an AUSD approval, `withdrawCollateral`, `execOrders` for market and limit orders, reduce-only closes, cancels and added margin, `allowOrderForwarding(true)` for one-click trading. | `Perps/PerpsView.swift`, `Perps/PerpTradeView.swift`, `Services/Perpl/PerplService.swift`, `PerplExchange.swift` |
 | Perps · Perpl API | REST, no auth: `GET app.perpl.xyz/api/v1/pub/context` (24h, volume, OI, funding) and `…/v1/market-data/{id}/candles/{res}/{from}-{to}`. Market-data WebSocket `wss://app.perpl.xyz/ws/v1/market-data` (heartbeat, market state, order book, trades). With an enrolled trading key: the trading WebSocket `wss://app.perpl.xyz/ws/v1/trading` (open orders, keeper triggers, positions) and Ed25519-signed history (`/v1/trading/fills`, `/v1/trading/position-history`, `/v1/trading/account-history`). Chart: TradingView Lightweight Charts bundled in `Resources/Web/`, fed by Perpl's candles. | Through the trading socket, once a key is enrolled: market / limit orders and take-profit / stop-loss as `mt:22` frames (keeper-managed triggers; the contract has none). Enrollment: `POST …/v1/api-key/payload` → the wallet signs the validated EIP-712 digest → the Ed25519 key is kept in the Keychain (a passkey account derives it per session). | `Perps/PerpsPortfolioView.swift`, `Perps/TradingViewChart.swift`, `Wallet/PerplTrading.swift`, `Services/Perpl/PerplFeed.swift`, `PerplTradeClient.swift`, `PerplAuth.swift`, `PerplHistory.swift` |
 
@@ -128,7 +132,8 @@ volume of the trades read too. A range refused for ending past the answering nod
 (`LogsRouter.headPause`), and the head of those windows is read from the logs endpoints themselves. Only `rpc2` refuses
 such a range: `rpc4`, `rpc3` and `rpc1` (and, unmeasured, `rpc.monad.xyz`) answer it clamped to their node's head, with
 no error and the later blocks' logs missing, a node hundreds of blocks behind at times. So for the wallet's history,
-whose reads are kept as coverage (a read given the round's head), the router asks an endpoint that clamps only for blocks
+whose reads are kept as coverage (a read given the round's head: the head clock read anew on the app's endpoints, else
+the logs endpoints' own, `WalletHistoryService.roundHead`), the router asks an endpoint that clamps only for blocks
 at least 600 below the head (`LogsEndpoint.clamps`, `LogsEndpoints.headLag`): the newest blocks wait for `rpc2` while
 the scan's deadline lasts, and are otherwise left unread, a gap like any other. A screen's own read (no head given, never
 kept) may ask any endpoint for any block, as before: with `rpc2` down it is at worst a few hundred blocks short until it
@@ -158,3 +163,94 @@ the server's history in under a lower one, whether the switch is on or off); bot
 launch (`ServerHistoryDefaults`), and the server has its own instant switch (`serving`). The wallet's first transaction
 as the server found it is kept in the history store, apart from the one the device found, and goes with the rest of what
 the server added (an epoch reset, an erase, a spot check's mismatch). Nothing is read from the server on a local fork.
+
+## Shared chain reads
+
+Several screens read the same chain state at about the same time — Home, the Portfolio, the Launch and Moments boards,
+My Launchpad, My Moments, Recent Activity and the alert checks — so those reads are made once and shared
+(`Core/ChainCache.swift`, one `ChainCache` in `AppEnvironment`):
+
+* The launch list is read once at 200 launches per factory, every factory's `launchCount()` in one Multicall3 aggregate,
+  and each screen takes its own newest (`LaunchpadService.launchListing`, `LaunchListing.prefix(perFactory:)`); a factory
+  the shared read couldn't read is read again with a screen's own limit, so Home's 30 and the board's 60 never wait on the
+  Portfolio's 200, and a list read on a node behind (a page shorter than the count, a coin with no record) is that
+  factory unread, never a shorter list. The live
+  and retired Moments lists likewise (`MomentsService.moments(limit:)`, `RetiredMoments.list`). Shared for 15 s; a
+  screen asking while the read is under way waits for it. A list that couldn't be read in full, and any failure, is never
+  kept, so Retry reads again.
+* Prices (`PriceService.prices(for:)`): identical reads at once are one read, a token's price is kept 10 s, and the block
+  mined 24 hours ago a minute, so a warm read is one round trip. A token's pools are looked up by one lookup at a time:
+  a read waits only for the lookups of its own tokens under way, so two screens never look the same token up twice, and a
+  read whose tokens were all looked up lately waits for none.
+* The Moments terms (`MomentsService.policy`) are shared for a minute (`ChainCache.TTL.terms`): their values change only
+  through a proposal queued for 48 hours, and a publish stays bound to the terms its review showed (`termsHash`, MO-4).
+* A transaction that settles in a `ConfirmationSheet` and every pull to refresh forget all of it
+  (`AppEnvironment.invalidateChainReads`): the next read goes to the chain, and no read begun before is joined or kept.
+
+What never changes once settled (ten minutes after it was made) is kept between launches in Application Support
+(`ChainStore`, `chain-reads-143/`; a fork keeps no launch or Moment, in memory either, since a fork restarted can reuse an
+index or an address, and its pools for the session only): each launch's token at its index, curve, pair asset,
+text, supply and launch time (`launches.json`), each Moment's record and text, a retired cohort's included
+(`moments-<factory>.json`), and the Uniswap and Nad.fun pools found with the time each lookup was made, so their time
+limits still apply (`pools.json`; a DyorHQ coin's venue is read from its factory every session). A refresh then reads only
+what moves: a launch's record, curve values and pool price, a Moment's ledger, editions, entitlements and graduation.
+Text is kept as the chain holds it and made safe to show on every read. A kept launch whose record no longer matches
+forgets that factory's launches and reads them in full. A graduated Moment coin's transfers counted so far are kept too
+(`moment-holders-<coin>.json`: each address's net transfers over one run of blocks read in one piece), so its page reads
+only the blocks since and, while the count doesn't reach the publish, the blocks before it, newest first; the newest 100
+blocks are read every time and never kept. Delete Account and Forget This Device remove the folder, and no read begun
+before the erase writes to it after (`Session.eraseLocalData`).
+
+The Moments screens read in as few round trips as the data allows (speed work, build 23):
+
+* A list's `momentCount()` is read with the state of every Moment the device keeps that the last count put in range, in
+  one aggregate, so a board of settled Moments, a past cohort, or a kept Moment's page (`info(id:)`) is one read; a count
+  that moved reads the new Moments in full.
+* A Moment's page reads the Moment, its supply (`MomentsService.detail(for:)`) and the account's stake (one aggregate, its
+  edition ids included) side by side and shows each as it lands, then its edition holders (every edition, 400 to a read,
+  a minimum said past 10,000) and its coin's holders (kept from the last opening, said to be saved until read again). The
+  Share button looks the Moment's name up only after the page's reads.
+* The board polls every 20 s only while it is on screen with the app in front, and back within 20 s of its last read it
+  waits out the rest; a poll that read nothing new sets nothing, and a countdown is drawn again alone when its text
+  changes (`MomentCountdown`), a screen only when what it shows of the time changes (`MomentBoardTimes`,
+  `MomentPageTimes`).
+* My Moments checks the list the screens share (the newest 200), reads each cohort's list once for its positions and its
+  proceeds (what a Moment still holds for its creator comes from the list), and reads its proceeds once on opening, then
+  whenever the wallet's Moments scan moves.
+
+## Saved screens
+
+Home, the Portfolio, the Launch and Moments boards and My Launchpad each keep what they last showed for a wallet on the
+device (`Core/SavedScreens.swift`, one `SavedScreens` in `AppEnvironment`, `saved-screens-143/` in Application Support,
+out of backups; a fork saves none), so a screen opened paints it at once and reads everything again behind it:
+
+* One file per screen and wallet (`home-<wallet>.json`, …; the boards signed out use `signed-out`). A file is shown only
+  to the wallet it names, by the build that wrote it, and while it is under a day old and not dated ahead of the clock.
+* A screen takes its saved file in before its first frame (`showSaved`, from its `onAppear`; the files are a few KB), so a
+  warm launch opens Home, the boards and My Launchpad on what they last showed, never on placeholders or a spinner under
+  it; Home takes in the Portfolio's for Total Volume too. With nothing saved, a board shows its spinner until its first
+  read answers, never "No Moments yet" or "No Launches Yet".
+* Whatever shows from a save says when it was read ("Updated 3 min ago", `SavedLine`), with a spinner while the read
+  runs, until the screen's own reads replace it. Nothing is animated by the line: an animation keyed to it animated
+  whatever changed with it (the first layout, `Paragraph`'s Korean words, the cards) and garbled the Moments board.
+  The Moments board says it in its eyebrow's row, and Home under the balance beside Total Volume's column (the taller
+  while Total Volume says its own saved time), so neither moves when the line goes; the Launch board's line is a row. A part whose read then fails keeps its saved figures, still said to be
+  saved, beside its error and Retry. A saved launch opens its page by reference (`LaunchReference`), a saved Moment by its
+  link (`MomentLinkView`), and a saved token row opens its page with the token alone, so the page reads it now: a page
+  shows what it is given as current.
+* Home saves each part it has figures of with when that part was read (Spot rows with prices and balances, the launch
+  holdings, the Moments stakes, and the Perps equity — never the positions, which its tab reads every time) and publishes
+  each part as its own read lands (`HomeReadState.showSaved`, `isSaved`, `hasFigures`); a launch part kept from the saved
+  launches stays saved until every launchpad is read in this session. The Portfolio saves a period's figures per section
+  only once they are final (its load read everything, and the history read the period's whole window with the chain
+  reachable), dated by the load whose prices and Perpl fills they are valued with, and shows them until a load lands
+  whole (`PortfolioModel.showsLive`); Home's Total Volume says its own saved time under it. The boards save only a full
+  read, and the Launch board's "Your Sell-Only Coins" stays saved until the wallet's balances are read again; Publish
+  stays off until the Moments terms are read.
+  My Launchpad saves its launches, balances and rewards, escrows and prices; saved escrow balances show "As last read"
+  and saved rewards aren't current, so Claim All never claims what was saved. Fees received, profit and loss and the
+  Activity tab come from the history, which the device keeps on its own.
+* Delete Account and Forget This Device remove every saved screen of every wallet, and no save asked for by a read that
+  began before the erase lands after it (`Session.eraseLocalData`, `SavedScreens.epoch`). The models the environment
+  keeps follow the wallet signed in (`LaunchpadProfileModel.follow`, `PortfolioModel.follow`): a sign-out clears what
+  they hold of it in memory.

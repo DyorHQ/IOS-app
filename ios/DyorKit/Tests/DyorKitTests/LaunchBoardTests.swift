@@ -221,8 +221,9 @@ final class LaunchBoardTests: XCTestCase {
         let holders = try XCTUnwrap(source.range(of: "section(title: \"Your Sell-Only Coins\", count: sellOnly.count,"))
         XCTAssertLessThan(refund.lowerBound, holders.lowerBound, "shown last")
         XCTAssertTrue(source.contains("private var sellOnly: [Launch] { searched(model.heldSellOnly) }"))
-        // Only the first load hides the empty state and a search's "not found": a poll (every 20 s) leaves them on screen.
-        XCTAssertTrue(source.contains("private var firstLoad: Bool { model.loading && model.launches.isEmpty }"))
+        // Only the first load hides the empty state and a search's "not found" — from the first frame, before its task
+        // starts (`BoardFirstRead`): a poll (every 20 s) leaves them on screen.
+        XCTAssertTrue(source.contains("private var firstLoad: Bool { BoardFirstRead.isLoading(empty: model.launches.isEmpty, answered: model.listed, reading: model.loading) }"))
         XCTAssertTrue(source.contains("if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !firstLoad {"))
         XCTAssertTrue(source.contains(".overlay { if firstLoad { ProgressView().controlSize(.large) } }"))
 
@@ -232,17 +233,28 @@ final class LaunchBoardTests: XCTestCase {
         let model = try XCTUnwrap(source.range(of: "final class LaunchpadModel {"))
         let modelEnd = try XCTUnwrap(source.range(of: "struct LaunchDetailView: View {", range: model.upperBound..<source.endIndex))
         let modelSource = String(source[model.upperBound..<modelEnd.lowerBound])
-        let cleared = try XCTUnwrap(modelSource.range(of: "if account != loadedFor {\n            heldSellOnly = []\n            loadedFor = account\n        }"))
+        // Then, with nothing on the board, the board saved for that same account (`restoreSaved`).
+        let cleared = try XCTUnwrap(modelSource.range(of: "if account != loadedFor {\n            heldSellOnly = []\n            heldSellOnlySavedAt = nil\n            loadedFor = account\n        }"))
+        let restored = try XCTUnwrap(modelSource.range(of: "restoreSaved(env: env, account: account)", range: cleared.upperBound..<modelSource.endIndex))
+        XCTAssertLessThan(cleared.upperBound, restored.lowerBound, "another account's coins go first")
         let read = try XCTUnwrap(modelSource.range(of: "let listing = await env.launchpad.launchListing(limit: 60)\n        launches = listing.keeping(launches)"))
         XCTAssertLessThan(cleared.lowerBound, read.lowerBound, "cleared before any read")
-        XCTAssertTrue(modelSource.contains("if let held = await Self.heldSellOnly(env: env, account: account, listing: listing), !Task.isCancelled, account == loadedFor {\n            heldSellOnly = held\n        }"))
+        XCTAssertTrue(modelSource.contains("let held = await Self.heldSellOnly(env: env, account: account, listing: listing)\n        if let held, !Task.isCancelled, account == loadedFor {\n            heldSellOnly = held\n            heldSellOnlySavedAt = nil\n        }"))
+        // Saved with the board, the section stays saved until its own balances are read again, however the launches went:
+        // it says when it was read once the board's line has gone, and its coins open by reference (their pages read them
+        // now), never a saved launch shown as current.
+        XCTAssertTrue(modelSource.contains("heldSellOnly = saved.value.heldSellOnly\n        heldSellOnlySavedAt = saved.savedAt"))
+        XCTAssertEqual(modelSource.components(separatedBy: "heldSellOnlySavedAt = ").count - 1, 3, "cleared with the account, by a read, set by the save")
+        XCTAssertTrue(source.contains("private var sellOnlySaved: Bool { model.heldSellOnlySavedAt != nil || model.savedAt != nil }"))
+        XCTAssertTrue(source.contains("subtitle: LaunchBoard.sellOnlySubtitle(sellOnly), coins: sellOnly, saved: sellOnlySaved)"))
         let complete = try XCTUnwrap(modelSource.range(of: "guard listing.complete else { return nil }"))
         let balances = try XCTUnwrap(modelSource.range(of: "guard let balances = try? await ERC20.balances(of: tokens, owner: account, rpc: env.rpc, multicall: env.multicall) else { return nil }"))
         XCTAssertLessThan(complete.lowerBound, balances.lowerBound, "an incomplete read reads no balance: the section keeps what it showed")
         XCTAssertTrue(modelSource.contains("let sellOnly = listing.launches.filter { !$0.listsOnBoard }"))
         XCTAssertTrue(modelSource.contains("return LaunchBoard.heldSellOnly(sellOnly, balances: balances)"))
         XCTAssertFalse(modelSource.contains("allLaunches(limit"), "the board reads through launchListing, which says which stacks answered")
-        XCTAssertEqual(modelSource.components(separatedBy: "heldSellOnly = ").count - 1, 2, "set only when cleared and when read for this account")
+        XCTAssertEqual(modelSource.components(separatedBy: "heldSellOnly = ").count - 1, 3, "set only when cleared, when read for this account, and from its own save")
+        XCTAssertTrue(modelSource.contains("guard launches.isEmpty, let saved = env.savedScreens.load(Saved.self, .launchBoard, wallet: account) else { return }\n        launches = saved.value.launches\n        pairUSD = saved.value.pairUSD\n        heldSellOnly = saved.value.heldSellOnly"))
 
         // The Explore card: only on the live launchpad, without a search, after the first load; Launch a Coin needs a
         // wallet that signs.
@@ -265,7 +277,7 @@ final class LaunchBoardTests: XCTestCase {
         // `LaunchBoard.sellOnlySubtitle`): never "Sell only" on a coin nobody can sell.
         XCTAssertTrue(source.contains("if launch.isSellOnly {\n            // Only under Your Sell-Only Coins: the public board lists none. A stuck or migrating one is badged with what\n            // it waits for: nothing trades until it graduates.\n            Text(launch.sellOnlyBadge)"))
         XCTAssertFalse(source.contains("Text(\"Sell only\")"))
-        XCTAssertTrue(source.contains("subtitle: LaunchBoard.sellOnlySubtitle(sellOnly), coins: sellOnly)"))
+        XCTAssertTrue(source.contains("subtitle: LaunchBoard.sellOnlySubtitle(sellOnly), coins: sellOnly, saved: sellOnlySaved)"))
         XCTAssertFalse(source.contains("sell them on their page"), "the subtitle's words live in DyorKit, with the rule")
 
         // No copy sends anyone to the board for a hidden coin, and the unused list row is gone.

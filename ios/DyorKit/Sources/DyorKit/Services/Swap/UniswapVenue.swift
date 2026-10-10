@@ -11,12 +11,16 @@ struct UniswapVenue: Sendable {
     let launchpadFactories: [Address]
     /// The Moments contracts whose graduated coin ↔ USDC pools are routable; nil when Moments are not live.
     let moments: MomentsAddresses?
+    /// Which v4 pools each pair has with liquidity, and which pool each launchpad or Moment coin graduated into, kept a
+    /// minute (`SwapRouteCache`): an amount change then costs the one quote read. Without a cache every quote searches.
+    let routeCache: SwapRouteCache
 
-    init(multicall: Multicall, v3: V3Router, launchpadFactories: [Address] = [], moments: MomentsAddresses? = nil) {
+    init(multicall: Multicall, v3: V3Router, launchpadFactories: [Address] = [], moments: MomentsAddresses? = nil, cache: ChainCache? = nil) {
         self.multicall = multicall
         self.v3 = v3
         self.launchpadFactories = launchpadFactories.filter { !$0.isZero }
         self.moments = moments
+        routeCache = SwapRouteCache(cache: cache)
     }
 
     static let v3Venue = V3Venue(factory: Uniswap.v3Factory, quoter: Uniswap.quoterV2, tiers: Uniswap.v3FeeTiers)
@@ -25,6 +29,8 @@ struct UniswapVenue: Sendable {
         let hops: [V4Hop]
         let amountOut: BigUInt
         let gas: BigUInt
+        /// From a 1/1000 slice quoted in the same read as the trade (`bestV4`); nil when it couldn't be.
+        let priceImpactBps: Int?
     }
 
     private enum Chosen: Sendable {
@@ -61,22 +67,18 @@ struct UniswapVenue: Sendable {
         let gas: BigUInt
         let route: String
         let priceImpactBps: Int?
+        // Either one's impact was read with its quote, in the same Multicall3 read (`bestV4`, `V3Router.bestRoute`).
         switch chosen {
         case .v4(let v4):
             amountOut = v4.amountOut
             gas = v4.gas
             route = Self.describeV4(v4.hops, symbolIn: req.tokenIn.symbol, symbolOut: req.tokenOut.symbol, momentsHook: moments?.hook)
-            let slice = req.amountIn / 1000
-            if slice > 0, let sliceOut = try? await quoteV4Once(currencyIn: req.tokenIn.address, hops: v4.hops, amountIn: slice) {
-                priceImpactBps = SwapMath.impactBps(amountIn: req.amountIn, amountOut: amountOut, sliceIn: slice, sliceOut: sliceOut)
-            } else {
-                priceImpactBps = nil
-            }
+            priceImpactBps = v4.priceImpactBps
         case .v3(let candidate):
             amountOut = candidate.amountOut
             gas = candidate.gas
             route = "v3 · " + V3Router.describe(candidate.route, symbols: symbols)
-            priceImpactBps = await v3.priceImpact(on: Self.v3Venue, route: candidate.route, amountIn: req.amountIn, amountOut: amountOut)
+            priceImpactBps = candidate.priceImpactBps
         }
         let minOut = SwapMath.minAfterSlippage(amountOut, bps: req.slippageBps)
         let multicall = self.multicall
@@ -127,52 +129,54 @@ struct UniswapVenue: Sendable {
         return (try? await bestV4(currencyIn: currencyIn, currencyOut: currencyOut, amountIn: amountIn)) ?? nil
     }
 
+    /// The best v4 route for the amount. Every candidate route is quoted for the amount and for a 1/1000 slice of it in
+    /// one read, so the price impact (`V4Candidate.priceImpactBps`) costs no round trip of its own.
     private func bestV4(currencyIn: Address, currencyOut: Address, amountIn: BigUInt) async throws -> V4Candidate? {
         let routes = try await v4Routes(currencyIn: currencyIn, currencyOut: currencyOut)
         if routes.isEmpty { return nil }
-        let results = try await multicall.read(try routes.map { try SwapCalldata.v4Quote(currencyIn: currencyIn, hops: $0, amountIn: amountIn) })
-        var best: V4Candidate?
-        for (i, result) in results.enumerated() {
-            guard case .success(let values) = result else { continue }
+        // Layout: [0, n) the amount on each route, then [n, 2n) the slice on each (none when the slice rounds to zero).
+        let slice = amountIn / 1000
+        var calls = try routes.map { try SwapCalldata.v4Quote(currencyIn: currencyIn, hops: $0, amountIn: amountIn) }
+        if slice > 0 { calls += try routes.map { try SwapCalldata.v4Quote(currencyIn: currencyIn, hops: $0, amountIn: slice) } }
+        let results = try await multicall.read(calls)
+        var best: (index: Int, amountOut: BigUInt, gas: BigUInt)?
+        for i in routes.indices {
+            guard case .success(let values) = results[i] else { continue }
             let amountOut = values[0].uint
-            if best.map({ amountOut > $0.amountOut }) ?? true { best = V4Candidate(hops: routes[i], amountOut: amountOut, gas: values[1].uint) }
+            if best.map({ amountOut > $0.amountOut }) ?? true { best = (i, amountOut, values[1].uint) }
         }
-        return best
-    }
-
-    private func quoteV4Once(currencyIn: Address, hops: [V4Hop], amountIn: BigUInt) async throws -> BigUInt {
-        try await multicall.readAll([try SwapCalldata.v4Quote(currencyIn: currencyIn, hops: hops, amountIn: amountIn)])[0][0].uint
+        guard let best else { return nil }
+        var impact: Int?
+        if slice > 0, case .success(let values) = results[routes.count + best.index] {
+            impact = SwapMath.impactBps(amountIn: amountIn, amountOut: best.amountOut, sliceIn: slice, sliceOut: values[0].uint)
+        }
+        return V4Candidate(hops: routes[best.index], amountOut: best.amountOut, gas: best.gas, priceImpactBps: impact)
     }
 
     /// Candidate v4 routes: hookless canonical pools (direct and through native MON), graduated launchpad pools,
-    /// and graduated Moment pools (coin ↔ USDC, reached directly or through a canonical USDC pool).
+    /// and graduated Moment pools (coin ↔ USDC, reached directly or through a canonical USDC pool). What they are built
+    /// from is kept a minute (`SwapRouteCache`): each pair's live pools, whichever way round (so a flip reads nothing
+    /// new), and each coin's graduated pool.
     private func v4Routes(currencyIn cIn: Address, currencyOut cOut: Address) async throws -> [[V4Hop]] {
-        let canonical = { (a: Address, b: Address) in Uniswap.v4Tiers.map { PoolKey.canonical(a, b, fee: $0.fee, tickSpacing: $0.tickSpacing) } }
         let viaNative = !cIn.isZero && !cOut.isZero
         let usdc = moments?.usdc ?? Monad.usdc
-        // Probe layout: [0,4) direct, [4,8) in→MON, [8,12) MON→out, [12,16) in→USDC, [16,20) USDC→out (the latter
-        // two pad with the direct pools when a side already is USDC, so the offsets stay fixed).
-        let probe = canonical(cIn, cOut)
-            + (viaNative ? canonical(cIn, Monad.native) + canonical(Monad.native, cOut) : canonical(cIn, cOut) + canonical(cIn, cOut))
-            + (cIn != usdc ? canonical(cIn, usdc) : canonical(cIn, cOut))
-            + (cOut != usdc ? canonical(usdc, cOut) : canonical(cIn, cOut))
-        let liquidityCalls = try probe.map { try SwapCalldata.stateViewLiquidity(poolId: $0.id) }
-        async let liquidityRead = multicall.read(liquidityCalls)
+        // The pairs probed: direct; in → MON and MON → out unless a side is MON; in → USDC and USDC → out unless that
+        // side is USDC.
+        var pairs = [TokenPair.unordered(cIn, cOut)]
+        if viaNative { pairs += [TokenPair.unordered(cIn, Monad.native), TokenPair.unordered(Monad.native, cOut)] }
+        if cIn != usdc { pairs.append(TokenPair.unordered(cIn, usdc)) }
+        if cOut != usdc { pairs.append(TokenPair.unordered(usdc, cOut)) }
+        async let liveRead = livePools(pairs)
         async let launchRead = launchpadKeys([cIn, cOut])
         async let momentRead = momentsKeys([cIn, cOut])
-        let (liquidity, launchKeys, momentKeys) = try await (liquidityRead, launchRead, momentRead)
+        let (live, launchKeys, momentKeys) = try await (liveRead, launchRead, momentRead)
 
-        func alive(_ range: Range<Int>) -> [PoolKey] {
-            probe.enumerated().filter { range.contains($0.offset) }.compactMap { entry in
-                guard case .success(let values) = liquidity[entry.offset], values[0].uint > 0 else { return nil }
-                return entry.element
-            }
-        }
-        let direct = alive(0..<4)
-        let toNative = viaNative ? alive(4..<8) : []
-        let fromNative = viaNative ? alive(8..<12) : []
-        let toUSDC = cIn != usdc ? alive(12..<16) : []
-        let fromUSDC = cOut != usdc ? alive(16..<20) : []
+        func alive(_ a: Address, _ b: Address) -> [PoolKey] { live[TokenPair.unordered(a, b)]?.keys ?? [] }
+        let direct = alive(cIn, cOut)
+        let toNative = viaNative ? alive(cIn, Monad.native) : []
+        let fromNative = viaNative ? alive(Monad.native, cOut) : []
+        let toUSDC = cIn != usdc ? alive(cIn, usdc) : []
+        let fromUSDC = cOut != usdc ? alive(usdc, cOut) : []
         func route(_ hops: [V4Hop?]) -> [V4Hop]? {
             let present = hops.compactMap { $0 }
             return present.count == hops.count ? present : nil
@@ -220,49 +224,91 @@ struct UniswapVenue: Sendable {
         return routes
     }
 
-    /// Pool keys of graduated Moment coins among `tokens`, in input order.
+    /// The hookless v4 pools of each pair (`Uniswap.v4Tiers`) holding liquidity, from StateView: the pairs not kept are
+    /// read together, in one read. A pool whose liquidity can't be read counts as empty.
+    private func livePools(_ pairs: [TokenPair]) async throws -> [TokenPair: V4PairPools] {
+        try await routeCache.values(for: pairs, key: { "swap.v4.\($0.a.hex).\($0.b.hex)" }) { missing in
+            let slots = missing.flatMap { pair in
+                Uniswap.v4Tiers.map { (pair: pair, pool: PoolKey.canonical(pair.a, pair.b, fee: $0.fee, tickSpacing: $0.tickSpacing)) }
+            }
+            let liquidity = try await multicall.read(try slots.map { try SwapCalldata.stateViewLiquidity(poolId: $0.pool.id) })
+            var live: [TokenPair: [PoolKey]] = Dictionary(missing.map { ($0, []) }, uniquingKeysWith: { first, _ in first })
+            for (slot, result) in zip(slots, liquidity) {
+                guard case .success(let values) = result, values[0].uint > 0 else { continue }
+                live[slot.pair, default: []].append(slot.pool)
+            }
+            return live.mapValues { V4PairPools(keys: $0) }
+        }
+    }
+
+    /// Pool keys of graduated Moment coins among `tokens`, in input order. Each coin's pool, or that it has none yet, is
+    /// kept a minute (`SwapRouteCache`).
     private func momentsKeys(_ tokens: [Address]) async throws -> [(coin: Address, key: PoolKey)] {
         guard let moments, moments.isDeployed else { return [] }
         let candidates = tokens.filter { !$0.isZero && $0 != moments.usdc && $0 != Monad.wmon }
         if candidates.isEmpty { return [] }
-        let ids = try await multicall.read(try candidates.map { try SwapCalldata.momentIdByCoin(factory: moments.factory, coin: $0) })
-        var coins: [(Address, BigUInt)] = []
-        for (coin, result) in zip(candidates, ids) {
-            guard case .success(let values) = result, values[0].uint > 0 else { continue }
-            coins.append((coin, values[0].uint))
+        let pools = try await routeCache.values(for: candidates, key: { "swap.momentsPool.\(moments.factory.hex).\($0.hex)" }) { missing in
+            try await readMomentPools(missing, moments: moments)
         }
-        if coins.isEmpty { return [] }
-        let keys = try await multicall.read(try coins.map { try SwapCalldata.momentsPoolKey(graduation: moments.graduation, momentId: $0.1) })
-        var out: [(coin: Address, key: PoolKey)] = []
-        for (entry, result) in zip(coins, keys) {
+        return candidates.compactMap { coin in pools[coin]?.key.map { (coin: coin, key: $0) } }
+    }
+
+    /// Each of `coins`' graduated Moment pool: its Moment id from the factory (one read), then the pool key from the
+    /// graduation contract, which reverts while the Moment has no pool (a second). None for an address that is no Moment
+    /// coin, or a Moment not graduated yet.
+    private func readMomentPools(_ coins: [Address], moments: MomentsAddresses) async throws -> [Address: GraduatedPool] {
+        var out = Dictionary(coins.map { ($0, GraduatedPool(key: nil)) }, uniquingKeysWith: { first, _ in first })
+        let ids = try await multicall.read(try coins.map { try SwapCalldata.momentIdByCoin(factory: moments.factory, coin: $0) })
+        var found: [(coin: Address, id: BigUInt)] = []
+        for (coin, result) in zip(coins, ids) {
+            guard case .success(let values) = result, values[0].uint > 0 else { continue }
+            found.append((coin, values[0].uint))
+        }
+        if found.isEmpty { return out }
+        let keys = try await multicall.read(try found.map { try SwapCalldata.momentsPoolKey(graduation: moments.graduation, momentId: $0.id) })
+        for (entry, result) in zip(found, keys) {
             guard case .success(let values) = result else { continue }
             let key = values[0]
             let poolKey = PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(clamping: key[2].uint), tickSpacing: Int(clamping: key[3].int), hooks: key[4].address)
             guard !poolKey.hooks.isZero else { continue } // not graduated: no pool yet
-            out.append((entry.0, poolKey))
+            out[entry.coin] = GraduatedPool(key: poolKey)
         }
         return out
     }
 
-    /// Pool keys of launchpad tokens among `tokens` that graduated on Uniswap v4, in input order. Each token's key
-    /// comes from the factory that recorded it, since each factory's pools carry its own hook.
+    /// Pool keys of launchpad tokens among `tokens` that graduated on Uniswap v4, in input order. Each token's pool, or
+    /// that it has none, is kept a minute (`SwapRouteCache`), under this venue's set of factories.
     private func launchpadKeys(_ tokens: [Address]) async throws -> [(token: Address, key: PoolKey)] {
         guard !launchpadFactories.isEmpty else { return [] }
         let candidates = tokens.filter { !$0.isZero && $0 != Monad.wmon }
         if candidates.isEmpty { return [] }
-        let pairs = candidates.flatMap { token in launchpadFactories.map { (token: token, factory: $0) } }
+        let factories = launchpadFactories.map(\.hex).joined(separator: ",")
+        let pools = try await routeCache.values(for: candidates, key: { "swap.launchpadPool.\(factories).\($0.hex)" }) { missing in
+            try await readLaunchpadPools(missing)
+        }
+        return candidates.compactMap { token in pools[token]?.key.map { (token: token, key: $0) } }
+    }
+
+    /// Each of `tokens`' graduated launchpad pool: every factory's record of it (one read), then the pool key from the
+    /// first factory that recorded it graduated on Uniswap v4 (a second), since each factory's pools carry its own hook.
+    /// None for a token no factory graduated on v4.
+    private func readLaunchpadPools(_ tokens: [Address]) async throws -> [Address: GraduatedPool] {
+        var out = Dictionary(tokens.map { ($0, GraduatedPool(key: nil)) }, uniquingKeysWith: { first, _ in first })
+        let pairs = tokens.flatMap { token in launchpadFactories.map { (token: token, factory: $0) } }
         let records = try await multicall.read(try pairs.map { try SwapCalldata.launchedToken(factory: $0.factory, token: $0.token) })
         var graduated: [(token: Address, factory: Address)] = []
         for (pair, record) in zip(pairs, records) {
             guard case .success(let values) = record, SwapCalldata.graduatedOnV4(values[0]), !graduated.contains(where: { $0.token == pair.token }) else { continue }
             graduated.append(pair)
         }
-        if graduated.isEmpty { return [] }
+        if graduated.isEmpty { return out }
         let keys = try await multicall.readAll(try graduated.map { try SwapCalldata.launchpadPoolKey(factory: $0.factory, token: $0.token) })
-        return zip(graduated, keys).map { pair, values in
+        for (pair, values) in zip(graduated, keys) {
             let key = values[0]
-            return (pair.token, PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(clamping: key[2].uint), tickSpacing: Int(clamping: key[3].int), hooks: key[4].address))
+            out[pair.token] = GraduatedPool(key: PoolKey(currency0: key[0].address, currency1: key[1].address, fee: Int(clamping: key[2].uint),
+                                                         tickSpacing: Int(clamping: key[3].int), hooks: key[4].address))
         }
+        return out
     }
 
     /// "v4 · MON → USDC · 0.05%" / "v4 · USDC → MON → TOKEN · 0.05% + launchpad" / "v4 · USDC → COIN · moments 1.5%".

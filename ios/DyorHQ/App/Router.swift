@@ -185,6 +185,13 @@ final class Router {
         tab = .moments
     }
 
+    /// Opens a Moment by its link on the Moments tab, whose page reads it first (`MomentLinkView`): for a screen showing a
+    /// Moment as it saved it when last read, which its page mustn't show as current.
+    func openMoment(_ link: MomentLink) {
+        pendingMomentLink = link
+        tab = .moments
+    }
+
     /// Follows a tapped row of the notification center to its screen.
     func open(_ notification: AppNotification) {
         open(route: notification.route, reference: notification.reference)

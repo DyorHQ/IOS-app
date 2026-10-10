@@ -10,8 +10,12 @@ import Foundation
      - the coin page offers Sell only (in refund mode too), and Home's token page, the Portfolio's holdings and Swap's
        "no venue" state send a holder to that page, where the curve sell is: no Swap venue routes a bonding curve, the
        live launchpad's or a retired one's (`LaunchpadService.curveHoldings`, `curveRoute(for:)`, `LaunchpadCurves.swift`);
-     - Swap (`SwapEngine.buyRefusal`): no venue is asked to quote buying such a coin, read on-chain from every retired
-       factory's record; a read that fails refuses too. Selling one is never checked;
+     - Swap (`SwapEngine.buyRefusal`): no venue's quote for buying such a coin is ever shown, reviewed or signed, read
+       on-chain from every retired factory's record; a read that fails refuses too. Kuru Flow, a third party's API that
+       would be told the wallet and the coin, is never asked: a round of quotes asks it a coin that may be a launchpad's
+       only once the check has cleared it. The on-chain venues (Uniswap, Monday Trade) read their pools alongside the
+       check, in reads that name no wallet, and nothing they find is shown until it clears the coin; one venue alone is
+       asked only after it. Selling one is never checked;
      - a passkey account (`Mera.SigningPolicy.refusal`): a curve `buy` into a curve a retired factory recorded
        (`curveToToken`, read on-chain here), an approval paying anything but the coin into one, and `launchAndBuy` on a
        retired router are refused whatever the sheet declared or a Face ID approved, even if some screen built one.

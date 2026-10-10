@@ -283,13 +283,14 @@ final class LogsGateTests: XCTestCase {
     }
 
     /// A round reads the chain head once for every scan, not once a scan: one `eth_getBlockByNumber` of the latest block
-    /// on the logs endpoints for five scans. Given a head, a scan reads to it and reads none itself; given none (the round
-    /// couldn't read it), it says the chain wasn't reached and asks nothing.
+    /// for five scans, from the session's shared head (`BlockClock.head`, `WalletHistoryService.roundHead`) and, only when
+    /// that can't be read, from the logs endpoints. Given a head, a scan reads to it and reads none itself; given none (the
+    /// round couldn't read it), it says the chain wasn't reached and asks nothing.
     func testARoundReadsTheHeadOnceForEveryScan() async {
         let heads = HeadReads()
         let head = LaunchpadAddresses.feeHistoryStart + 50_000
         LogsStub.install(head: head, answer: { host, method, params in
-            if host == "wide.logs-stub.invalid", method == "eth_getBlockByNumber", params[0].string == "latest" { heads.add() }
+            if method == "eth_getBlockByNumber", params[0].string == "latest" { heads.add(host) }
             return nil
         }) { _ in nil }
         let store = HistoryStore(router: router(gate: LogsGate(inFlight: 8, interval: .zero)), directory: nil)
@@ -301,7 +302,9 @@ final class LogsGateTests: XCTestCase {
         XCTAssertEqual(snapshot.anchor?.number, head)
         XCTAssertEqual(Set(snapshot.status.keys), Set(WalletHistoryScans.ids))
         XCTAssertTrue(snapshot.complete, "\(snapshot.status)")
-        XCTAssertEqual(heads.count, 1, "one head read for the five scans")
+        XCTAssertEqual(heads.hosts, [LogsStub.url.host()!], "one head read for the five scans, the session's shared one")
+        let shared = await clock.head.known
+        XCTAssertEqual(shared?.number, head, "and kept for the readers after it")
 
         // A scan given the head reads to it, and reads no head itself.
         let scan = HistoryScan(id: "given", query: query, floor: .blocks(10_000))
@@ -317,6 +320,18 @@ final class LogsGateTests: XCTestCase {
         XCTAssertFalse(unreached.reachedChain)
         XCTAssertNil(unreached.head)
         XCTAssertEqual(LogsStub.requests(), requests)
+
+        // The shared head unread (its endpoint answers no header): the round reads the logs endpoints' own, once.
+        let fallbackHeads = HeadReads()
+        LogsStub.install(head: head + 10, answer: { host, method, params in
+            guard method == "eth_getBlockByNumber", params[0].string == "latest" else { return nil }
+            fallbackHeads.add(host)
+            return host == LogsStub.url.host() ? .object([:]) : nil
+        }) { _ in nil }
+        let next = await service.refresh(wallet: wallet, budget: LogsBudget(requests: 200, seconds: 30), curves: [], decimals: [:])
+        XCTAssertEqual(next.anchor?.number, head + 10)
+        XCTAssertTrue(next.complete, "\(next.status)")
+        XCTAssertEqual(fallbackHeads.hosts, [LogsStub.url.host()!, "wide.logs-stub.invalid"])
     }
 
     // MARK: Helpers
@@ -353,7 +368,9 @@ private actor Recorder {
 /// Head reads counted, from any thread.
 private final class HeadReads: @unchecked Sendable {
     private let lock = NSLock()
-    private var value = 0
-    var count: Int { lock.lock(); defer { lock.unlock() }; return value }
-    func add() { lock.lock(); value += 1; lock.unlock() }
+    private var asked: [String] = []
+    var count: Int { lock.lock(); defer { lock.unlock() }; return asked.count }
+    /// The host of each head read, in order.
+    var hosts: [String] { lock.lock(); defer { lock.unlock() }; return asked }
+    func add(_ host: String) { lock.lock(); asked.append(host); lock.unlock() }
 }

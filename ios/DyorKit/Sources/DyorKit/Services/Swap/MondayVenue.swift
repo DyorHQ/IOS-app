@@ -20,7 +20,8 @@ struct MondayVenue: Sendable {
         var symbols = [req.tokenIn.symbol]
         if best.route.path.count == 3 { symbols.append(V3Router.hopSymbol(best.route.path[1])) }
         symbols.append(req.tokenOut.symbol)
-        let priceImpactBps = await v3.priceImpact(on: Self.venue, route: best.route, amountIn: req.amountIn, amountOut: best.amountOut)
+        // Read with the quote, in the same Multicall3 read (`V3Router.bestRoute`).
+        let priceImpactBps = best.priceImpactBps
         let inToken = req.tokenIn
         let amountIn = req.amountIn
 

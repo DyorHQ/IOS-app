@@ -14,6 +14,19 @@ final class AppEnvironment {
     /// reads — prices (the 24h change and charts), the launchpad, Moments (live and retired), swap history and token
     /// activity — so the session measures it once.
     let clock: BlockClock
+    /// The chain reads several screens make at about the same time, made once and shared (`ChainCache`): the launch list,
+    /// the Moments lists (live and retired) and prices, each kept a few seconds. A transaction of the user's that settled
+    /// and a pull to refresh forget them (`invalidateChainReads`), so the next read goes to the chain.
+    let chainCache = ChainCache()
+    /// What never changes once read — each settled launch's token and text, each settled Moment's record and text — and
+    /// where tokens are priced, kept between launches (`ChainStore`), so a refresh reads only what moves. Public chain
+    /// data only; erased with this device's data (`Session.eraseLocalData`). A fork keeps it in memory only.
+    let chainStore: ChainStore
+    /// What Home, the Portfolio, the Launch and Moments boards and My Launchpad last showed for each wallet, kept on the
+    /// device (`SavedScreens`): a screen opened paints it at once, says when it was read, and reads everything again
+    /// behind it. Never another wallet's, never one over a day old; erased with this device's data
+    /// (`Session.eraseLocalData`). A fork saves none.
+    let savedScreens: SavedScreens
     /// Prices. DyorHQ coins are priced on their own curve or pool (`DyorListing`), never another pool, unless the owner's
     /// remote switch turns that off (`apply(_:)`); Home counts each coin once (`HomeTotals`).
     let prices: PriceService
@@ -92,9 +105,13 @@ final class AppEnvironment {
     init(config: AppConfig) {
         self.config = config
         social = SocialSession(config: config)
-        // Keyless public endpoints with failover. Batches stay under rpc.monad.xyz's 50-items-per-second budget; calls
-        // it throttles are retried on rpc1, which limits requests rather than items.
-        rpc = RPCClient(urls: config.rpcURLs, maxBatch: 40)
+        // Keyless public endpoints with failover. Batches stay under rpc.monad.xyz's 50-items-per-second budget; rpc1
+        // limits requests rather than items and refuses every batch (HTTP 403, measured 2026-10-10), so it takes single
+        // calls and the batches stay on rpc.monad.xyz (`RPCClient.isRefusal`). A read's answer must start within 8 s on an
+        // endpoint, then is read whole, and the other is asked too when the first's hasn't started in 1.3 s; a read too big
+        // for one request goes out at once, over the endpoints that take batches, never more than 50 calls of it a second
+        // to one (`RPCClient`).
+        rpc = RPCClient(urls: config.rpcURLs, maxBatch: 40, itemsPerSecond: 50)
         multicall = Multicall(rpc: rpc)
         sender = TransactionSender(rpc: rpc)
         // The Aurora API key never ships in the app: bridge calls go through the aurora-proxy Edge Function, which
@@ -107,6 +124,11 @@ final class AppEnvironment {
         // A local fork (a Debug build pointed at 127.0.0.1) keeps its own logs and its own registry file.
         let host = config.rpcURL.host() ?? ""
         let isFork = host == "127.0.0.1" || host == "localhost"
+        chainStore = isFork ? ChainStore(directory: nil) : ChainStore.applicationSupport()
+        // A saved screen is shown only by the build that saved it (its version and build number).
+        let info = Bundle.main.infoDictionary
+        let build = "\(info?["CFBundleShortVersionString"] as? String ?? "")-\(info?["CFBundleVersion"] as? String ?? "")"
+        savedScreens = isFork ? SavedScreens(directory: nil, build: build) : SavedScreens.applicationSupport(build: build)
         // History reads go across the public endpoints, in ranges each answers, through one gate (`LogsRouter`): one
         // client for every reader. A local fork keeps its own logs, so a development build pointed at 127.0.0.1 scans the
         // fork instead: one node, whose head is the head the router reads, so it clamps nothing (`LogsEndpoint.clamps`).
@@ -141,15 +163,21 @@ final class AppEnvironment {
         // The registry reads every factory on the failover RPC; a Debug build on a local fork keeps its own file. The
         // price service asks it which tokens are DyorHQ coins, and which factory made each.
         let registry = DyorCoinRegistry(rpc: rpc, live: config.launchpad, liveMoments: config.moments, store: .applicationSupport(fork: isFork))
-        prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true)
+        prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true, cache: chainCache, store: chainStore)
         // Graduated launchpad and Moment pools become swap routes on Uniswap v4: the live factory's pools (once v2 is
         // deployed) and those of the retired factories with the current record (the legacy 0xad3d… launches all
-        // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0.
-        swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments)
+        // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0. What the route
+        // search finds (each pair's pools, each coin's graduated pool) is kept a minute in the shared reads, so an amount
+        // typed or a re-quote costs each venue one quote read; a settled transaction forgets it (`invalidateChainReads`).
+        swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments, cache: chainCache)
         perpl = PerplService(rpc: rpc)
-        launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock)
-        moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock)
-        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, logsClient, clock] in RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock) }
+        // The launch list and the Moments lists are read once for every screen that asks within a few seconds, and what
+        // never changes of a settled launch or Moment is read once and kept (`chainCache`, `chainStore`).
+        launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)
+        moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)
+        retiredMoments = MomentsAddresses.retiredMainnet.filter { $0.factory != config.moments.factory }.map { [rpc, logsClient, clock, chainCache, chainStore] in
+            RetiredMoments(rpc: rpc, addresses: $0, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)
+        }
         // The block of a wallet's first transaction, kept on the device once found.
         let keptFirstBlock: @Sendable (Address) -> UInt64? = { wallet in
             UserDefaults.standard.string(forKey: "history.v1.firstBlock.\(wallet.hex.lowercased())").flatMap { UInt64($0) }
@@ -190,6 +218,11 @@ final class AppEnvironment {
         session = Session(config: config, backend: social)
         // An erase of this device's data deletes the registry's file and the image caches too.
         session.dyorCoins = dyorCoins
+        // An erase of this device's data deletes the chain facts kept between launches and forgets the shared reads.
+        session.chainStore = chainStore
+        session.chainCache = chainCache
+        // An erase of this device's data deletes every screen saved for every wallet.
+        session.savedScreens = savedScreens
         // An erase of this device's data saves App Lock as a new install has it, and sets it here too (R4).
         session.settings = settings
         // An erase of this device's data sets the language back to English, as on a new install.
@@ -236,6 +269,28 @@ final class AppEnvironment {
         sync.install(settings: settings, address: { [weak session] in session?.address })
         // The owner's remote switches, read with the minimum build: each on until the row turns it off.
         updateGate.onFlags = { [weak self] flags in self?.apply(flags) }
+        // The connections the first screens read over, opened before they ask.
+        warmConnections()
+    }
+
+    /// When `warmConnections` last opened the connections.
+    @ObservationIgnored private var warmedAt = Date.distantPast
+
+    /// Opens the connections the first reads go over before they ask (speed work, 2026-10-10): the app's two RPC endpoints
+    /// (Home's reads, the hedge of a slow one), the logs endpoint the wallet's history reads first (rpc2), and Supabase. A
+    /// new connection costs 0.4–1.1 s of handshakes per host (measured 2026-10-08), paid by the first screen otherwise. At
+    /// launch and on every return to the app (iOS closes idle connections while it is away), at most every 30 s. Each is
+    /// a request that reads nothing and changes nothing (`RPCClient.warm`, `SupabaseClient.warm`).
+    func warmConnections() {
+        let now = Date()
+        guard now.timeIntervalSince(warmedAt) > 30 else { return }
+        warmedAt = now
+        Task.detached(priority: .userInitiated) { [rpc, logsClient, backend = social.client] in
+            async let app: Void = rpc.warm()
+            async let logs: Void = logsClient.warm(first: 1)
+            async let social: Void = backend.warm()
+            _ = await (app, logs, social)
+        }
     }
 
     /// The last venue switch handed to the price service, so switches apply in the order they were read.
@@ -272,6 +327,16 @@ final class AppEnvironment {
             guard reset > 0, let self else { return }
             history.epochReset(env: self)
         }
+    }
+
+    /// Forgets every chain read the screens share (`chainCache`), and the shared head (`clock.head`, `HeadClock.forget`): a
+    /// transaction of the user's settled (`ConfirmationSheet`), or a pull to refresh asked for what is on chain now. The
+    /// next read of the launch list, the Moments lists, every price, the head they are measured from and Swap's route
+    /// search goes to the chain, and no read begun before this is joined or kept. What never changes (`chainStore`)
+    /// stays.
+    func invalidateChainReads() {
+        chainCache.invalidate()
+        clock.head.forget()
     }
 
     /// A transaction sender for `chain`: Monad reuses the app's configured endpoint (and multicall); every other

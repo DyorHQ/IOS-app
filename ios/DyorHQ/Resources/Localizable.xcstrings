@@ -7334,6 +7334,88 @@
         }
       }
     },
+    "Best price so far. Still checking %lld more venues." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Best price so far. Still checking %lld more venue."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Best price so far. Still checking %lld more venues."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Mejor precio hasta ahora. Aún se está consultando %lld plataforma más."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Mejor precio hasta ahora. Aún se están consultando %lld plataformas más."
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Meilleur prix pour l'instant. Encore %lld plateforme à consulter."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Meilleur prix pour l'instant. Encore %lld plateformes à consulter."
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "지금까지의 최적 가격이에요. 거래소 %lld곳을 더 확인하고 있어요."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "目前的最优价格。仍在查询另外 %lld 个交易场所。"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Bid" : {
       "comment" : "The order book's buy side, a row label: the price buyers bid (a noun) [tight]",
       "localizations" : {
@@ -9966,6 +10048,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在确认止盈…"
+          }
+        }
+      }
+    },
+    "Checking…" : {
+      "comment" : "Beside a swap venue that hasn't answered yet: its quote is still being asked for [tight]",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Consultando…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En cours…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확인 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查询中…"
           }
         }
       }
@@ -13960,6 +14071,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法读取 %@ 持有的资产。检查你的网络连接后重试。"
+          }
+        }
+      }
+    },
+    "Counted from this Moment's earliest editions only, so there may be more holders." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se cuentan solo a partir de las primeras ediciones de este Moment, así que puede haber más holders."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calculé uniquement à partir des premières éditions de ce Moment : il peut donc y avoir davantage de détenteurs."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Moment의 초기 에디션만으로 집계해서 홀더가 더 있을 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅根据此 Moment 最早的部分份数统计，因此持有者可能更多。"
           }
         }
       }
@@ -39675,6 +39814,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "状态"
+          }
+        }
+      }
+    },
+    "Still checking %lld more venues." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Still checking %lld more venue."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Still checking %lld more venues."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Aún se está consultando %lld plataforma más."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Aún se están consultando %lld plataformas más."
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Encore %lld plateforme à consulter."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Encore %lld plateformes à consulter."
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "거래소 %lld곳을 더 확인하고 있어요."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "仍在查询另外 %lld 个交易场所。"
+                }
+              }
+            }
           }
         }
       }

@@ -622,7 +622,7 @@ public actor WalletHistoryService {
     /// answers it, every scan says the chain wasn't reached, as each did when it asked on its own.
     public func refresh(wallet: Address, budget: LogsBudget, curves: Set<Address>, decimals: [Address: Int]) async -> WalletHistorySnapshot {
         let scans = await scans(wallet: wallet)
-        let latest = await store.latest()
+        let latest = await roundHead()
         let entries = await withTaskGroup(of: (String, HistoryEntry).self) { group in
             for scan in scans { group.addTask { [store] in (scan.id, await store.refresh(scan, wallet: wallet, budget: budget, at: latest)) } }
             var out: [String: HistoryEntry] = [:]
@@ -630,6 +630,18 @@ public actor WalletHistoryService {
             return out
         }
         return await snapshot(wallet: wallet, entries: entries, curves: curves, decimals: decimals, reading: true)
+    }
+
+    /// The head a round reads to: the session's shared head (`BlockClock.head`, `HeadClock`), on the app's endpoints with a
+    /// read raced across them (`RPCClient.isRead`) where the logs endpoints were asked one after another; read anew for
+    /// the round (`maxAge` 0), as a round started after a transaction settled must reach its block
+    /// (`WalletHistorySnapshot.fillsCoverage`), and handed to the readers that ask in the next second. When the app's
+    /// endpoints can't answer it, the logs endpoints' own (`HistoryStore.latest`); nil when neither does. The public
+    /// endpoints' heads agree to the block (rpc.monad.xyz, rpc1, rpc2 and rpc3, read side by side 2026-10-10), and a range
+    /// a node a few blocks behind refuses is asked again after a pause (`LogsRouter.headPause`).
+    private func roundHead() async -> BlockHeader? {
+        if let head = try? await clock.head.latest(maxAge: 0) { return head }
+        return await store.latest()
     }
 
     /// The records built from `entries`. `reading`: the pace may be measured and the swaps' facts read; false, nothing is

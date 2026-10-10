@@ -11,7 +11,9 @@ import UniformTypeIdentifiers
 /// exactly as the contract will apply them. The review is bound to what it shows: the publish carries the terms hash read
 /// with the terms on screen, so if they change before it confirms the factory refuses it and nothing is published.
 struct CreateMomentView: View {
-    /// The live policy; the Moments board refreshes it every 20 s.
+    /// The live policy, as the Moments board last read it: under a minute and a half old while the board polls (every
+    /// 20 s, terms shared for a minute, `ChainCache.TTL.terms`). A publish is bound to the terms its review shows
+    /// (`reviewedPolicy`), never to this.
     let policy: MomentPolicy?
     /// Called after the publish transaction settles; the new Moment is passed when it could be resolved.
     let onPublished: (MomentInfo?) -> Void

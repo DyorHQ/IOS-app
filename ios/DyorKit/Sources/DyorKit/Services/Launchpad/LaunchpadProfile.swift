@@ -11,7 +11,7 @@ import Foundation
 /// What a wallet holds of each launch coin, and the holder rewards waiting for it on each coin that shares its fees, as
 /// one read gave them (`LaunchpadService.holdings`) or a screen keeps them (`keeping`). Amounts are raw: a coin's balance
 /// in its 18-decimal units, a reward in its coin's pair asset.
-public struct LaunchHoldings: Sendable, Hashable {
+public struct LaunchHoldings: Sendable, Hashable, Codable {
     /// Each coin's balance, zero included; a coin whose balance couldn't be read, and that no earlier read kept, has none.
     public var balances: [Address: BigUInt]
     /// Each fee-sharing coin's pending holder rewards; a coin whose rewards couldn't be read, and that no earlier read

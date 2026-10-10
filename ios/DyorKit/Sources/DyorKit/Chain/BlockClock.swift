@@ -25,15 +25,21 @@ public actor BlockClock {
     static let plausible: ClosedRange<Double> = 0.05...5
 
     public let rpc: RPCClient
+    /// The chain head, read once for every reader that asks within a moment (`HeadClock`): this clock's own reads of it,
+    /// and those of every service the session's clock is handed to — prices (the day-ago block, charts) and the wallet's
+    /// history rounds.
+    public nonisolated let head: HeadClock
     private let sampleBlocks: UInt64
     private let now: @Sendable () -> Date
     private var measured: Double?
     private var failedAt: Date?
     private var measuring: Task<Double?, Never>?
 
-    /// A clock for the chain `rpc` reads. `now` is the device clock, only used to space out retries.
-    public init(rpc: RPCClient, sampleBlocks: UInt64 = BlockClock.sampleBlocks, now: @escaping @Sendable () -> Date = Date.init) {
+    /// A clock for the chain `rpc` reads. `now` is the device clock, only used to space out retries and to age a head.
+    /// `head`: where the latest header comes from (nil: a `HeadClock` of `rpc`).
+    public init(rpc: RPCClient, sampleBlocks: UInt64 = BlockClock.sampleBlocks, now: @escaping @Sendable () -> Date = Date.init, head: HeadClock? = nil) {
         self.rpc = rpc
+        self.head = head ?? HeadClock(rpc: rpc, now: now)
         self.sampleBlocks = max(1, sampleBlocks)
         self.now = now
     }
@@ -41,6 +47,7 @@ public actor BlockClock {
     /// A clock that already knows the rate, as a test or a fork rehearsal sets it: it never reads headers for it.
     init(rpc: RPCClient, measured secondsPerBlock: Double) {
         self.rpc = rpc
+        head = HeadClock(rpc: rpc)
         sampleBlocks = Self.sampleBlocks
         now = Date.init
         measured = secondsPerBlock
@@ -61,8 +68,8 @@ public actor BlockClock {
         if let measured { return measured }
         if let failedAt, now().timeIntervalSince(failedAt) < Self.retryAfter { return Self.fallbackSecondsPerBlock }
         if let measuring { return await measuring.value ?? Self.fallbackSecondsPerBlock }
-        let rpc = rpc, sampleBlocks = sampleBlocks
-        let task = Task { await Self.measure(rpc: rpc, sampleBlocks: sampleBlocks) }
+        let rpc = rpc, head = head, sampleBlocks = sampleBlocks
+        let task = Task { await Self.measure(rpc: rpc, head: head, sampleBlocks: sampleBlocks) }
         measuring = task
         let rate = await task.value
         measuring = nil
@@ -80,14 +87,14 @@ public actor BlockClock {
         Self.blocks(in: seconds, secondsPerBlock: await secondsPerBlock())
     }
 
-    /// The block mined closest to `date`, from `head` (the latest block, read when not given). The first estimate counts
-    /// back from the head at the session's rate; then that block's own timestamp is read and the estimate moved once by
-    /// what it is off, so a pace that changed over the day (a slower hour) doesn't show in a 24h change. When that second
-    /// read fails the first estimate stands. A date at or after the head's is the head. Throws only when the head can't
-    /// be read.
+    /// The block mined closest to `date`, from `head` (the latest block, from `HeadClock` when not given). The first
+    /// estimate counts back from the head at the session's rate; then that block's own timestamp is read and the estimate
+    /// moved once by what it is off, so a pace that changed over the day (a slower hour) doesn't show in a 24h change. When
+    /// that second read fails the first estimate stands. A date at or after the head's is the head. Throws only when the
+    /// head can't be read.
     public func block(at date: Date, head: BlockHeader? = nil) async throws -> UInt64 {
         let anchor: BlockHeader
-        if let head { anchor = head } else { anchor = try await rpc.block(.latest) }
+        if let head { anchor = head } else { anchor = try await self.head.latest() }
         let rate = await secondsPerBlock()
         let target = date.timeIntervalSince1970
         let estimate = Self.estimate(target: target, anchor: anchor, secondsPerBlock: rate)
@@ -142,9 +149,10 @@ public actor BlockClock {
         return moved >= Double(head) ? head : UInt64(moved)
     }
 
-    /// One measurement: the latest header and the one `sampleBlocks` before it (or block 0 on a younger chain).
-    private static func measure(rpc: RPCClient, sampleBlocks: UInt64) async -> Double? {
-        guard let head = try? await rpc.block(.latest), head.number > 0 else { return nil }
+    /// One measurement: the latest header (`HeadClock`) and the one `sampleBlocks` before it (or block 0 on a younger
+    /// chain).
+    private static func measure(rpc: RPCClient, head clock: HeadClock, sampleBlocks: UInt64) async -> Double? {
+        guard let head = try? await clock.latest(), head.number > 0 else { return nil }
         let back = min(sampleBlocks, head.number)
         guard let older = try? await rpc.block(.number(head.number - back)) else { return nil }
         return rate(newer: head, older: older)

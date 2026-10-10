@@ -97,6 +97,8 @@ struct RootView: View {
             if phase == .active {
                 session.mera.enteredForeground()
                 settings.appearance.apply()
+                // The connections the reads below go over, opened again (iOS closes idle ones while the app is away).
+                env.warmConnections()
                 // Back from the background: price alerts and open positions are checked at once (a Face ID or passkey
                 // prompt, which only makes the scene inactive, changes nothing).
                 env.alerts.enteredForeground()
@@ -136,6 +138,8 @@ struct RootView: View {
             env.history.start(env: env, wallet: session.address)
             // My Launchpad keeps one wallet's state between openings: another wallet, or a sign-out, clears it.
             env.launchpadProfile.follow(session.address)
+            // So does the Portfolio, Total Volume's figures and those saved for the wallet among them.
+            env.portfolio.follow(session.address)
             // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest (RS-2).
             env.bridgeTracker.bind(owner: session.address)
             // Perpl trading and the notification center follow the account at once, not after the backend sign-in's

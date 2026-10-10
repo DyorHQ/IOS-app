@@ -208,7 +208,8 @@ public actor HistoryStore {
     }
 
     /// The chain head, from the first endpoint that answers (`LogsRouter.latest`); nil when none does. A round of every
-    /// scan reads it once and hands it to each (`refresh(_:wallet:budget:at:)`, `WalletHistoryService.refresh`).
+    /// scan reads the session's shared head once and hands it to each (`refresh(_:wallet:budget:at:)`,
+    /// `WalletHistoryService.roundHead`), and this one only when that can't be read.
     public func latest() async -> BlockHeader? {
         await router.latest()
     }

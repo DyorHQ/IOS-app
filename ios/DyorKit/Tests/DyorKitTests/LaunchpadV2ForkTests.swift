@@ -385,7 +385,8 @@ final class LaunchpadV2ForkTests: V2ForkCase {
             XCTAssertEqual(error as? LaunchpadError, .retiredLaunchpad)
         }
 
-        // Swap asks no venue to quote buying it.
+        // Swap shows no venue's quote for buying it: the round ends refused under every venue (and never asks Kuru Flow,
+        // `SwapRetiredLaunchpadTests`).
         let coin = Token(address: retired.token, symbol: retired.symbol, name: retired.name, decimals: 18, isLaunchpad: true)
         let engine = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: fork.addresses))
         let refusal = await engine.buyRefusal(coin)

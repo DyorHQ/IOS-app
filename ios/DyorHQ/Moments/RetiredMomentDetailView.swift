@@ -13,9 +13,17 @@ struct RetiredMomentDetailView: View {
     @State var info: MomentInfo
     var onChanged: () -> Void = {}
     @Environment(Session.self) private var session
+    /// The time the page is drawn at: it moves on only when what the page shows of the time changes (`MomentPageTimes`:
+    /// the vested shares at the monthly cliffs, the window closing on a Moment that never graduated).
     @State private var clock = Clock()
     @State private var account: MomentAccountView?
-    @State private var loadError: String?
+    /// Why the latest read of the Moment, or of the account's stake in it, failed; each keeps what it last showed.
+    @State private var infoError: String?
+    @State private var accountError: String?
+    /// The page's reads have answered once: the Share button looks the Moment's name up only then (`MomentShareButton`).
+    @State private var loaded = false
+    /// The page's reads asked for again (Retry), which key its read (`.task(id:)`): closing the page cancels it.
+    @State private var reloads = 0
     @State private var action: RetiredMomentAction?
 
     private var m: Moment { info.moment }
@@ -34,10 +42,10 @@ struct RetiredMomentDetailView: View {
         .navigationTitle(info.symbol)
         .navigationBarTitleDisplayMode(.inline)
         // A retired Moment can still be shown around: its link opens this claim-only page.
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { MomentShareButton(info: info) } }
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { MomentShareButton(info: info, ready: loaded) } }
         .refreshable { await load() }
-        .task { await clock.run() }
-        .task { await load() }
+        .task { await clock.run(showing: { MomentPageTimes(info, at: $0) }) }
+        .task(id: reloads) { await load() }
         .sheet(item: $action) { which in sheet(for: which) }
     }
 
@@ -80,7 +88,13 @@ struct RetiredMomentDetailView: View {
                     }
                     .font(.footnote).foregroundStyle(.secondary)
                 }
-                if let loadError { InlineError(message: loadError) }
+                if let loadError = infoError ?? accountError {
+                    HStack(alignment: .firstTextBaseline) {
+                        InlineError(message: loadError)
+                        Spacer(minLength: 8)
+                        Button("Retry") { reloads += 1 }.font(.footnote.weight(.semibold))
+                    }
+                }
             }
             .padding(.vertical, 4)
         }
@@ -204,17 +218,34 @@ struct RetiredMomentDetailView: View {
 
     // MARK: Loading (this cohort only)
 
+    /// The Moment and the account's stake in it, side by side, each shown as it lands: the stake takes only what is fixed
+    /// at publish from the Moment the page was given (`RetiredMoments.accountView`). Until build 23 the stake was read
+    /// after the Moment, and one failure hid both.
     private func load() async {
+        async let moment: Void = loadMoment()
+        async let stake: Void = loadAccount()
+        _ = await (moment, stake)
+        if !Task.isCancelled { loaded = true }
+    }
+
+    private func loadMoment() async {
         do {
-            if let fresh = try await cohort.info(id: m.id), fresh.key == info.key { info = fresh }
-            if let address = session.address {
-                account = try await cohort.accountView(info, account: address)
-            } else {
-                account = nil
-            }
-            loadError = nil
+            if let fresh = try await cohort.info(id: m.id), fresh.key == info.key, fresh != info { info = fresh }
+            infoError = nil
         } catch {
-            loadError = describe(error)
+            if !Task.isCancelled { infoError = describe(error) }
+        }
+    }
+
+    private func loadAccount() async {
+        guard let address = session.address else { account = nil; accountError = nil; return }
+        do {
+            let read = try await cohort.accountView(info, account: address)
+            guard !Task.isCancelled, session.address == address else { return }
+            account = read
+            accountError = nil
+        } catch {
+            if !Task.isCancelled { accountError = describe(error) }
         }
     }
 }

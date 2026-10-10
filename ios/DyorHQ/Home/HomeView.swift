@@ -53,25 +53,41 @@ struct HomeView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .animation(.snappy, value: funding.phase)
+                // Nothing here is animated by a saved line: an animation keyed to one animates whatever changes with it —
+                // the figures a read brought, the screen's first layout, a `Paragraph`'s words — and drew the Moments board
+                // garbled on its first opening (build 23 speed work). Home's own line sits under the balance, beside Total
+                // Volume's column, so the card keeps its height when it goes while that column is the taller (`savedLine`).
             }
             .background(Color(.systemGroupedBackground))
             .scrollIndicators(.hidden)
             .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top, spacing: 0) { HomeHeader(showSearch: $showSearch, error: model.error ?? historyError, updatedAt: model.updatedAt) }
+            .safeAreaInset(edge: .top, spacing: 0) { HomeHeader(showSearch: $showSearch, error: model.error ?? volumeError, updatedAt: model.updatedAt) }
             .navigationDestination(for: MarketRow.self) { row in TokenDetailView(row: row) }
             .navigationDestination(item: $searchTarget) { row in TokenDetailView(row: row) }
             // A pull awaits Home's own reads, side by side, never a round of the history: that reads on behind the screen
             // (`HistoryModel.kick`), and Total Volume follows it (`env.history.version`).
             // The reads run in a task of their own: SwiftUI cancels a pull's action when the list redraws under it (the
             // loads' own `loading` changes do), and a cancelled load publishes nothing, so a pull used to end with Home
-            // unchanged. The spinner still waits for both.
+            // unchanged. The spinner still waits for both. The reads the screens share are read again first
+            // (`invalidateChainReads`): a pull asks for what is on chain now.
             .refreshable {
+                env.invalidateChainReads()
                 env.history.kick(env: env)
                 await Task {
                     async let home: () = model.load(env: env, address: session.address)
                     async let portfolio: () = env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: true, passkey: session.isPasskeyAccount)
                     _ = await (home, portfolio)
                 }.value
+            }
+            // What was saved for the wallet — Home's parts and the Portfolio's Total Volume — is in Home's first frame,
+            // never placeholders under figures the phone has (`HomeModel.showSaved`, `PortfolioModel.showSaved`): small
+            // files on the device, read here, before that frame, rather than in the loads' tasks, which start after it.
+            // Never animated: nothing moves as they come in.
+            .onAppear {
+                withTransaction(\.disablesAnimations, true) {
+                    model.showSaved(env: env, address: session.address)
+                    env.portfolio.showSaved(env: env, address: session.address)
+                }
             }
             .task(id: session.address) { await model.poll(env: env, address: session.address) }
             .task(id: session.address) { await env.portfolio.load(env: env, address: session.address, perplKey: perplTrading.key, force: false, passkey: session.isPasskeyAccount) }
@@ -101,10 +117,11 @@ struct HomeView: View {
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showTransfer) { TransferSheet() }
             .sheet(isPresented: $showSearch) {
-                TokenPickerSheet(selected: .mon, balances: Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address), tradableOnly: false,
+                // Balances only once read in this session: never saved ones beside the search.
+                TokenPickerSheet(selected: .mon, balances: model.reads.isSaved(.spot) ? [:] : Dictionary(uniqueKeysWithValues: model.rows.map { ($0.token.address, $0.balance) }), universe: KnownTokenStore.universe(owner: session.address), tradableOnly: false,
                                  unverified: KnownTokenStore.unverified(owner: session.address)) { token in
                     // Open the token's page; a token outside the priced list gets a bare row (price loads on the page).
-                    searchTarget = model.rows.first { $0.token.address == token.address } ?? MarketRow(token: token, usd: nil, change24h: nil, balance: 0)
+                    searchTarget = model.rows.first { $0.token.address == token.address }.map(pageRow) ?? MarketRow(token: token, usd: nil, change24h: nil, balance: 0)
                 }
             }
         }
@@ -134,6 +151,7 @@ struct HomeView: View {
                         ChangeBadge(value: unread ? 0 : model.change24h ?? 0)
                     }
                     .unreadFigure(unread)
+                    if let savedAt = model.savedAt { savedLine(savedAt) }
                 }
                 Spacer(minLength: 8)
                 totalVolume
@@ -166,33 +184,42 @@ struct HomeView: View {
         return total - total / (1 + change / 100)
     }
 
-    /// The wallet's chain history couldn't be read to the head (the Portfolio says the same, in full): the header's
-    /// warning, so a Total Volume short of some trades is never taken for the whole.
-    private var historyError: String? {
-        env.portfolio.historyUnreachable ? tr("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.") : nil
+    /// The wallet's chain history couldn't be read to the head, or the Portfolio's load landed with part of what Total
+    /// Volume is built from unread — a launchpad, the Moments, a past cohort, the prices (`PortfolioModel.error`; the
+    /// Portfolio says the same, in full): the header's warning, so a Total Volume short of some trades is never taken for
+    /// the whole, and one saved when last read in full, kept meanwhile (`PortfolioModel.showsLive`), is said to be beside
+    /// why.
+    private var volumeError: String? {
+        env.portfolio.historyUnreachable || env.portfolio.error != nil
+            ? tr("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.") : nil
     }
 
     /// Total Volume for the period, right-aligned, with the period menu (24h · 7 days · 30 days · All) under it —
-    /// the same figure the Portfolio breaks down by section. Tapping the number opens the Portfolio. A placeholder
-    /// until the Portfolio has loaded and the chain history has been read at all (never "$0.00" ahead of it): the
-    /// figure then follows the history as it fills in, said to be read on until the scans it is built from
+    /// the same figure the Portfolio breaks down by section. Tapping the number opens the Portfolio. Until the Portfolio
+    /// has loaded and the chain history has been read at all, the figure saved when the wallet was last read in full,
+    /// said to be ("Updated 3 hr ago", `volumeSavedAt`), else a placeholder (never "$0.00" ahead of it): the figure then
+    /// follows the history as it fills in, said to be read on until the scans it is built from
     /// (`WalletHistoryScans.volume`) have read the period's own window — the last day long before the last month.
     private var totalVolume: some View {
         @Bindable var router = router
-        let unread = session.address != nil && env.history.snapshot.anchor == nil
+        let volume = shownVolume
         return VStack(alignment: .trailing, spacing: 4) {
             Button { Haptics.tap(); router.presented = .portfolio } label: {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("Total Volume").font(.subheadline).foregroundStyle(.secondary)
-                    Text(PriceFormat.usdValue(env.portfolio.totals(router.period).volume))
+                    Text(PriceFormat.usdValue(volume ?? 0))
                         .font(.headline).monospacedDigit().foregroundStyle(.primary)
-                        .contentTransition(.numericText(value: env.portfolio.totals(router.period).volume))
-                        .redacted(reason: (env.portfolio.loading && !env.portfolio.hasLoaded) || unread ? .placeholder : [])
+                        .contentTransition(.numericText(value: volume ?? 0))
+                        .unreadFigure(volume == nil)
                 }
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Total volume \(router.period.label)")
-            if env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {
+            if let volumeSavedAt {
+                // The saved figure says when it was read right under it: Home's own parts can all be read again while the
+                // Portfolio's heavier load hasn't landed, and its line under the balance is theirs alone.
+                SavedLine(date: volumeSavedAt, reading: env.portfolio.loading)
+            } else if liveVolume, env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {
                 // The figure follows the history as it fills in: how far the period's window has got, so a figure short
                 // of older trades is never taken for the whole. Not before the store's instant read has landed (`read`):
                 // the figure is a placeholder until then, and the line would flash "0%".
@@ -215,6 +242,29 @@ struct HomeView: View {
             }
             .accessibilityLabel("Volume period")
         }
+    }
+
+    /// Total Volume shows the Portfolio's figure once its load has landed with the history's first read (`liveVolume`),
+    /// unless that load left part of it unread while a figure saved when the wallet was last read in full stays
+    /// (`PortfolioModel.showsLive`); until then the saved one (`PortfolioModel.savedTotals`), said to be under it
+    /// (`volumeSavedAt`); else nil, a placeholder.
+    private var liveVolume: Bool { env.portfolio.showsLive(router.period) && (session.address == nil || env.history.snapshot.anchor != nil) }
+    private var shownVolume: Double? {
+        liveVolume ? env.portfolio.totals(router.period).volume : env.portfolio.savedTotals(router.period)?.volume
+    }
+
+    /// When the saved Total Volume shown was read; nil while the figure is the Portfolio's load (`liveVolume`), or a
+    /// placeholder.
+    private var volumeSavedAt: Date? { liveVolume ? nil : env.portfolio.savedAt(router.period) }
+
+    /// Said under the balance and its day's move while a part of the wallet shows what was saved when it was last read
+    /// (`HomeModel.savedAt`), with a spinner while Home reads them again: a saved figure is never taken for a fresh one.
+    /// Total Volume says its own under it (`volumeSavedAt`). In the balance's column, beside Total Volume's: while that
+    /// column is the taller — Total Volume saying when its own saved figure was read, or how far the history has got, as
+    /// on a warm launch, where Home's parts are read again first — the card keeps its height when the line goes, and
+    /// nothing below it moves. Never animated (`HomeView.body`).
+    private func savedLine(_ date: Date) -> some View {
+        SavedLine(date: date, reading: model.loading)
     }
 
     /// `value` nil: the part it comes from isn't read for the wallet yet, so a placeholder (`unreadFigure`).
@@ -289,7 +339,7 @@ struct HomeView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(tokens.prefix(6).enumerated()), id: \.element.id) { index, row in
-                        NavigationLink(value: row) { TokenListRow(rank: index + 1, row: row, rankWidth: rankWidth) }
+                        NavigationLink(value: pageRow(row)) { TokenListRow(rank: index + 1, row: row, rankWidth: rankWidth) }
                             .buttonStyle(.plain)
                         if index < min(5, tokens.count - 1) { Divider().padding(.leading, TokenListRow.textInset(rankWidth: rankWidth)) }
                     }
@@ -318,17 +368,19 @@ struct HomeView: View {
             switch holdingTab {
             case .spot:
                 if model.holdings.isEmpty {
-                    if model.reads.isRead(.spot) { holdingsEmpty("No spot balances", "Buy or swap a token and it appears here.") }
+                    if model.reads.hasFigures(.spot) { holdingsEmpty("No spot balances", "Buy or swap a token and it appears here.") }
                     else { holdingsUnreadRow(.spot, reading: "Reading your balances…") }
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(model.holdings.enumerated()), id: \.element.id) { index, row in
-                            NavigationLink(value: row) { HoldingRow(row: row, unverified: model.unverified.contains(row.id)) }.buttonStyle(.plain)
+                            NavigationLink(value: pageRow(row)) { HoldingRow(row: row, unverified: model.unverified.contains(row.id)) }.buttonStyle(.plain)
                             if index < model.holdings.count - 1 { Divider().padding(.leading, 44) }
                         }
                     }
                 }
+                savedUnreadRow(.spot)
             case .perps:
+                // The positions are never saved (only the equity is): "none" only once they were read in this session.
                 if model.positions.isEmpty {
                     if model.reads.isRead(.perps) { holdingsEmpty("No open positions", "Open a perp from the Trade tab.") }
                     else { holdingsUnreadRow(.perps, reading: "Reading your positions…") }
@@ -343,7 +395,7 @@ struct HomeView: View {
                 }
             case .launchpad:
                 if model.launchHoldings.isEmpty {
-                    if model.reads.isRead(.launch) { holdingsEmpty("No launch holdings", "Buy or launch a coin on the Launch tab.") }
+                    if model.reads.hasFigures(.launch) { holdingsEmpty("No launch holdings", "Buy or launch a coin on the Launch tab.") }
                     else { holdingsUnreadRow(.launch, reading: "Reading your balances…") }
                 } else {
                     VStack(spacing: 0) {
@@ -351,32 +403,72 @@ struct HomeView: View {
                         ForEach(Array(model.launchHoldings.enumerated()), id: \.element.id) { index, holding in
                             // Every launch holding opens its own Launch page, never Swap: a coin still on a curve (the
                             // live launchpad's or a retired one's) trades there, and a graduated one's page leads to Swap.
-                            Button { router.openLaunch(holding.launch) } label: { LaunchHoldingRow(holding: holding, value: totals.value(of: holding.id, units: holding.units)) }
+                            Button { openLaunch(holding.launch) } label: { LaunchHoldingRow(holding: holding, value: totals.value(of: holding.id, units: holding.units)) }
                                 .buttonStyle(.plain)
                             if index < model.launchHoldings.count - 1 { Divider().padding(.leading, 44) }
                         }
                     }
-                    // Read from the launchpads read so far, while one never has been: the rest are said to be missing.
+                    // Read from the launchpads read so far, while one never has been, or saved when last read and not read
+                    // since: the rest are said to be missing.
                     if model.reads.status(.launch) == .failed { holdingsRetryRow("Some launch coins couldn't be read just now — showing the last ones read.") }
                 }
+                if model.launchHoldings.isEmpty { savedUnreadRow(.launch) }
             case .moments:
                 if model.momentRows.isEmpty {
-                    if model.reads.isRead(.moments) { holdingsEmpty("No Moments yet", "Collect a Moment on the Moments tab and your editions and coins appear here.") }
+                    if model.reads.hasFigures(.moments) { holdingsEmpty("No Moments yet", "Collect a Moment on the Moments tab and your editions and coins appear here.") }
                     else { holdingsUnreadRow(.moments, reading: "Reading your Moments…") }
                 } else {
                     VStack(spacing: 0) {
                         let totals = model.totals
                         ForEach(Array(model.momentRows.enumerated()), id: \.element.id) { index, row in
-                            Button { router.openMoment(row.moment) } label: { MomentHoldingRow(row: row, value: totals.value(of: row.moment.moment.coin, units: HomeModel.coins(row))) }
+                            Button { openMoment(row.moment) } label: { MomentHoldingRow(row: row, value: totals.value(of: row.moment.moment.coin, units: HomeModel.coins(row))) }
                                 .buttonStyle(.plain)
                             if index < model.momentRows.count - 1 { Divider().padding(.leading, 44) }
                         }
                     }
                 }
+                savedUnreadRow(.moments)
             }
         }
         .padding(16)
         .cardBackground()
+    }
+
+    /// The row a token's page opens with. While Spot shows what was saved when the wallet was last read
+    /// (`HomeReadState.isSaved`), the token alone: the page reads its price and chart itself, and shows no balance not read
+    /// in this session — a token page shows the row it is given as current.
+    private func pageRow(_ row: MarketRow) -> MarketRow {
+        model.reads.isSaved(.spot) ? MarketRow(token: row.token, usd: nil, change24h: nil, balance: 0) : row
+    }
+
+    /// A launch holding's page. One saved when the wallet was last read (`HomeReadState.isSaved`) opens by reference, so
+    /// the page reads it now: a launch page shows the launch it is given as current — its price, its phase, which trades
+    /// are open.
+    private func openLaunch(_ launch: Launch) {
+        if model.reads.isSaved(.launch) {
+            router.openLaunch(LaunchReference(token: launch.token, factory: launch.factory))
+        } else {
+            router.openLaunch(launch)
+        }
+    }
+
+    /// A Moment holding's page. One saved when the wallet was last read (`HomeReadState.isSaved`) opens by its link, so the
+    /// page reads the Moment now (`MomentLinkView`): a Moment's page shows the Moment it is given as current — its state,
+    /// its reserve, which actions are open.
+    private func openMoment(_ moment: MomentInfo) {
+        if model.reads.isSaved(.moments), let link = MomentLink(key: moment.key) {
+            router.openMoment(link)
+        } else {
+            router.openMoment(moment)
+        }
+    }
+
+    /// A part showing what was saved when it was last read whose read now failed (`HomeReadState.isSaved`, `.failed`):
+    /// its saved figures stay, said to be saved above the balance, and the tab says the read failed, with Retry.
+    @ViewBuilder private func savedUnreadRow(_ part: HomeReadState.Part) -> some View {
+        if model.reads.isSaved(part), model.reads.status(part) == .failed {
+            holdingsRetryRow(HomeModel.unreadMessage(part))
+        }
     }
 
     private func holdingsEmpty(_ title: LocalizedStringKey, _ detail: LocalizedStringResource) -> some View {
@@ -681,8 +773,8 @@ extension View {
 
 /// A token as the Home screen shows it: price, movement, and the signed-in wallet's balance. `info` is the price read as
 /// it came (a DyorHQ coin's "vs MON", "New" and price source); `notTradingYet` marks a Moment still collecting, which
-/// has no price yet.
-struct MarketRow: Identifiable, Hashable {
+/// has no price yet. Codable: Home saves its rows as it last showed them (`HomeModel.Saved`).
+struct MarketRow: Identifiable, Hashable, Codable {
     let token: Token
     let usd: Double?
     let change24h: Double?
@@ -698,7 +790,7 @@ struct MarketRow: Identifiable, Hashable {
 final class HomeModel {
     /// A launch coin the wallet holds (or created), with the Launch tab's price for it: Spot's, else its own decimal
     /// price (`DyorPrice.launch`); nil when neither is known.
-    struct LaunchHolding: Identifiable, Hashable {
+    struct LaunchHolding: Identifiable, Hashable, Codable {
         let launch: Launch
         let balance: BigUInt
         let priceUSD: Double?
@@ -734,16 +826,25 @@ final class HomeModel {
     /// Tokens the wallet was sent rather than chose (`KnownTokenStore.unverified`): marked in holdings, and never
     /// ranked in Top Tokens.
     private(set) var unverified: Set<Address> = []
+    /// When each part on screen was read for the wallet: in this session (`record`), or, for a part still showing what was
+    /// saved, when that was read (`restoreSaved`). What Home saves carries these times (`save`). Not observed: `savedAt`
+    /// changes only with `reads`, which is.
+    @ObservationIgnored private var readAt: [HomeReadState.Part: Date] = [:]
     /// Whose data the model holds.
     private var loadedFor: Address?
     /// The launchpads whose launches have been read at least once, whoever is signed in (as `launches`, which they fill):
     /// one that couldn't be read keeps only the launches an earlier read found (`LaunchListing.keeping`), so the Launch
-    /// tab is read in full only once every launchpad has been.
+    /// tab is read in full only once every launchpad has been. Only reads in this session count: `launches` taken from a
+    /// saved Home empties it (`restoreSaved`).
     @ObservationIgnored private var listedFactories: Set<Address> = []
     /// The registry taking in the coins of the launches and Moments the last load read (`DyorCoinsModel.ingest`).
     @ObservationIgnored private var ingesting: Task<Void, Never>?
 
     var holdings: [MarketRow] { rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) } }
+
+    /// When the oldest part still showing what was saved for the wallet was read (`restoreSaved`): Home says it ("Updated
+    /// 3 min ago") until every part on screen was read in this session, and then this is nil.
+    var savedAt: Date? { HomeReadState.Part.allCases.filter { reads.isSaved($0) }.compactMap { readAt[$0] }.min() }
 
     /// Spot, Launch and Moments with every address counted once (`HomeTotals`): a DyorHQ coin stays listed in Spot but
     /// counts under Launch or Moments when that tab lists it, at the one price Spot shows for it.
@@ -841,82 +942,124 @@ final class HomeModel {
         await load(env: env, address: address)
     }
 
+    /// Takes in `address` before Home's first frame (`HomeView`'s `onAppear`) and at the start of every load: another
+    /// account's figures go, and what was saved for this one when it was last read — a small file on the device, read on
+    /// the spot — shows at once, each part said to be saved until its own read replaces it (`restoreSaved`). So a warm
+    /// launch opens on the wallet's figures rather than on placeholders until the first load's task starts.
+    func showSaved(env: AppEnvironment, address: Address?) {
+        // Another account: nothing of the previous one's may stay on screen, even when a read below fails. What was saved
+        // for this one when it was last read shows at once instead, each part said to be saved until its own read below
+        // replaces it (`restoreSaved`).
+        if address != loadedFor {
+            rows = []; launchHoldings = []; positions = []; perpEquity = nil; momentRows = []; updatedAt = nil; reads = HomeReadState(); readAt = [:]
+            loadedFor = address
+            restoreSaved(env: env, address: address)
+        }
+    }
+
     func load(env: AppEnvironment, address: Address?) async {
         loading = true
         defer { loading = false }
-        // Another account: nothing of the previous one's may stay on screen, even when a read below fails.
-        if address != loadedFor {
-            rows = []; launchHoldings = []; positions = []; perpEquity = nil; momentRows = []; updatedAt = nil; reads = HomeReadState()
-            loadedFor = address
-        }
+        // Already done before Home's first frame (`showSaved`), unless the account changed since.
+        showSaved(env: env, address: address)
+        // What this load reads is saved only while this device's data isn't erased meanwhile (`SavedScreens.epoch`).
+        let epoch = env.savedScreens.epoch
         // The curated list plus anything the wallet has acquired (swapped into, launched), so held tokens like an
         // RWA or a launched coin still show up with a balance and a price.
         let tokens = KnownTokenStore.universe(owner: address).filter { $0.symbol != "WMON" }
-        // Which of them are DyorHQ coins, from their factories (MON, the curated tokens and coins already known cost
-        // nothing): their pictures and labels, and the wallet's own coins below.
-        async let proven: Void = env.dyorCoins.prove(tokens)
-        async let prices = env.prices.prices(for: tokens)
-        async let balances = walletBalances(env: env, address: address, tokens: tokens)
-        async let launches = env.launchpad.launchListing(limit: 30)
-        async let perps = loadPerps(env: env, address: address)
-        async let moments = loadMoments(env: env, address: address)
+        // The tokens the wallet was sent rather than chose, as the device has them now: the rows published below are
+        // marked with them; the coins it made are taken out once the registry has read them (after the reads).
+        unverified = KnownTokenStore.unverified(owner: address)
+        // Each part is published as its own read lands, never held back by the slowest (`publishSpot`, `publishLaunch`,
+        // `publishPerps`, `publishMoments`): its tab and its figure in the split fill in one by one. A load cancelled
+        // part-way (the screen went away, the account changed) publishes nothing more (security audit 2026-09-26, RS-10):
+        // what the rest of its reads answer is dropped.
         var priceMap: [Address: PriceInfo]?
         var priceError: Error?
-        do { priceMap = try await prices } catch { priceError = error }
-        // Moments still collecting, as the read just made found them: "Not trading yet" in place of a price.
-        let notTrading = priceMap == nil ? [] : await env.prices.notTradingYet(tokens)
-        let balanceMap = await balances
-        // A launchpad whose launches couldn't be read keeps its last good ones, and the screen says so.
-        let listing = await launches
-        let launchList = listing.keeping(self.launches)
-        let perpState = await perps
-        let momentState = await moments
+        var notTrading: Set<Address> = []
+        var pricesIn = false
+        var balanceMap: [Address: BigUInt]?
+        var balancesIn = false
+        var listing: LaunchListing?
+        var launchList: [Launch] = []
+        var holdingsAsked = false
+        var momentState: [MomentPortfolioRow]?
+        await withTaskGroup(of: Answer.self) { group in
+            // Which of them are DyorHQ coins, from their factories (MON, the curated tokens and coins already known cost
+            // nothing): their pictures and labels, and the wallet's own coins below.
+            group.addTask { await env.dyorCoins.prove(tokens); return .proven }
+            group.addTask { await Self.readPrices(env: env, tokens: tokens) }
+            group.addTask { .balances(await self.walletBalances(env: env, address: address, tokens: tokens)) }
+            group.addTask { .listing(await env.launchpad.launchListing(limit: 30)) }
+            group.addTask { .perps(await self.loadPerps(env: env, address: address)) }
+            group.addTask { .moments(await self.loadMoments(env: env, address: address)) }
+            while let answer = await group.next() {
+                let stands = !Task.isCancelled && address == loadedFor
+                switch answer {
+                case .proven:
+                    break
+                case let .prices(map, error, collecting):
+                    priceMap = map; priceError = error; notTrading = collecting; pricesIn = true
+                    if stands, balancesIn { publishSpot(tokens: tokens, priceMap: priceMap, balanceMap: balanceMap, notTrading: notTrading) }
+                case .balances(let map):
+                    balanceMap = map; balancesIn = true
+                    if stands, pricesIn { publishSpot(tokens: tokens, priceMap: priceMap, balanceMap: balanceMap, notTrading: notTrading) }
+                case .listing(let read):
+                    listing = read
+                    // A launchpad whose launches couldn't be read keeps its last good ones, and the screen says so.
+                    launchList = read.keeping(self.launches)
+                    if stands {
+                        listedFactories.formUnion(read.factories.filter { read.unread[$0] == nil })
+                        self.launches = launchList
+                    }
+                case .launchHoldings(let holdings):
+                    if stands, let listing { publishLaunch(holdings, priceMap: priceMap, listing: listing) }
+                case .perps(let state):
+                    if stands { publishPerps(state) }
+                case .moments(let state):
+                    momentState = state
+                    if stands { publishMoments(state) }
+                }
+                // The launch coins once the launches and the prices that value them are in: one balance read over them.
+                // Without prices they can't be valued, so the part isn't read, and keeps what it showed.
+                if stands, !holdingsAsked, pricesIn, let listing {
+                    holdingsAsked = true
+                    if let priceMap {
+                        let launches = launchList
+                        group.addTask { .launchHoldings(await self.loadLaunchHoldings(env: env, address: address, launches: launches, priceMap: priceMap)) }
+                    } else {
+                        publishLaunch(nil, priceMap: nil, listing: listing)
+                    }
+                }
+            }
+        }
         // The registry takes in the coins of the launches and Moments just read without holding the rows back: their
         // pictures and labels follow once they are proven, as the coins model re-renders the rows. One at a time, so a
         // slow node never stacks them up across refreshes.
         if ingesting == nil {
+            let readLaunches = launchList
             let readMoments = momentState?.map(\.moment) ?? []
             ingesting = Task {
-                await env.dyorCoins.ingest(launchList)
+                await env.dyorCoins.ingest(readLaunches)
                 await env.dyorCoins.ingest(readMoments)
                 ingesting = nil
             }
         }
-        let holdings = await loadLaunchHoldings(env: env, address: address, launches: launchList, priceMap: priceMap ?? [:])
-        await proven
         let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)
         // A read that failed keeps what the last good one showed, and says so; a load cancelled part-way (the screen
-        // went away, the account changed) publishes nothing (security audit 2026-09-26, RS-10).
-        guard !Task.isCancelled, address == loadedFor else { return }
+        // went away, the account changed) publishes nothing more (security audit 2026-09-26, RS-10).
+        guard !Task.isCancelled, address == loadedFor, let listing else { return }
         // The coins the registry says this wallet made are its own, not Unverified: recorded as chosen through the helper
         // the Portfolio and the Send sheet use (`WalletTokens.markOwnCoins`). A coin it was only sent stays Unverified, out
         // of Top Tokens (IOST-12).
         if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }
         unverified = KnownTokenStore.unverified(owner: address)
-        // Each part read for the wallet, or not (`HomeReadState`). Its tokens need their balances and prices both; the
-        // launch coins their balances and prices, read over every launchpad's launches; Perps and Moments their own read.
-        // Set once, and only when it changed, so an unchanged refresh doesn't redraw what follows it.
-        listedFactories.formUnion(listing.factories.filter { listing.unread[$0] == nil })
-        var next = reads
-        next.record(.spot, answered: priceMap != nil && balanceMap != nil)
-        next.record(.perps, answered: perpState != nil)
-        next.record(.launch, answered: holdings != nil && priceMap != nil && listing.factories.allSatisfy(listedFactories.contains))
-        next.record(.moments, answered: momentState != nil)
-        if next != reads { reads = next }
-        if let priceMap {
-            let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
-            rows = tokens.map { token in
-                // A price that isn't a positive number is none: the row shows "—", never "$0.00".
-                let info = priceMap[token.address].flatMap { DyorPrice.valid($0.usd) != nil ? $0 : nil }
-                return MarketRow(token: token, usd: info?.usd, change24h: info?.change24h,
-                                 balance: balanceMap?[token.address] ?? previous[token.address] ?? 0, info: info, notTradingYet: notTrading.contains(token.address))
-            }
-        }
         if let priceError {
             error = describe(priceError)
         } else if balanceMap == nil {
-            // None read for the wallet yet: there are no last ones to show.
-            error = reads.isRead(.spot) ? tr("Your balances couldn't be read just now — showing the last ones read.") : tr("Your balances couldn't be read. Check your connection and try again.")
+            // Balances to show — read in this session, or saved when the wallet was last read, said to be — are the last
+            // ones read; with none, there are no last ones to show.
+            error = reads.hasFigures(.spot) ? tr("Your balances couldn't be read just now — showing the last ones read.") : tr("Your balances couldn't be read. Check your connection and try again.")
         } else if !listing.complete {
             error = tr("Some launch coins couldn't be read just now — showing the last ones read.")
         } else if let part = reads.failed.first {
@@ -926,13 +1069,137 @@ final class HomeModel {
             error = nil
             updatedAt = .now
         }
-        self.launches = launchList
-        if let holdings, priceMap != nil { launchHoldings = holdings } // valued at the pair's price: not without one
-        if let perpState {
-            positions = perpState.positions
-            perpEquity = perpState.equity
+        save(env: env, address: address, epoch: epoch)
+    }
+
+    /// One of `load`'s reads, as it answers.
+    private enum Answer: Sendable {
+        case proven
+        /// The prices, the Moments still collecting among the tokens (when the prices were read), or why they weren't.
+        case prices([Address: PriceInfo]?, Error?, Set<Address>)
+        case balances([Address: BigUInt]?)
+        case listing(LaunchListing)
+        case launchHoldings([LaunchHolding]?)
+        case perps((positions: [PerpPosition], equity: Double)?)
+        case moments([MomentPortfolioRow]?)
+    }
+
+    /// The prices of `tokens`, and the Moments still collecting among them as the read just made found them: "Not trading
+    /// yet" in place of a price. The error when the prices couldn't be read.
+    private static func readPrices(env: AppEnvironment, tokens: [Token]) async -> Answer {
+        do {
+            let map = try await env.prices.prices(for: tokens)
+            return .prices(map, nil, await env.prices.notTradingYet(tokens))
+        } catch {
+            return .prices(nil, error, [])
         }
-        if let momentState { momentRows = momentState }
+    }
+
+    /// One read of `part` answered for the wallet (`answered`), or failed (`HomeReadState.record`); set only when it
+    /// changed, so an unchanged refresh doesn't redraw what follows it. An answer is dated, for what Home saves.
+    private func record(_ part: HomeReadState.Part, answered: Bool) {
+        var next = reads
+        next.record(part, answered: answered)
+        if next != reads { reads = next }
+        if answered { readAt[part] = .now }
+    }
+
+    /// Spot, once the prices and the balances have both answered: read when both were, and the rows priced again whenever
+    /// the prices were (a token whose balance couldn't be read keeps its last one).
+    private func publishSpot(tokens: [Token], priceMap: [Address: PriceInfo]?, balanceMap: [Address: BigUInt]?, notTrading: Set<Address>) {
+        record(.spot, answered: priceMap != nil && balanceMap != nil)
+        guard let priceMap else { return }
+        let previous = Dictionary(rows.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
+        rows = tokens.map { token in
+            // A price that isn't a positive number is none: the row shows "—", never "$0.00".
+            let info = priceMap[token.address].flatMap { DyorPrice.valid($0.usd) != nil ? $0 : nil }
+            return MarketRow(token: token, usd: info?.usd, change24h: info?.change24h,
+                             balance: balanceMap?[token.address] ?? previous[token.address] ?? 0, info: info, notTradingYet: notTrading.contains(token.address))
+        }
+    }
+
+    /// The launch coins, read over every launchpad's launches and valued at the prices: read only when the balances and
+    /// the prices were, and every launchpad's launches have been.
+    private func publishLaunch(_ holdings: [LaunchHolding]?, priceMap: [Address: PriceInfo]?, listing: LaunchListing) {
+        record(.launch, answered: holdings != nil && priceMap != nil && listing.factories.allSatisfy(listedFactories.contains))
+        if let holdings, priceMap != nil { launchHoldings = holdings } // valued at the pair's price: not without one
+    }
+
+    private func publishPerps(_ state: (positions: [PerpPosition], equity: Double)?) {
+        record(.perps, answered: state != nil)
+        if let state {
+            positions = state.positions
+            perpEquity = state.equity
+        }
+    }
+
+    private func publishMoments(_ state: [MomentPortfolioRow]?) {
+        record(.moments, answered: state != nil)
+        if let state { momentRows = state }
+    }
+
+    // MARK: Saved
+
+    /// What Home saves for a wallet (`SavedScreens.Screen.home`): each part it had figures of, and when each was read
+    /// (`readAt`). Perps is the account's equity only: its positions are read every time.
+    struct Saved: Codable, Sendable {
+        var rows: [MarketRow]?
+        /// The launches the Launch part was read over: a launchpad that can't be read next time keeps these.
+        var launches: [Launch]
+        var launchHoldings: [LaunchHolding]?
+        var momentRows: [MomentPortfolioRow]?
+        var perpEquity: Double?
+        var readAt: [HomeReadState.Part: Date]
+    }
+
+    /// What Home saved for `address` when it was last read (`SavedScreens`), shown at once: each part read under a day ago
+    /// shows its figures, said to be saved (`HomeReadState.showSaved`, `savedAt`), until its own read replaces it. Nothing
+    /// of another wallet's: the file is the wallet's own, and says so.
+    private func restoreSaved(env: AppEnvironment, address: Address?) {
+        guard let address, let saved = env.savedScreens.load(Saved.self, .home, wallet: address)?.value else { return }
+        let now = Date()
+        var parts: Set<HomeReadState.Part> = []
+        for (part, at) in saved.readAt where SavedScreens.isShowable(savedAt: at, now: now) {
+            switch part {
+            case .spot:
+                guard let rows = saved.rows else { continue }
+                self.rows = rows
+            case .perps:
+                guard let equity = saved.perpEquity else { continue }
+                perpEquity = equity
+            case .launch:
+                guard let holdings = saved.launchHoldings else { continue }
+                launchHoldings = holdings
+                // The launches a launchpad that can't be read keeps (`LaunchListing.keeping`) are this session's once it
+                // has read any (another wallet's launches are the same chain's). The saved ones, up to a day old, only
+                // while none has been listed, and then no launchpad counts as listed until a read of it lands here
+                // (`listedFactories`): a part kept from the copy stays saved, said to be, opens its coins by reference, and
+                // is saved again with its first time — never counted as read in this session.
+                if launches.isEmpty {
+                    launches = saved.launches
+                    listedFactories = []
+                }
+            case .moments:
+                guard let rows = saved.momentRows else { continue }
+                momentRows = rows
+            }
+            parts.insert(part)
+            readAt[part] = min(at, now)
+        }
+        reads.showSaved(parts)
+    }
+
+    /// Saves each part Home has figures of for the wallet, with when it was read: in this session, or still the saved one,
+    /// which keeps its first time (a part is never said to be newer than its read). A part with none is left out, and
+    /// opens unread next time. Dropped when this device's data was erased since the load began (`epoch`).
+    private func save(env: AppEnvironment, address: Address?, epoch: Int) {
+        guard let address else { return }
+        let times = readAt.filter { reads.hasFigures($0.key) }
+        guard let newest = times.values.max() else { return }
+        let saved = Saved(rows: times[.spot] == nil ? nil : rows, launches: times[.launch] == nil ? [] : launches,
+                          launchHoldings: times[.launch] == nil ? nil : launchHoldings, momentRows: times[.moments] == nil ? nil : momentRows,
+                          perpEquity: times[.perps] == nil ? nil : perpEquity, readAt: times)
+        env.savedScreens.save(saved, .home, wallet: address, savedAt: newest, epoch: epoch)
     }
 
     /// The wallet's Moments stakes, or nil when they couldn't be read.

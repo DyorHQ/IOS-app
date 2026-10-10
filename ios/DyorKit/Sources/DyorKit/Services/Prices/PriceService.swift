@@ -1,7 +1,7 @@
 import BigInt
 import Foundation
 
-public struct PriceInfo: Hashable, Sendable {
+public struct PriceInfo: Hashable, Sendable, Codable {
     public let usd: Double
     /// Percent change over the last 24 hours, measured from the block mined 24 hours before the latest (`BlockClock`);
     /// nil when the historical read was not available, or for a coin that didn't exist then (`isNew`).
@@ -143,16 +143,32 @@ public actor PriceService {
     /// Counts the changes to `usesDyorVenues`: a discovery that began before one drops what it found, since it belongs
     /// to the other setting.
     private var venueGeneration = 0
+    /// The reads the app's screens share (`ChainCache`): identical price reads at once are one read, each token's price
+    /// is kept `ChainCache.TTL.price` seconds, and the day-ago block `ChainCache.TTL.dayAgoBlock`. Nil reads every time, as a
+    /// test does.
+    private let cache: ChainCache?
+    /// Where the pools found are kept between launches (`ChainStore`, `pools.json`), each with the time it was found, so
+    /// a relaunch doesn't look every token up again and every lookup's time limit still runs from when it was made
+    /// (RS-12). Nil keeps them for the session only.
+    private let store: ChainStore?
+    /// `store`'s epoch when its pools were last read into `pools`; nil before.
+    private var poolsEpoch: Int?
+    /// The lookups under way, by token, each with its own id (`discover`): a discovery due a token one of them is looking
+    /// up waits for that lookup rather than start its own, so two screens pricing the same tokens at once look them up
+    /// once, and a discovery waits for no lookup of tokens it doesn't need.
+    private var lookingUp: [Address: (id: UUID, task: Task<Void, Error>)] = [:]
 
     /// `registry` (DyorHQ's coins) reads the launchpads and cohorts it was made with; without one, `launchpads` and
     /// `cohorts`. `dyorVenues` prices DyorHQ coins on their own venues from the start, and is off unless asked for: on,
     /// a curve, Uniswap v4 or Moment coin the wallet holds has a spot price, so a screen that also values it as a
-    /// launch or Moment holding must count each coin once before turning it on.
+    /// launch or Moment holding must count each coin once before turning it on. `cache` shares price reads between the
+    /// screens (`ChainCache`), and `store` keeps the pools found between launches.
     public init(rpc: RPCClient, registry: DyorCoinRegistry? = nil, clock: BlockClock? = nil,
                 launchpads: [LaunchpadAddresses] = DyorCoinRegistry.launchpads(live: .monadMainnet),
                 cohorts: [MomentsAddresses] = DyorCoinRegistry.cohorts(live: .monadMainnet),
                 dyorVenues: Bool = false,
-                now: @escaping @Sendable () -> Date = Date.init) {
+                now: @escaping @Sendable () -> Date = { Date() },
+                cache: ChainCache? = nil, store: ChainStore? = nil) {
         self.rpc = rpc
         self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
@@ -161,15 +177,19 @@ public actor PriceService {
         self.cohorts = registry?.cohorts ?? cohorts
         usesDyorVenues = dyorVenues
         self.now = now
+        self.cache = cache
+        self.store = store
     }
 
     /// Whether DyorHQ coins are priced on their own venues or like any other token, as before (the default, `init`'s
-    /// `dyorVenues`). A change forgets every pool and venue found, so the next read looks them up the new way.
+    /// `dyorVenues`). A change forgets every pool and venue found, so the next read looks them up the new way, and every
+    /// price kept (`cache`): those were read the other way.
     public func setUsesDyorVenues(_ on: Bool) {
         guard on != usesDyorVenues else { return }
         usesDyorVenues = on
         venueGeneration += 1
         pools = PoolLookupCache<Source>()
+        savePools()
     }
 
     // MARK: Public
@@ -178,11 +198,44 @@ public actor PriceService {
     /// is 1 by definition. The 24h change compares with the block mined 24 hours before the latest one; a DyorHQ coin's
     /// venue is read again at that block, so a coin that graduated since is compared with its curve price then, and a
     /// coin its factory hadn't recorded then is "New" (`PriceInfo.isNew`).
+    ///
+    /// With the app's shared reads (`cache`): a read of the same tokens while one is under way waits for it and shares
+    /// its answer, a token priced in the last `ChainCache.TTL.price` seconds keeps that price, and only the others are
+    /// read. A token with no price (no pool, or a read that failed) is never kept: it is asked again every time.
     public func prices(for tokens: [Token]) async throws -> [Address: PriceInfo] {
+        guard let cache else { return try await readPrices(for: tokens) }
+        let venues = venueGeneration
+        let key = "prices.\(venues)." + Set(tokens.map { "\($0.address.hex):\($0.decimals)" }).sorted().joined(separator: ",")
+        return try await cache.value(key, ttl: 0, keep: { (_: [Address: PriceInfo]) in false }) {
+            try await self.pricesKeeping(tokens, venues: venues, cache: cache)
+        }
+    }
+
+    /// `prices(for:)` with the shared reads: each token priced within `ChainCache.TTL.price` as kept, the others read, and
+    /// what they read kept, under the venue setting it was read with (`venues`), unless the cache was invalidated since.
+    private func pricesKeeping(_ tokens: [Token], venues: Int, cache: ChainCache) async throws -> [Address: PriceInfo] {
+        let since = cache.generation
+        func key(_ token: Token) -> String { "price.\(venues).\(token.address.hex).\(token.decimals)" }
+        var map: [Address: PriceInfo] = [:]
+        var unread: [Token] = []
+        for token in tokens where map[token.address] == nil && !unread.contains(where: { $0.address == token.address }) {
+            if let kept: PriceInfo = cache.fresh(key(token), ttl: ChainCache.TTL.price) { map[token.address] = kept } else { unread.append(token) }
+        }
+        guard !unread.isEmpty else { return map }
+        let read = try await readPrices(for: unread)
+        for token in unread {
+            guard let info = read[token.address] else { continue }
+            map[token.address] = info
+            cache.keep(info, for: key(token), readSince: since)
+        }
+        return map
+    }
+
+    /// `prices(for:)` read now.
+    private func readPrices(for tokens: [Token]) async throws -> [Address: PriceInfo] {
         try await discover(tokens)
         let sources = await withConversions(resolve(tokens))
-        let head = try await rpc.block(.latest)
-        let dayAgo = head.timestamp > 86_400 ? try? await clock.block(at: Date(timeIntervalSince1970: TimeInterval(head.timestamp - 86_400)), head: head) : nil
+        let dayAgo = try await dayAgoBlock()
         async let nowRead = Self.readPrices(multicall: multicall, sources, block: .latest)
         async let beforeRead = before(sources, block: dayAgo)
         let (now, before) = try await (nowRead, beforeRead)
@@ -212,6 +265,21 @@ public actor PriceService {
         return map
     }
 
+    /// The block mined 24 hours before the latest, which every 24h change is measured from (`BlockClock.block(at:head:)`),
+    /// nil when the latest is less than a day after 1970 (a test chain). Throws only when the latest block can't be read.
+    /// With the shared reads (`cache`), one read serves every price read for `ChainCache.TTL.dayAgoBlock` seconds, so a
+    /// warm price read is one round trip. The latest block is the session's shared head (`HeadClock`), read once for every
+    /// reader within a second.
+    private func dayAgoBlock() async throws -> UInt64? {
+        let clock = clock
+        let read: @Sendable () async throws -> UInt64? = {
+            let head = try await clock.head.latest()
+            return head.timestamp > 86_400 ? try? await clock.block(at: Date(timeIntervalSince1970: TimeInterval(head.timestamp - 86_400)), head: head) : nil
+        }
+        guard let cache else { return try await read() }
+        return try await cache.value("prices.dayAgoBlock", ttl: ChainCache.TTL.dayAgoBlock, keep: { (block: UInt64?) in block != nil }, read: read)
+    }
+
     /// Which of `tokens` have no pool the price finder looks for: its last lookup of each that read every pool it asks
     /// about found none with liquidity (`PoolLookupCache.hasNoPool`), or a DyorHQ coin's venue has no price (a Moment
     /// still collecting or expired). Such a token simply has no price. A token `prices(for:)` gave no price that isn't
@@ -235,13 +303,13 @@ public actor PriceService {
     }
 
     /// Samples the token's pool at `points` evenly spaced blocks over `span` seconds (blocks from the session's measured
-    /// pace), ending at the latest block, in one batched JSON-RPC request; each sample's time is estimated from the latest
-    /// block's own timestamp. A DyorHQ coin is sampled on its own venue: a launch that graduated inside the span on its
-    /// curve before then, a Moment from when it graduated. Samples the node cannot serve are dropped, so fewer than
-    /// `points` may come back.
+    /// pace), ending at the latest block (the session's shared head, `HeadClock`), in one batched JSON-RPC request; each
+    /// sample's time is estimated from the latest block's own timestamp. A DyorHQ coin is sampled on its own venue: a
+    /// launch that graduated inside the span on its curve before then, a Moment from when it graduated. Samples the node
+    /// cannot serve are dropped, so fewer than `points` may come back.
     public func history(for token: Token, points: Int = 48, span: TimeInterval = 86_400) async throws -> [PricePoint] {
         guard points > 0 else { return [] }
-        let head = try await rpc.block(.latest)
+        let head = try await clock.head.latest()
         let latest = head.number
         let secondsPerBlock = await clock.secondsPerBlock()
         let spanBlocks = BlockClock.blocks(in: max(0, span), secondsPerBlock: secondsPerBlock)
@@ -327,17 +395,56 @@ public actor PriceService {
     /// pool meanwhile. Then the deepest pool for each other token: for MON/WMON the v4 native/USDC pool (falling back to
     /// v3), for everything else the v3 pool against USDC, or against WMON when no USDC pool has liquidity. When the
     /// switch changes while it reads, what it found belongs to the other setting: it is dropped and looked up again.
+    ///
+    /// One lookup of a token at a time (`lookingUp`): a discovery waits only for the lookups under way of the tokens it is
+    /// due, and starts one of its own for the rest, so two screens pricing the same tokens at once (Home and the Portfolio
+    /// at launch) never run the pool lookups twice, and a read whose tokens were all looked up lately waits for nothing.
+    /// (The first speed pass chained every discovery behind the one before it, so a price read that needed no lookup
+    /// waited for an unrelated one, its RPC timeouts included.) A lookup that fails fails every discovery waiting for it,
+    /// as a read they share; the tokens it was due stay due, and the next discovery looks them up again. A lookup runs in
+    /// a task of its own, so one a closed screen started still finishes for the next. The pools found are kept on the
+    /// device (`store`), each with the time it was found.
     private func discover(_ tokens: [Token]) async throws {
+        loadPools()
+        let time = now()
+        var due: [Token] = []
+        var waits: [UUID: Task<Void, Error>] = [:]
+        for token in tokens where pools.needsLookup(token.address, now: time) && !Self.isUSD(token) && !due.contains(where: { $0.address == token.address }) {
+            if let running = lookingUp[token.address] { waits[running.id] = running.task } else { due.append(token) }
+        }
+        if !due.isEmpty {
+            let id = UUID()
+            let lookup = Task {
+                let result = await ERC20.captured { try await self.lookUp(due) }
+                self.finishLookup(id, of: due)
+                try result.get()
+            }
+            for token in due { lookingUp[token.address] = (id, lookup) }
+            waits[id] = lookup
+        }
+        for lookup in waits.values { try await lookup.value }
+    }
+
+    /// Lookup `id` of `tokens` is done (`discover`): whatever it found is in `pools`, and a token still due is looked up
+    /// by the next discovery that asks for it.
+    private func finishLookup(_ id: UUID, of tokens: [Token]) {
+        for token in tokens where lookingUp[token.address]?.id == id { lookingUp[token.address] = nil }
+    }
+
+    /// `discover`'s lookup of `tokens`, each of them by one lookup at a time (`lookingUp`).
+    private func lookUp(_ tokens: [Token]) async throws {
         let time = now()
         let generation = venueGeneration
+        let epoch = store?.epoch
         var todo: [Token] = []
         for token in tokens where self.pools.needsLookup(token.address, now: time) && !Self.isUSD(token) && !todo.contains(where: { $0.address == token.address }) {
             todo.append(token)
         }
         guard !todo.isEmpty else { return }
+        defer { if epoch == store?.epoch { savePools() } }
         if usesDyorVenues {
             let (listed, unsettled) = await listings(todo.map(\.address))
-            guard generation == venueGeneration else { return try await discover(tokens) }
+            guard generation == venueGeneration else { return try await lookUp(tokens) }
             for (coin, listing) in listed { pools.found(coin, .dyor(listing), now: time, settled: listing.isSettled) }
             todo.removeAll { listed[$0.address] != nil || unsettled.contains($0.address) }
             guard !todo.isEmpty else { return }
@@ -413,7 +520,7 @@ public actor PriceService {
             }
         }
 
-        guard generation == venueGeneration else { return try await discover(tokens) }
+        guard generation == venueGeneration else { return try await lookUp(tokens) }
         for token in todo {
             let source: Source?
             let base = token.isNative ? Monad.wmon : token.address
@@ -425,6 +532,128 @@ public actor PriceService {
             if let source { self.pools.found(token.address, source, now: time) }
             else if !incomplete.contains(base) { self.pools.noPool(token.address, now: time) }
         }
+    }
+
+    // MARK: Kept on the device
+
+    /// The file `store` keeps the pools found in.
+    static let poolsFile = "pools.json"
+
+    /// What `pools.json` holds: the Uniswap v4, v3 and Nad.fun pools found and the tokens found with none, each with when
+    /// its lookup was made, under the venue setting they were found with. A DyorHQ coin's venue is never kept: it is read
+    /// from its factory's record again each session (`listings`).
+    struct SavedPools: Codable {
+        static let currentVersion = 1
+
+        let version: Int
+        /// `usesDyorVenues` when they were found: a file of the other setting is never used.
+        let dyorVenues: Bool
+        let pools: [SavedPool]
+        let misses: [SavedMiss]
+
+        private enum CodingKeys: String, CodingKey { case version, dyorVenues, pools, misses }
+
+        init(dyorVenues: Bool, pools: [SavedPool], misses: [SavedMiss]) {
+            version = Self.currentVersion
+            self.dyorVenues = dyorVenues
+            self.pools = pools
+            self.misses = misses
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decode(Int.self, forKey: .version)
+            dyorVenues = try container.decode(Bool.self, forKey: .dyorVenues)
+            pools = try container.decode([ChainStoreEntry<SavedPool>].self, forKey: .pools).compactMap(\.value)
+            misses = try container.decode([ChainStoreEntry<SavedMiss>].self, forKey: .misses).compactMap(\.value)
+        }
+    }
+
+    /// One pool found for `token`: its kind and what pricing it reads (`Source`).
+    struct SavedPool: Codable, Hashable {
+        let token: Address
+        /// "v4", "v3" or "v2".
+        let kind: String
+        /// A v4 pool's id, `0x` hex.
+        let poolId: String?
+        /// A v3 or v2 pool, the token it prices (WMON for MON), its quote asset and its token0.
+        let pool: Address?
+        let priced: Address?
+        let quote: Address?
+        let token0: Address?
+        let at: Date
+        let settled: Bool
+
+        /// Nil for a DyorHQ coin's venue, which is never kept.
+        init?(token: Address, source: Source, at: Date, settled: Bool) {
+            let kind: String, poolId: String?, pool: Address?, priced: Address?, quote: Address?, token0: Address?
+            switch source {
+            case .v4(let id):
+                (kind, poolId, pool, priced, quote, token0) = ("v4", id.hexString, nil, nil, nil, nil)
+            case .v3(let address, let token, let quoted, let first):
+                (kind, poolId, pool, priced, quote, token0) = ("v3", nil, address, token, quoted, first)
+            case .v2(let address, let token, let quoted, let first):
+                (kind, poolId, pool, priced, quote, token0) = ("v2", nil, address, token, quoted, first)
+            case .dyor:
+                return nil
+            }
+            self.token = token
+            self.kind = kind
+            self.poolId = poolId
+            self.pool = pool
+            self.priced = priced
+            self.quote = quote
+            self.token0 = token0
+            self.at = at
+            self.settled = settled
+        }
+
+        /// The source it names; nil when the entry is incomplete or of a kind this build doesn't know.
+        var source: Source? {
+            switch kind {
+            case "v4":
+                guard let poolId, let id = Data(hex: poolId), id.count == 32 else { return nil }
+                return .v4(poolId: id)
+            case "v3":
+                guard let pool, let priced, let quote, let token0 else { return nil }
+                return .v3(pool: pool, token: priced, quote: quote, token0: token0)
+            case "v2":
+                guard let pool, let priced, let quote, let token0 else { return nil }
+                return .v2(pool: pool, token: priced, quote: quote, token0: token0)
+            default:
+                return nil
+            }
+        }
+    }
+
+    /// A token found with no pool, and when.
+    struct SavedMiss: Codable, Hashable {
+        let token: Address
+        let at: Date
+    }
+
+    /// Reads the pools kept on the device into `pools`, once, and again after an erase (the store's epoch moved), when what
+    /// this session found goes too. A file of the other venue setting is left unread.
+    private func loadPools() {
+        guard let store else { return }
+        let epoch = store.epoch
+        guard poolsEpoch != epoch else { return }
+        if poolsEpoch != nil { pools = PoolLookupCache<Source>() }
+        poolsEpoch = epoch
+        guard let saved = store.load(SavedPools.self, from: Self.poolsFile), saved.version == SavedPools.currentVersion,
+              saved.dyorVenues == usesDyorVenues else { return }
+        pools.restore(hits: saved.pools.compactMap { entry in entry.source.map { (entry.token, $0, entry.at, entry.settled) } },
+                      misses: saved.misses.map { ($0.token, $0.at) })
+    }
+
+    /// Saves the pools found (not the DyorHQ venues), unless this device's data was erased since they were read.
+    private func savePools() {
+        guard let store, let epoch = poolsEpoch, epoch == store.epoch else { return }
+        let entries = pools.entries
+        let saved = SavedPools(dyorVenues: usesDyorVenues,
+                               pools: entries.hits.compactMap { SavedPool(token: $0.token, source: $0.source, at: $0.at, settled: $0.settled) }.sorted { $0.token.hex < $1.token.hex },
+                               misses: entries.misses.map { SavedMiss(token: $0.token, at: $0.at) }.sorted { $0.token.hex < $1.token.hex })
+        store.save(saved, to: Self.poolsFile, epoch: epoch)
     }
 
     private func resolve(_ tokens: [Token]) -> [(token: Token, source: Source)] {
@@ -710,11 +939,35 @@ struct PoolLookupCache<Source: Sendable>: Sendable {
     private var misses: [Address: Date] = [:]
 
     /// Whether `token` is due a lookup: never looked up, its pool is older than `hitTTL` (`unsettledTTL` for a market
-    /// that is about to move), or its miss older than `missTTL`.
+    /// that is about to move), or its miss older than `missTTL`. A lookup dated after `now` (the device clock was set
+    /// back since, or a kept one is from another clock) is due at once: no lookup outlasts its time limit that way.
     func needsLookup(_ token: Address, now: Date) -> Bool {
-        if let hit = hits[token] { return now.timeIntervalSince(hit.at) >= (hit.settled ? hitTTL : unsettledTTL) }
-        if let missed = misses[token] { return now.timeIntervalSince(missed) >= missTTL }
+        if let hit = hits[token] {
+            let age = now.timeIntervalSince(hit.at)
+            return age < 0 || age >= (hit.settled ? hitTTL : unsettledTTL)
+        }
+        if let missed = misses[token] {
+            let age = now.timeIntervalSince(missed)
+            return age < 0 || age >= missTTL
+        }
         return true
+    }
+
+    /// Every pool kept and every token found with none, each with when its lookup was made: what `PriceService` keeps on
+    /// the device between launches.
+    var entries: (hits: [(token: Address, source: Source, at: Date, settled: Bool)], misses: [(token: Address, at: Date)]) {
+        (hits.map { ($0.key, $0.value.source, $0.value.at, $0.value.settled) }, misses.map { ($0.key, $0.value) })
+    }
+
+    /// Adds what an earlier session found (`entries`), each with the time its lookup was made, so its time limit runs on
+    /// from then (RS-12 holds across launches). A token this session already looked up keeps this session's answer.
+    mutating func restore(hits restored: [(token: Address, source: Source, at: Date, settled: Bool)], misses restoredMisses: [(token: Address, at: Date)]) {
+        for hit in restored where hits[hit.token] == nil && misses[hit.token] == nil {
+            hits[hit.token] = (hit.source, hit.at, hit.settled)
+        }
+        for miss in restoredMisses where hits[miss.token] == nil && misses[miss.token] == nil {
+            misses[miss.token] = miss.at
+        }
     }
 
     /// The pool last found for `token`, however old.

@@ -314,6 +314,9 @@ struct ConfirmationSheet<Details: View>: View {
         .onChange(of: run.doneHash) { _, hash in
             guard let hash, !completed else { return }
             completed = true
+            // The plan changed what is on chain (a buy, a sell, a launch, a collect, a claim, a swap): every read the
+            // screens share is read again (`AppEnvironment.invalidateChainReads`), before the caller records or reloads.
+            env.invalidateChainReads()
             onCompleted?(hash)
             guard let settle else { return }
             reading = true

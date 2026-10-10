@@ -29,7 +29,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 
     /// The launchpad's contract generations, oldest first. A getter a generation lacks reverts, and in a Multicall3
     /// `readAll` one reverted sub-call fails the whole read, so every optional read and plan asks the stack's generation.
-    public enum Generation: Int, Sendable, Hashable, Comparable, CaseIterable, CustomStringConvertible {
+    public enum Generation: Int, Sendable, Hashable, Codable, Comparable, CaseIterable, CustomStringConvertible {
         /// 0xad3d…, the first deployment: the 16-field `getLaunchedToken` record (no `graduationVenue`); every launch
         /// graduates on Monday Trade.
         case legacy
@@ -155,7 +155,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 }
 
 /// `Types.Phase` in the contracts: NotGraduated, Swept, PoolCreated, Rescued.
-public enum LaunchPhase: Int, Sendable, Hashable, CaseIterable {
+public enum LaunchPhase: Int, Sendable, Hashable, Codable, CaseIterable {
     case bonding = 0
     case migrating
     case graduated
@@ -224,7 +224,7 @@ public enum LaunchBoard {
 
 /// `Types.GraduationVenue` in the contracts: where a completed curve graduates. The creator chooses at launch;
 /// aBIL-quoted (and any `pairMondayOnly`) launches are forced to Monday. UniswapV4 is the default (enum value 0).
-public enum GraduationVenue: UInt8, Sendable, Hashable, CaseIterable {
+public enum GraduationVenue: UInt8, Sendable, Hashable, Codable, CaseIterable {
     case uniswapV4 = 0
     case monday = 1
 
@@ -239,7 +239,7 @@ public enum GraduationVenue: UInt8, Sendable, Hashable, CaseIterable {
     init(raw: BigUInt) { self = GraduationVenue(rawValue: UInt8(clamping: raw)) ?? .uniswapV4 }
 }
 
-public struct Socials: Hashable, Sendable {
+public struct Socials: Hashable, Sendable, Codable {
     public var twitter: String
     public var telegram: String
     public var discord: String
@@ -258,7 +258,7 @@ public struct Socials: Hashable, Sendable {
 }
 
 /// The asset a curve collects. Native MON is `Address.zero`.
-public struct PairInfo: Hashable, Sendable {
+public struct PairInfo: Hashable, Sendable, Codable {
     public let address: Address
     public let symbol: String
     public let decimals: Int
@@ -437,10 +437,25 @@ public struct LaunchListing: Sendable {
         guard !unread.isEmpty else { return launches }
         return factories.flatMap { factory in (unread[factory] == nil ? launches : previous).filter { $0.factory == factory } }
     }
+
+    /// The newest `limit` launches of each factory, in place, every factory and error kept: what a screen listing fewer
+    /// takes from the list every screen shares (`LaunchpadService.launchListing`), exactly the launches a read of `limit`
+    /// would have listed.
+    public func prefix(perFactory limit: Int) -> LaunchListing {
+        var taken: [Address: Int] = [:]
+        let kept = launches.filter { launch in
+            let count = taken[launch.factory, default: 0]
+            guard count < limit else { return false }
+            taken[launch.factory] = count + 1
+            return true
+        }
+        return LaunchListing(factories: factories, launches: kept, unread: unread)
+    }
 }
 
-/// One launch as the explore list shows it: the factory record plus the token metadata and live curve state.
-public struct Launch: Identifiable, Hashable, Sendable {
+/// One launch as the explore list shows it: the factory record plus the token metadata and live curve state. Codable, so
+/// the screens that list it can keep what they last showed (`SavedScreens`), its text as it was shown.
+public struct Launch: Identifiable, Hashable, Sendable, Codable {
     public var id: Address { token }
 
     public let token: Address
@@ -689,7 +704,7 @@ public struct GraduationFallbackRule: Hashable, Sendable {
 
 /// A wallet's claimable fee-escrow balances, by pair asset. `native` is MON; `tokens` maps each ERC-20 pair asset
 /// (USDC, AUSD, …) to its claimable amount. This is a creator's withdrawable fees, aggregated across their launches.
-public struct EscrowBalances: Hashable, Sendable {
+public struct EscrowBalances: Hashable, Sendable, Codable {
     public let native: BigUInt
     public let tokens: [Address: BigUInt]
 
@@ -706,7 +721,7 @@ public struct EscrowBalances: Hashable, Sendable {
 
 /// One launchpad's fee escrow and what an account can claim from it (`LaunchpadService.escrowReads`): nil balances when
 /// the read failed.
-public struct LaunchpadEscrowRead: Hashable, Sendable {
+public struct LaunchpadEscrowRead: Hashable, Sendable, Codable {
     public let escrow: Address
     public let factory: Address
     public let retired: Bool
