@@ -139,6 +139,14 @@ extension TransactionSender.FeePreview {
     }
 }
 
+/// What a confirmed transaction did, when its caller can tell (a Perpl order's receipt, decoded): the sheet's bottom bar
+/// and a section under Progress say it, and its tone sets the haptic.
+struct SettledLine: Equatable {
+    let text: PerplOutcomeText
+    /// A link to more about it, when there is one.
+    let link: URL?
+}
+
 /// The standard confirm → progress → done sheet used by every write in the app. The step plan is built by an
 /// async closure (some builders read the chain or an actor-isolated service), so the sheet shows a brief
 /// "Preparing" state, then the confirm button, then live progress.
@@ -161,11 +169,19 @@ struct ConfirmationSheet<Details: View>: View {
     /// What the plan does, for a passkey account's session scope (MERA-PLAN §3). A sheet that declares nothing asks
     /// for Face ID every time; other accounts ignore it.
     var intent: Mera.Intent = .ask
+    /// Called right before the plan starts, once App Lock and any passkey approval passed: what the caller expects of it
+    /// can be noted from here (a Perps order's fill, so the app-wide watcher waits for the order's own result).
+    var onStarted: (() -> Void)? = nil
+    /// Reads what the settled transaction did, when the caller can tell (a Perpl order's receipt). With it, "done" waits for
+    /// the result: the bottom bar says the result is being read (Done held for up to 2 s, then offered), then shows it;
+    /// the confirmed step reads as a plain confirmation on Monad (the result carries the tone), and the haptic follows the
+    /// result's tone instead of a plain success. It runs in a task of its own that outlives the sheet (GL-3).
+    var settle: ((Data) async -> SettledLine?)? = nil
     @ViewBuilder var details: Details
 
     init(title: LocalizedStringResource, confirmTitle: LocalizedStringResource, build: @escaping () async throws -> [TransactionStep],
          onDone: @escaping () -> Void, onCompleted: ((Data) -> Void)? = nil, onView: ((Data) -> Void)? = nil, intent: Mera.Intent = .ask,
-         @ViewBuilder details: () -> Details) {
+         onStarted: (() -> Void)? = nil, settle: ((Data) async -> SettledLine?)? = nil, @ViewBuilder details: () -> Details) {
         self.title = title
         self.confirmTitle = confirmTitle
         self.build = build
@@ -173,6 +189,8 @@ struct ConfirmationSheet<Details: View>: View {
         self.onCompleted = onCompleted
         self.onView = onView
         self.intent = intent
+        self.onStarted = onStarted
+        self.settle = settle
         self.details = details()
     }
 
@@ -195,6 +213,12 @@ struct ConfirmationSheet<Details: View>: View {
     @State private var fee: TransactionSender.FeePreview?
     /// Who the plan's exact approvals take a standing unlimited allowance away from, read once the plan is built (IOST-14).
     @State private var replacedUnlimited: [String] = []
+    /// What the settled transaction did (`settle`), once read; nil while it is read, or without `settle`.
+    @State private var settled: SettledLine?
+    /// The receipt is being read now, and Done is held for the first moments of it (`ReceiptResultBar.doneHold`): the
+    /// result usually shows first.
+    @State private var reading = false
+    @State private var holdingDone = false
 
     private var confirmLabel: Text {
         session.isPasskeyAccount && assessment?.needsFaceID == true ? Text("Confirm with \(BiometricGate.promptName)") : Text(verbatim: tr(confirmTitle))
@@ -235,7 +259,10 @@ struct ConfirmationSheet<Details: View>: View {
                     Section { InlineError(message: buildError) }.listRowBackground(Color.clear)
                 }
                 if !run.events.isEmpty {
-                    Section("Progress") { TransactionProgress(events: run.events, onView: onView) }
+                    Section("Progress") { TransactionProgress(events: run.events, onView: onView, neutralConfirmation: settle != nil) }
+                }
+                if let settled {
+                    PerpOrderOutcomeSection(text: settled.text, link: settled.link)
                 }
                 if case .failed(let message) = run.phase {
                     Section { InlineError(message: message) }.listRowBackground(Color.clear)
@@ -247,12 +274,15 @@ struct ConfirmationSheet<Details: View>: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(run.isDone ? "Done" : "Cancel") { finish() }
-                    .disabled(run.isRunning)
+                    .disabled(run.isRunning || holdingDone)
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
-                    if run.isDone {
+                    if run.isDone, settle != nil {
+                        // The result is read from the receipt: "done" says what the transaction did, not only that it ran.
+                        ReceiptResultBar(settled: settled?.text, reading: reading, holdingDone: holdingDone) { finish() }
+                    } else if run.isDone {
                         PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
                     } else if case .failed = run.phase, run.sentSomething {
                         // Something already reached the network: no re-confirm from this sheet (it would replay the
@@ -277,14 +307,35 @@ struct ConfirmationSheet<Details: View>: View {
                 .frame(maxWidth: .infinity)
                 .background(.bar)
             }
-            // Only while running. A settled sheet may be swiped away: the action was recorded when it settled, and
-            // `onDisappear` runs the cleanup Done would have.
-            .interactiveDismissDisabled(run.isRunning)
+            // Only while running (and while Done is held for the result). A settled sheet may be swiped away: the action
+            // was recorded when it settled, and `onDisappear` runs the cleanup Done would have.
+            .interactiveDismissDisabled(run.isRunning || holdingDone)
         }
         .onChange(of: run.doneHash) { _, hash in
             guard let hash, !completed else { return }
             completed = true
+            // The plan changed what is on chain (a buy, a sell, a launch, a collect, a claim, a swap): every read the
+            // screens share is read again (`AppEnvironment.invalidateChainReads`), before the caller records or reloads.
+            env.invalidateChainReads()
             onCompleted?(hash)
+            guard let settle else { return }
+            reading = true
+            holdingDone = true
+            Task { @MainActor in
+                try? await Task.sleep(for: ReceiptResultBar.doneHold)
+                holdingDone = false
+            }
+            // Its own task, with its own background time: a dismissed sheet or a phone locked now still reads the result
+            // and upgrades what `onCompleted` recorded (GL-3).
+            Task { @MainActor in
+                let background = BackgroundTime("Perpl result") // not localized: the background task's name, never shown
+                defer { background.end() }
+                let line = await settle(hash)
+                settled = line
+                reading = false
+                holdingDone = false
+                if let line { AccessibilityNotification.Announcement(line.text.headline).post() }
+            }
         }
         .onDisappear { cleanUp() }
         // A Moment link never tears a review down, running or not (RootView's link gate).
@@ -293,7 +344,9 @@ struct ConfirmationSheet<Details: View>: View {
         // Opaque on purpose: the list fades under the footer, and a translucent sheet would show the presenting
         // screen's dark primary button through that fade.
         .presentationBackground(Color(.systemGroupedBackground))
-        .sensoryFeedback(.success, trigger: run.isDone)
+        // A plain success only when there is no result to read; otherwise the result's tone, once read.
+        .sensoryFeedback(trigger: run.isDone) { _, done in done && settle == nil ? .success : nil }
+        .sensoryFeedback(trigger: settled?.text.tone) { _, tone in tone.flatMap(PerpOutcomeTone.feedback) }
         .task {
             do { steps = try await build() } catch { buildError = describe(error) }
             preparing = false
@@ -354,6 +407,7 @@ struct ConfirmationSheet<Details: View>: View {
             guard await BiometricGate.authenticate(reason: "Confirm \(tr(confirmTitle))") else { return }
         }
         guard session.isPasskeyAccount else {
+            onStarted?()
             run.start(steps, session: session, sender: env.sender)
             return
         }
@@ -371,6 +425,7 @@ struct ConfirmationSheet<Details: View>: View {
                 return
             }
         }
+        onStarted?()
         run.start(steps, session: session, sender: env.sender, action: action)
     }
 

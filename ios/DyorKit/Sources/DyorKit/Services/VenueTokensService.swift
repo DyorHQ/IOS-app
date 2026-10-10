@@ -100,7 +100,11 @@ public struct VenueTokensService: Sendable {
     ///
     /// The venues are read one after the other, one request at a time (`LogScanMode.paced`: a throttle is waited out,
     /// never split), and a venue read in part ends the read there: the window is read again anyway, and the next venue
-    /// would meet the same endpoint.
+    /// would meet the same endpoint. On the logs router the requests wait in the gate's background lane
+    /// (`LogsGate.Lane.background`): one at a time, only while no screen's scan and no history round waits, so a fresh
+    /// install's list from genesis (about 5,600 requests) never slows the wallet's first history fill or a screen. The
+    /// app holds the run while that history fills in, and a read from genesis until a wallet is signed in
+    /// (`VenueTokenList.follow`).
     public func tokens(fromBlock: UInt64, toBlock: UInt64, exclude: Set<Address> = [], limit: Int = 3000, rereads: Int = Self.metadataRereads) async -> Scan {
         guard fromBlock <= toBlock else { return Scan(tokens: [], complete: true) }
         let created = ABI.eventTopic(Self.poolCreated)
@@ -110,7 +114,7 @@ public struct VenueTokensService: Sendable {
         var scans: [(logs: [Log], complete: Bool)] = []
         for (venue, topic) in [(Uniswap.v3Factory, created), (MondayTrade.factory, created), (Uniswap.poolManager, initialized)] {
             let scan = await logsRPC.chunkedLogsReport(address: venue, topics: [topic], fromBlock: fromBlock, toBlock: toBlock, chunkSize: chunk,
-                                                       concurrency: 1, mode: .paced)
+                                                       concurrency: 1, mode: .paced, lane: .background)
             scans.append(scan)
             if !scan.complete { break }
         }

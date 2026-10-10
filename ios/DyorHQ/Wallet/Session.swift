@@ -83,6 +83,12 @@ final class Session {
     @ObservationIgnored weak var dyorCoins: DyorCoinsModel?
     /// The app's language, English again once this device's data is erased (`eraseLocalData`).
     @ObservationIgnored weak var language: LanguageStore?
+    /// The chain facts kept between launches (`ChainStore`) and the reads the screens share (`ChainCache`), both gone once
+    /// this device's data is erased (`eraseLocalData`).
+    @ObservationIgnored var chainStore: ChainStore?
+    @ObservationIgnored var chainCache: ChainCache?
+    /// What the money screens last showed for each wallet (`SavedScreens`), gone once this device's data is erased.
+    @ObservationIgnored var savedScreens: SavedScreens?
 
     var account: Account? { if case .signedIn(let account) = state { return account } else { return nil } }
     var address: Address? { account?.address }
@@ -641,11 +647,22 @@ final class Session {
         for itemClass in [kSecClassGenericPassword, kSecClassInternetPassword, kSecClassKey] {
             SecItemDelete([kSecClass as String: itemClass] as CFDictionary)
         }
-        // Every picture this device loaded, in memory and on disk: nothing on this phone shows which coins it looked at
-        // once the account is gone.
+        // Every picture this device loaded, in memory and on disk (the image pipeline's Caches folder, taken away at once,
+        // and nothing a load under way finishes is kept): nothing on this phone shows which coins it looked at once the
+        // account is gone.
         RemoteImageLoader.shared.removeAll()
-        MomentMediaLoader.shared.removeAll()
         URLCache.shared.removeAllCachedResponses()
+        // Kuru's logo directory, kept for a day: public and the same on every phone, but a new install has none.
+        KuruTokenListClient.removeSavedLogos()
+        // The chain facts kept between launches (each settled launch's and Moment's record and text, where tokens are
+        // priced) and the reads the screens share, on disk and in memory: public, but they show which coins this phone
+        // priced, and a new install has none. Nothing a read under way brings back is kept (`ChainStore.erase`).
+        chainStore?.erase()
+        chainCache?.invalidate()
+        // What Home, the Portfolio, the boards and My Launchpad last showed, for every wallet this phone signed in with:
+        // balances, holdings and fees. No save asked for by a read that began before this lands after it
+        // (`SavedScreens.erase`); the sign-out below clears what the screens hold of the wallet in memory.
+        savedScreens?.erase()
         lastError = nil
         state = .signedOut
     }

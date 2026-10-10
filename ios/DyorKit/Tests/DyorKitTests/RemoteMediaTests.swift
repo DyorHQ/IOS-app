@@ -107,6 +107,66 @@ final class RemoteMediaTests: XCTestCase {
                        "a Moment's detail artwork keeps the full caps")
     }
 
+    /// The image pipeline's sessions keep nothing in URLCache and never answer from it (it keeps what it accepted
+    /// itself); DyorHQ's host and the gateways may take two minutes for a whole transfer, any other host 30 s. Any other
+    /// session the app makes for remote media keeps the shared cache, as before.
+    func testTheImageSessionsStoreNothingAndTrustOnlyDyorHQsHostsWithTime() {
+        let unstored = RemoteMedia.makeSession(storesResponses: false).configuration
+        XCTAssertNil(unstored.urlCache)
+        XCTAssertEqual(unstored.requestCachePolicy, .reloadIgnoringLocalCacheData)
+        let stored = RemoteMedia.makeSession().configuration
+        XCTAssertNotNil(stored.urlCache)
+        XCTAssertEqual(stored.requestCachePolicy, .useProtocolCachePolicy)
+        for configuration in [ImageFetcher.trustedSession.configuration, ImageFetcher.otherSession.configuration] {
+            XCTAssertNil(configuration.urlCache)
+            XCTAssertEqual(configuration.requestCachePolicy, .reloadIgnoringLocalCacheData)
+            XCTAssertNil(configuration.urlCredentialStorage)
+            XCTAssertEqual(configuration.httpCookieAcceptPolicy, .never)
+            XCTAssertFalse(configuration.httpShouldSetCookies)
+        }
+        XCTAssertEqual(ImageFetcher.trustedSession.configuration.timeoutIntervalForResource, RemoteMedia.trustedResourceTimeout)
+        XCTAssertEqual(RemoteMedia.trustedResourceTimeout, 120)
+        XCTAssertEqual(ImageFetcher.otherSession.configuration.timeoutIntervalForResource, 30)
+    }
+
+    /// Logo-sized downloads and Storage's resized copies (up to 2 MB) wait in eight slots; whole originals under the full
+    /// caps in four of their own, so each has a quarter of the link and a legacy multi-MB photo isn't cut off.
+    func testWholeOriginalsHaveFewerSlotsOfTheirOwn() async {
+        XCTAssertEqual(RemoteMedia.smallImageBytes, 2 * 1024 * 1024)
+        XCTAssertEqual(RemoteMedia.caps(forThumbnail: 96).maxBytes, RemoteMedia.smallImageBytes)
+        XCTAssertTrue(RemoteMedia.fetchSlots(maxBytes: RemoteMedia.smallImageBytes) === RemoteMedia.fetches)
+        XCTAssertTrue(RemoteMedia.fetchSlots(maxBytes: RemoteMedia.smallImageBytes + 1) === RemoteMedia.largeFetches)
+        XCTAssertTrue(RemoteMedia.fetchSlots(maxBytes: RemoteMedia.maxImageBytes) === RemoteMedia.largeFetches)
+        let (small, large) = (await RemoteMedia.fetches.limit, await RemoteMedia.largeFetches.limit)
+        XCTAssertEqual(small, 8)
+        XCTAssertEqual(large, 4)
+    }
+
+    /// A request waits for data as long as its source's host allows (`ImageSourcePolicy.requestTimeout`), and says when a
+    /// 2xx answer's body starts — never for a refused status. Eight small downloads run at once app-wide.
+    func testAFetchUsesItsSourcesTimeoutAndSaysWhenTheBodyStarts() async throws {
+        final class Count: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func add() { lock.lock(); value += 1; lock.unlock() }
+            var total: Int { lock.lock(); defer { lock.unlock() }; return value }
+        }
+        let answered = Count()
+        MediaStub.reply = (200, [:], Data(repeating: 7, count: 2048))
+        _ = try await RemoteMedia.fetch(URL(string: "https://cdn.example/logo.png")!, session: MediaStub.session(), timeout: 8, onResponse: { answered.add() })
+        XCTAssertEqual(MediaStub.requests.last?.timeoutInterval, 8)
+        XCTAssertEqual(answered.total, 1)
+        MediaStub.reply = (404, [:], Data("not found".utf8))
+        await XCTAssertThrowsFailure(.status(404)) {
+            try await RemoteMedia.fetch(URL(string: "https://cdn.example/gone.png")!, session: MediaStub.session(), onResponse: { answered.add() })
+        }
+        XCTAssertEqual(answered.total, 1, "a refused answer never starts a body")
+        let (fetches, decodes) = (await RemoteMedia.fetches.limit, await RemoteMedia.decodes.limit)
+        XCTAssertEqual(fetches, 8)
+        XCTAssertEqual(decodes, 2)
+        XCTAssertEqual(try RemoteMedia.inspect(try Self.png(width: 30, height: 20)).width, 30)
+    }
+
     func testOnlyHTTPSIsFetched() async {
         await XCTAssertThrowsFailure(.insecureURL) { try await RemoteMedia.fetch(URL(string: "http://cdn.example/logo.png")!, session: MediaStub.session()) }
         XCTAssertTrue(MediaStub.requests.isEmpty)

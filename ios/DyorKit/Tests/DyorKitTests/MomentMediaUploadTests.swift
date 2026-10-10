@@ -25,6 +25,22 @@ final class MomentMediaUploadTests: XCTestCase {
         XCTAssertEqual(UploadStub.requests[0].value(forHTTPHeaderField: "x-upsert"), "false")
         XCTAssertEqual(UploadStub.bodies[0], Data([1, 2, 3]))
         XCTAssertEqual(UploadStub.requests[1].value(forHTTPHeaderField: "x-upsert"), "true")
+        // Served from then on as the bucket allows: write-once objects for a week, an avatar (uploaded over) as Storage
+        // serves it without a header (`no-cache`).
+        XCTAssertEqual(UploadStub.requests[0].value(forHTTPHeaderField: "Cache-Control"), "public, max-age=604800")
+        XCTAssertNil(UploadStub.requests[1].value(forHTTPHeaderField: "Cache-Control"))
+    }
+
+    /// Storage keeps an upload's Cache-Control as the object's and serves every read with it (`no-cache` without one).
+    /// The write-once bucket's objects never change, but a takedown deletes one, so they may be kept a week — as the app
+    /// keeps its own copy (`ImagePipeline.immutableLifetime`) — never a year, nor `immutable`, which no takedown could
+    /// reach outside the app. An avatar is uploaded over its own path, and no other bucket gets one.
+    func testEachBucketsUploadsSayHowLongTheyMayBeKept() {
+        XCTAssertEqual(SupabaseClient.cacheControl(forBucket: "launch-media"), "public, max-age=604800")
+        XCTAssertEqual(TimeInterval(604_800), ImagePipeline.immutableLifetime)
+        XCTAssertNil(SupabaseClient.cacheControl(forBucket: "avatars"))
+        XCTAssertNil(SupabaseClient.cacheControl(forBucket: "other"))
+        XCTAssertNil(SupabaseClient.cacheControl(forBucket: "Launch-Media"), "bucket ids are exact")
     }
 
     func testFileUploadSendsTheFileBytes() async throws {
@@ -37,6 +53,28 @@ final class MomentMediaUploadTests: XCTestCase {
         _ = try await client.uploadPublic(bucket: "launch-media", path: "0xaa/moment-2.mov", file: file, contentType: "video/quicktime", upsert: false)
         XCTAssertEqual(UploadStub.bodies.first, bytes)
         XCTAssertEqual(UploadStub.requests.first?.value(forHTTPHeaderField: "Content-Type"), "video/quicktime")
+        XCTAssertEqual(UploadStub.requests.first?.value(forHTTPHeaderField: "Cache-Control"), "public, max-age=604800")
+    }
+
+    /// A new Moment photo is encoded once, at most 2048 px on its long side at quality 0.85 (4096 px at 0.92 made files of
+    /// up to 4.8 MB, which every viewer downloads whole to check the hash), off the main thread together with its hash and
+    /// the form's preview; those very bytes are hashed, uploaded under that hash and pinned. A video's poster frame keeps
+    /// its own encoding.
+    func testANewMomentPhotoIsEncodedSmallerOffTheMainThread() throws {
+        XCTAssertEqual(MomentsMath.photoMaxPixels, 2048)
+        XCTAssertEqual(MomentsMath.photoJPEGQuality, 0.85)
+        let create = try DocsLinksTests.appSource("Moments/CreateMomentView.swift").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let photo = try XCTUnwrap(create.range(of: "let photo = await Task.detached(priority: .userInitiated, operation: { () -> (jpeg: Data, hash: Data, preview: CGImage?)? in"))
+        let encode = try XCTUnwrap(create.range(of: "guard let jpeg = UIImage(data: data)?.avatarJPEG(maxDimension: CGFloat(MomentsMath.photoMaxPixels), quality: CGFloat(MomentsMath.photoJPEGQuality))"))
+        let hashed = try XCTUnwrap(create.range(of: "return (jpeg, Keccak.hash256(jpeg), preview) }).value else {"))
+        XCTAssertLessThan(photo.upperBound, encode.lowerBound)
+        XCTAssertLessThan(encode.upperBound, hashed.lowerBound, "encoded and hashed in the detached task")
+        let upload = try XCTUnwrap(create.range(of: #"social.uploadMomentMedia(photo.jpeg, contentType: "image/jpeg", fileExtension: "jpg", name: MomentsMath.mediaName(hash: photo.hash))"#))
+        let recorded = try XCTUnwrap(create.range(of: "mediaHash = photo.hash await pin(MediaPins(image: photoUpload, video: nil))"))
+        XCTAssertLessThan(hashed.upperBound, upload.lowerBound)
+        XCTAssertLessThan(upload.upperBound, recorded.lowerBound)
+        XCTAssertFalse(create.contains("maxDimension: 4096"))
+        XCTAssertTrue(create.contains("posterImage.avatarJPEG(maxDimension: 2048, quality: 0.9)"), "the poster frame as before")
     }
 
     func testAnObjectThatAlreadyExistsIsRecognised() {

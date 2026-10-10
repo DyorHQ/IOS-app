@@ -174,7 +174,7 @@ struct Avatar: View {
         Group {
             if let url {
                 RemoteImage(url: url, pointSize: size) { loading in
-                    if loading { ZStack { Color(.tertiarySystemFill); ProgressView().controlSize(.small) } } else { placeholder }
+                    if loading { ZStack { Color(.tertiarySystemFill); ImageLoadingSpinner() } } else { placeholder }
                 }
             } else {
                 placeholder
@@ -399,6 +399,21 @@ struct AddressRow: View {
     }
 }
 
+/// Said over figures a screen saved when they were last read for the wallet (`SavedScreens`), while it shows them and
+/// reads them again: when they were read ("Updated 3 min ago"), with a spinner while the read runs (`reading`). A saved
+/// figure is never taken for a fresh one; once every figure shown was read again, the screen drops the line.
+struct SavedLine: View {
+    let date: Date
+    let reading: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if reading { ProgressView().controlSize(.mini) }
+            Text("Updated \(date, style: .relative) ago").font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
 /// Inline error under a form, in sentence case with a symbol. A message written in the code is a catalog key; most come
 /// at run time (a thrown error's description, a server's message, a model's text) and are shown as they are. It wraps
 /// between words in Korean (`Paragraph`).
@@ -596,6 +611,10 @@ struct TransactionProgress: View {
     let events: [TransactionEvent]
     /// When set, the confirmed row's "View" opens this callback with the tx hash instead of the block explorer.
     var onView: ((Data) -> Void)? = nil
+    /// The sheet reads what the transaction did and says it with its own tone (a Perpl order's fill or "not filled"): the
+    /// confirmed row then only says the transaction confirmed on Monad, in the neutral colour — never a green "Long
+    /// BTC-PERP confirmed" over an order that filled nothing.
+    var neutralConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -615,7 +634,16 @@ struct TransactionProgress: View {
                     }
                 case .confirmed(let label, let hash):
                     HStack {
-                        Label("\(label) confirmed", systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive)
+                        if neutralConfirmation {
+                            Label {
+                                Text("Transaction confirmed on Monad", comment: "A Perps sheet's progress row: the transaction confirmed on the Monad network. What it did (filled, not filled) is said under it, so this says only that it ran.")
+                            } icon: {
+                                Image(systemName: "checkmark.circle")
+                            }
+                            .foregroundStyle(.secondary)
+                        } else {
+                            Label("\(label) confirmed", systemImage: "checkmark.circle.fill").foregroundStyle(Color.positive)
+                        }
                         Spacer()
                         if let onView {
                             Button("View") { onView(hash) }.font(.footnote)

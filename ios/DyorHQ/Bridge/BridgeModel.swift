@@ -25,7 +25,19 @@ final class BridgeModel {
     /// chain — so the source picker can rank assets by what the user actually holds, on any chain.
     private(set) var balances: [String: BigUInt] = [:]
     private(set) var loadingBalances = false
-    private var didLoadBalances = false
+    /// The chains whose balances were read in full for `balancesOwner` (Aurora ids), read again only with `force`. A chain
+    /// read in part — an endpoint that failed, or answered after `MultiChainBalances.cap` (a cold connection to a
+    /// third-party public RPC over cellular) — is not among them, and is read again (`loadBalances`).
+    private var chainsRead: Set<String> = []
+    /// The wallet `balances` and `chainsRead` are for.
+    private var balancesOwner: Address?
+    /// The chains being read now (Aurora ids): the send card waits on the source chain's (`readingFromBalance`).
+    private var readingChains: Set<String> = []
+    /// A forced load (a bridge landed) was asked while another load was under way: it runs once that one ends.
+    private var forceAfterLoad = false
+    /// The source chain's balances are being read: its balance line waits for them, while other chains' reads leave it as
+    /// it is.
+    var readingFromBalance: Bool { readingChains.contains(fromChain.auroraId) }
 
     private(set) var quote: AuroraQuote?
     /// The most the deposit's network fee can come to on the source chain at today's fees, once the quote names the
@@ -176,34 +188,71 @@ final class BridgeModel {
     // MARK: Balances
 
     /// Reads the wallet's balances across every supported chain at once (each chain independently, failures swallowed),
-    /// so the source picker can rank by holdings. Runs once; pass `force` after a bridge lands to pick up the change.
+    /// so the source picker can rank by holdings. A chain read in full is not read again; pass `force` after a bridge
+    /// lands to pick up the change. A chain read in part (`MultiChainBalances.ChainBalances.complete`) is read again at
+    /// once, and on every load after until it is read in full (opening a picker, switching chains): it was latched as
+    /// read, and its holdings showed as not held and its Max stayed off until a bridge landed.
     func loadBalances(force: Bool = false) async {
         guard let owner = env.session.address else { return }
-        if didLoadBalances && !force { return }
-        guard !loadingBalances else { return } // coalesce overlapping loads (first `load()` + a picker `.task`, etc.)
-        loadingBalances = true; defer { loadingBalances = false }
-
-        let balancer = env.chainBalances
+        // Coalesce overlapping loads (first `load()` + a picker `.task`, etc.); a forced one runs after.
+        guard !loadingBalances else { if force { forceAfterLoad = true }; return }
+        if balancesOwner != owner {
+            // Another wallet's balances are never shown for this one.
+            balances = [:]
+            chainsRead = []
+            balancesOwner = owner
+        }
         // Use the app's configured Monad endpoint for the Monad side; public RPCs for the rest.
         let plan: [(EVMChain, [AuroraToken])] = EVMChain.supported
             .map { $0.isMonad ? env.bridgeMonad : $0 }
             .compactMap { chain in
                 let toks = tokens(on: chain)
-                return toks.isEmpty ? nil : (chain, toks)
+                return toks.isEmpty || (!force && chainsRead.contains(chain.auroraId)) ? nil : (chain, toks)
             }
-
-        let merged = await withTaskGroup(of: [String: BigUInt].self) { group in
-            for (chain, toks) in plan {
-                group.addTask { await balancer.balances(owner: owner, chain: chain, tokens: toks) }
-            }
-            var acc: [String: BigUInt] = [:]
-            for await part in group { acc.merge(part) { current, _ in current } }
-            return acc
+        guard !plan.isEmpty else { return }
+        loadingBalances = true
+        await readBalances(plan, owner: owner, force: force)
+        loadingBalances = false
+        readingChains = []
+        if forceAfterLoad {
+            forceAfterLoad = false
+            await loadBalances(force: true)
         }
-        balances = merged
-        // Don't latch on a total-failure empty result (every public RPC down): leave it un-latched so opening the
-        // picker or switching chains retries, instead of showing an empty list for the rest of the session.
-        didLoadBalances = !merged.isEmpty
+    }
+
+    /// Reads `plan`'s chains for `owner` (`loadBalances`), each chain's balances shown as soon as it answers, those read in
+    /// part once more at once.
+    private func readBalances(_ plan: [(EVMChain, [AuroraToken])], owner: Address, force: Bool) async {
+        var plan = plan
+        let balancer = env.chainBalances
+        // Each chain once, and those read in part once more at once: the connection the first read opened is usually up.
+        for _ in 0 ..< 2 where !plan.isEmpty {
+            readingChains = Set(plan.map(\.0.auroraId))
+            var inPart: [(EVMChain, [AuroraToken])] = []
+            await withTaskGroup(of: (chain: EVMChain, tokens: [AuroraToken], read: MultiChainBalances.ChainBalances).self) { group in
+                for (chain, toks) in plan {
+                    group.addTask { (chain, toks, await balancer.read(owner: owner, chain: chain, tokens: toks)) }
+                }
+                for await (chain, toks, read) in group {
+                    // Never another wallet's balances (the account changed while they were read).
+                    guard env.session.address == owner else { continue }
+                    // What this read found replaces what was shown. A balance it couldn't read keeps the last one read this
+                    // session, except after a bridge landed (`force`), which the old balance no longer shows.
+                    for token in toks {
+                        if let value = read.balances[token.assetId] { balances[token.assetId] = value } else if force { balances[token.assetId] = nil }
+                    }
+                    if read.complete {
+                        chainsRead.insert(chain.auroraId)
+                        readingChains.remove(chain.auroraId)
+                    } else {
+                        chainsRead.remove(chain.auroraId)
+                        inPart.append((chain, toks))
+                    }
+                }
+            }
+            guard env.session.address == owner else { return }
+            plan = inPart
+        }
     }
 
     // Per-asset balance access for the pickers (keyed by the globally-unique assetId).

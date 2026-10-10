@@ -72,9 +72,9 @@ final class LaunchListingTests: XCTestCase {
         XCTAssertTrue(profile.contains("let launches = listing.keeping(lastLaunches)"))
         XCTAssertTrue(profile.contains("var unread = !listing.complete"))
         XCTAssertTrue(profile.contains("incomplete = unread ?"))
-        XCTAssertTrue(profile.contains("if let incomplete = model.incomplete { InlineError(message: incomplete) }"))
+        XCTAssertTrue(profile.contains("if let incomplete = model.incomplete {\n                HStack(alignment: .firstTextBaseline) {\n                    InlineError(message: incomplete)\n                    Spacer(minLength: 8)\n                    retryButton()"), "said, with Retry")
         let home = try source("Home/HomeView.swift")
-        XCTAssertTrue(home.contains("let launchList = listing.keeping(self.launches)"))
+        XCTAssertTrue(home.contains("launchList = read.keeping(self.launches)"))
         XCTAssertTrue(home.contains("} else if !listing.complete {"))
         for (path, text) in [("Launchpad/LaunchpadView.swift", board), ("Portfolio/PortfolioModel.swift", portfolio), ("Launchpad/LaunchpadProfileView.swift", profile), ("Home/HomeView.swift", home)] {
             XCTAssertFalse(text.contains("allLaunches("), "\(path) reads every launchpad through launchListing")

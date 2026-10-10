@@ -10,6 +10,9 @@ public actor AsyncLimiter {
 
     public init(_ limit: Int) { self.limit = max(1, limit) }
 
+    /// The operations waiting their turn.
+    public var queued: Int { waiting.count }
+
     public func run<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
         try await acquire()
         defer { release() }
@@ -42,67 +45,19 @@ public actor AsyncLimiter {
     }
 }
 
-/// One load per key, shared by every caller that wants it, and cancelled once every one of them has gone (security
-/// audit 2026-09-26, RI-5): a view scrolled away stops its download, instead of a detached task running it to the end.
-@MainActor
-public final class SharedLoads<Value: Sendable> {
-    private final class Load {
-        let task: Task<Value?, Never>
-        var waiters = 0
-        init(task: Task<Value?, Never>) { self.task = task }
-    }
-
-    private final class Waiter { var left = false }
-
-    private var loads: [String: Load] = [:]
-
-    public init() {}
-
-    /// Loads in flight, for tests.
-    public var count: Int { loads.count }
-
-    /// The value for `key`: from the load already running for it, or from `start`. Nil when the load produced nothing,
-    /// or was cancelled because every caller left — a caller that was itself cancelled can tell by `Task.isCancelled`.
-    public func value(for key: String, start: @escaping @Sendable () async -> Value?) async -> Value? {
-        let load: Load
-        if let running = loads[key] {
-            load = running
-        } else {
-            load = Load(task: Task.detached(priority: .userInitiated) { await start() })
-            loads[key] = load
-        }
-        load.waiters += 1
-        let waiter = Waiter()
-        let value = await withTaskCancellationHandler {
-            await load.task.value
-        } onCancel: {
-            Task { @MainActor [weak self] in self?.leave(key, load, waiter) }
-        }
-        leave(key, load, waiter)
-        return value
-    }
-
-    /// Counts one caller out, once. The last one out cancels the load (a no-op once it has finished) and forgets it,
-    /// so the next caller starts afresh.
-    private func leave(_ key: String, _ load: Load, _ waiter: Waiter) {
-        guard !waiter.left else { return }
-        waiter.left = true
-        load.waiters -= 1
-        guard load.waiters == 0 else { return }
-        load.task.cancel()
-        if loads[key] === load { loads[key] = nil }
-    }
-}
-
 /// How a small remote image with letters to stand in for it (a coin logo, a chain badge) waits for its picture. A plain
-/// disc for a short grace period, in which a logo from a live host usually arrives, so the letters don't flash first;
-/// then the letters while the load goes on, since a dead host holds a download for up to 15 s and four run at once
-/// app-wide (`RemoteMedia.fetches`), so a list of them could otherwise sit empty for most of a minute; and the letters at
-/// once for a URL that failed a moment ago (`RecentMisses`). The picture takes the place of either as soon as it
-/// arrives.
+/// disc for a short grace period, in which a logo from a live host usually arrives (from the phone, within a frame or
+/// two: `ImagePipeline`), so the letters don't flash first; then the letters while the load goes on, since a dead host
+/// holds a download for up to 15 s and eight run at once app-wide (`RemoteMedia.fetches`), so a list of them could
+/// otherwise sit empty for most of a minute; and the letters at once for a URL that failed a moment ago
+/// (`RecentMisses`). The picture takes the place of either as soon as it arrives.
 public enum RemoteImageWait {
     /// How long the plain disc shows before the letters.
     public static let grace: Duration = .milliseconds(800)
+    /// How long a picture with no letters to stand in for it (a Moment's art, a launch's, an avatar, an NFT) shows its
+    /// plain fill before a spinner: a picture kept on the phone arrives within it — after a relaunch memory is empty, and
+    /// the phone answers a moment later — so it never flashes a spinner first.
+    public static let spinnerDelay: Duration = .milliseconds(200)
 
     /// What a view waiting on a remote image shows.
     public enum Shown: Equatable, Sendable {
@@ -119,6 +74,20 @@ public enum RemoteImageWait {
     public static func shown(hasImage: Bool, hasURL: Bool, failed: Bool, graceOver: Bool) -> Shown {
         if hasImage { return .image }
         return hasURL && !failed && !graceOver ? .loading : .standIn
+    }
+
+    /// The image a view draws for the picture whose key is `key`: the one it holds when it belongs to that picture
+    /// (`heldKey`), else the picture from memory (`inMemory`) — a view just given another picture draws that one at once
+    /// when the app has it, whatever it held before (an image, or none) — never the last picture's.
+    public static func drawn<Image>(held: Image?, heldKey: String?, key: String, inMemory: () -> Image?) -> Image? {
+        heldKey == key ? held : inMemory()
+    }
+
+    /// Whether a view shows its stand-in for the picture whose key is `key` rather than wait for it: the view gave up on
+    /// that very picture (`failedKey`), it has no source, or its load failed lately (`failedLately`) — never because an
+    /// earlier picture the view showed failed.
+    public static func failed(failedKey: String?, key: String, hasURL: Bool, failedLately: () -> Bool) -> Bool {
+        failedKey == key || !hasURL || failedLately()
     }
 
     /// Waits out `grace`: true once it has passed, false when the wait was cancelled first (the view left, or its URL
@@ -143,7 +112,14 @@ public struct RecentMisses: Sendable {
 
     /// Whether `key` failed less than `lifetime` before `now`.
     public func contains(_ key: String, now: Date = Date()) -> Bool {
-        failedAt[key].map { now.timeIntervalSince($0) < lifetime } ?? false
+        remaining(key, now: now) != nil
+    }
+
+    /// How long until `key` may be asked again, when it failed less than `lifetime` before `now`; nil when it may now.
+    public func remaining(_ key: String, now: Date = Date()) -> TimeInterval? {
+        guard let failed = failedAt[key] else { return nil }
+        let left = lifetime - now.timeIntervalSince(failed)
+        return left > 0 ? left : nil
     }
 
     /// Records that `key` failed at `now`, and forgets the failures that have run out.

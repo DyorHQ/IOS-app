@@ -165,7 +165,7 @@ struct BridgeView: View {
             HStack {
                 Text("You send").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 Spacer()
-                if model.loadingBalances { ProgressView().controlSize(.mini) }
+                if model.readingFromBalance { ProgressView().controlSize(.mini) }
                 else if let bal = model.fromBalanceText {
                     Button { model.useMax() } label: {
                         Text("Balance: \(bal)").font(.caption).foregroundStyle(.secondary)

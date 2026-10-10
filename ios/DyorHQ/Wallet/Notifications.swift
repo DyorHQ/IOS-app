@@ -51,11 +51,30 @@ enum Notifications {
     }
 
     /// A perp order the app sent or saw fill. `notice` says which: `PerpOrderNotice(acknowledged:)` for Perpl's
-    /// acknowledgement of an order ("Order submitted" for a market order, "Order placed" for a limit order), `.filled`
-    /// only for a position read that saw the fill (the app-wide watcher, `AlertCenter`). With `perpId`, a tap opens that
-    /// market. `side` is the side's name in the app's language ("Long"), followed by the market's name.
-    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil) {
-        post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps, reference: perpId.map { PerpAlertText.reference(perpId: $0) })
+    /// acknowledgement of an order while the live outcome is off ("Order submitted" for a market order, "Order placed"
+    /// for a limit order), `PerpOrderNotice(evidence:)` for what Perpl reported the order did (`PerplOrderTracker`), and
+    /// `.filled` for a position read that saw the fill (the app-wide watcher, `AlertCenter`). With `perpId`, a tap opens
+    /// that market. `side` is the side's name in the app's language ("Long"), followed by the market's name. `owner`: the
+    /// account the order was sent for, when it may no longer be the one on screen (filed in its own center); `deliver`
+    /// false files it without a banner (its sheet already shows it, or another account is signed in).
+    static func perpOrder(_ notice: PerpOrderNotice, side: String, market: String, perpId: Int? = nil, owner: Address? = nil, deliver: Bool = true) {
+        NotificationHub.shared.post(kind: .perp, title: notice.title, body: "\(side) \(market)", route: .perps,
+                                    reference: perpId.map { PerpAlertText.reference(perpId: $0) }, deliver: deliver, owner: owner)
+    }
+
+    /// A close sent over the trading connection from the position's Close sheet, from what Perpl reported it did
+    /// (`PerplOrderTracker`): `title` says what happened ("Closed BTC", "Not closed"), `position` names the POSITION it
+    /// closed ("BTC-PERP long"), never the order's side. Filed under `owner`; `deliver` false files it without a banner.
+    static func perpClose(title: String, position: String, perpId: Int, owner: Address?, deliver: Bool) {
+        NotificationHub.shared.post(kind: .perp, title: title, body: position, route: .perps,
+                                    reference: PerpAlertText.reference(perpId: perpId), deliver: deliver, owner: owner)
+    }
+
+    /// Margin sent over the trading connection whose result no sheet showed (`PerplTrading.addMargin`): refused, or not
+    /// confirmed in time. An added margin's notice is its Activity row's own.
+    static func perpMargin(title: String, body: String, perpId: Int, owner: Address?, deliver: Bool) {
+        NotificationHub.shared.post(kind: .perp, title: title, body: body, route: .perps,
+                                    reference: PerpAlertText.reference(perpId: perpId), deliver: deliver, owner: owner)
     }
 
     /// `label` is the action's name in the app's language.

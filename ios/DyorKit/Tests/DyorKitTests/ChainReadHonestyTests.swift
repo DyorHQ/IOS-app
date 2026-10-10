@@ -118,7 +118,9 @@ final class ChainReadHonestyTests: XCTestCase {
 /// Two launches on the v2 fixture launchpad, "Alpha" then "Beta". `recorded` are the coins the factory's record read
 /// knows (a node that hasn't seen the newest launch answers an empty record for it); `priceFails` makes Beta's curve
 /// refuse `price()`, `textFails` makes Beta's token answer nothing for its text; `liveFails` makes the live factory
-/// refuse `launchCount()`. The newest retired stack lists `retiredCoin` ("Old") when set; the others launched nothing.
+/// refuse `launchCount()`; `shortPage` makes its `getLaunches` answer one coin fewer than its count (a node behind);
+/// `longText` gives that coin a description longer than the device keeps (`ChainSettled.maxKeptText`). The newest retired
+/// stack lists `retiredCoin` ("Old") when set; the others launched nothing.
 struct HonestyLaunchpad: Sendable {
     static let live = V2Fixture.launchpad
     static let alpha = Address(literal: "0x0000000000000000000000000000000000a1a100")
@@ -129,6 +131,8 @@ struct HonestyLaunchpad: Sendable {
     var priceFails = false
     var textFails = false
     var liveFails = false
+    var shortPage = false
+    var longText: Address?
     var retiredCoin: Address?
     static let old = Address(literal: "0x0000000000000000000000000000000000a1a300")
 
@@ -140,9 +144,17 @@ struct HonestyLaunchpad: Sendable {
         typealias T = LaunchpadABI.Token
         typealias C = LaunchpadABI.Curve
         let arg = data.count >= 36 ? Address(data: data.dropFirst(4).prefix(32).suffix(20)) : nil
+        // `getLaunches(offset, limit)` as the factory answers it: the page of its list from `offset`, at most `limit` long.
+        func page(_ list: [Address]) -> Data {
+            let words = data.dropFirst(4)
+            let offset = Int(clamping: BigUInt(words.prefix(32)))
+            let limit = min(list.count, Int(clamping: BigUInt(words.dropFirst(32).prefix(32))))
+            let slice = offset < list.count ? Array(list[offset ..< min(list.count, offset + limit)]) : []
+            return enc([.array(slice.map { .address($0) })], "address[]")
+        }
         if to == Self.live.factory {
             if is_(F.launchCount) { return liveFails ? nil : enc([.uint(2)], "uint256") }
-            if is_(F.getLaunches) { return enc([.array([.address(Self.alpha), .address(Self.beta)])], "address[]") }
+            if is_(F.getLaunches) { return page(shortPage ? [Self.alpha] : [Self.alpha, Self.beta]) }
             if is_(F.getLaunchedToken), let arg {
                 let exists = recorded.contains(arg)
                 let fields: [ABIValue] = [.address(exists ? arg : .zero), .address(exists ? Self.curve(arg) : .zero), .address(.zero), .address(.zero), .address(.zero),
@@ -157,7 +169,7 @@ struct HonestyLaunchpad: Sendable {
         if let retired = LaunchpadAddresses.retiredStacks.first(where: { $0.factory == to }) {
             let lists = retired.factory == LaunchpadAddresses.retiredStacks.first?.factory ? retiredCoin : nil
             if is_(F.launchCount) { return enc([.uint(lists == nil ? 0 : 1)], "uint256") }
-            if is_(F.getLaunches), let lists { return enc([.array([.address(lists)])], "address[]") }
+            if is_(F.getLaunches), let lists { return page([lists]) }
             if is_(F.getLaunchedToken) {
                 let exists = lists != nil && arg == lists
                 var fields: [ABIValue] = [.address(exists ? lists! : .zero), .address(exists ? Self.curve(lists!) : .zero), .address(.zero), .address(.zero), .address(.zero),
@@ -173,7 +185,10 @@ struct HonestyLaunchpad: Sendable {
                 if token == Self.beta, textFails, is_(T.name) || is_(T.symbol) || is_(T.getTokenInfo) { return Data() }
                 if is_(T.name) { return enc([.string(name)], "string") }
                 if is_(T.symbol) { return enc([.string(String(name.prefix(1)))], "string") }
-                if is_(T.getTokenInfo) { return enc([.address(.zero), .string(""), .string("About \(name)"), .tuple(Array(repeating: .string(""), count: 5))], "address,string,string,(string,string,string,string,string)") }
+                if is_(T.getTokenInfo) {
+                    let about = token == longText ? String(repeating: "a", count: ChainSettled.maxKeptText + 1) : "About \(name)"
+                    return enc([.address(.zero), .string(""), .string(about), .tuple(Array(repeating: .string(""), count: 5))], "address,string,string,(string,string,string,string,string)")
+                }
                 if is_(T.totalSupply) { return enc([.uint(BigUInt(10).power(27))], "uint256") }
             }
             if to == Self.curve(token) {

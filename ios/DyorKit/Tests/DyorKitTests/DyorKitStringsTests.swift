@@ -519,6 +519,8 @@ final class DyorKitStringsTests: XCTestCase {
         let logs = try Self.source("Core/Logs.swift")
         XCTAssertTrue(logs.contains(#"let sizes = ["response size", "block range", "too large", "limited to a", "returned more than", "too many logs", "too many results"]"#))
         XCTAssertTrue(logs.contains(#"return message.contains("beyond current head") || message.contains("beyond the current head")"#))
+        XCTAssertTrue(logs.contains(#"|| message.contains("not yet available on the node") || message.contains("errupstreamblockunavailable")"#))
+        XCTAssertTrue(logs.contains(#"|| (error.code == -32014 && message.contains("block not available"))"#))
         let perpl = try Self.source("Services/Perpl/PerplTradeClient.swift")
         XCTAssertTrue(perpl.contains(#"public var isConnectionCap: Bool { code == 1008 && reason.localizedCaseInsensitiveContains("too many connections") }"#))
         XCTAssertTrue(perpl.contains(#"public var isRateLimit: Bool { code == 1008 && reason.localizedCaseInsensitiveContains("too many requests") }"#))
@@ -546,6 +548,7 @@ final class DyorKitStringsTests: XCTestCase {
         XCTAssertTrue(RPCClient.isRateLimited(RPCError(code: -32007, message: "50/second request limit reached")))
         XCTAssertTrue(RPCClient.refusesSize(RPCError(code: -32000, message: "query returned more than 10000 results")))
         XCTAssertTrue(RPCClient.refusesPastHead(RPCError(code: -32602, message: "block range extends beyond current head block")))
+        XCTAssertTrue(RPCClient.refusesPastHead(RPCError(code: -32014, message: "block not available: block not found for eth_getLogs, requested toBlock 111739189 is not yet available on the node")))
         XCTAssertTrue(ERC20.isCallError(RPCError(code: -32000, message: "execution reverted")))
         XCTAssertTrue(ERC20.isCallError(RPCError(code: -32000, message: "Call reverted")), "Multicall's own failure reads as a node's")
         XCTAssertTrue(TokenTransfer.isRevert(RPCError(code: -32000, message: "insufficient funds for transfer")))
@@ -632,5 +635,24 @@ final class DyorKitStringsTests: XCTestCase {
             let complete = plurals.contains { !value($0, "one").isEmpty && !value($0, "other").isEmpty && value($0, "one") != value($0, "other") }
             XCTAssertTrue(complete, "no English one and other plural forms in DyorKit's catalog: \(key)")
         }
+    }
+
+    /// A close the app sent that Perpl took but didn't report in time is said of the close (p4 spec #26): check the
+    /// positions before closing again — never the order's "before placing it again". The order keeps its own sentences.
+    func testAnUnconfirmedCloseIsSaidOfTheClose() {
+        let c = PerplOutcomeText.Context(asset: "BTC", priceDecimals: 1, lotDecimals: 5, requestedSize: 0.002, limitPrice: nil, isMarket: true,
+                                         reducesPosition: true, slippageBps: 100, acknowledged: true)
+        let expected: [(PerplOrderOutcome.Unconfirmed, String)] = [
+            (.timedOut, "Perpl accepted the close for forwarding but hasn't reported what happened to it yet. Your positions are reloading: check them before closing again."),
+            (.connectionLost, "The connection to Perpl dropped before it reported the close's result. Your positions are reloading: check them before closing again."),
+            (.foreignReport, "Perpl reported a different order under this close's request number, so its result can't be shown. Check Positions before closing again."),
+        ]
+        for (why, sentence) in expected {
+            let close = PerplOutcomeText.close(.unconfirmed(why), c)
+            XCTAssertEqual(close.detail, sentence)
+            XCTAssertFalse(close.detail?.contains("placing it again") ?? true)
+            XCTAssertTrue(PerplOutcomeText.order(.unconfirmed(why), c).detail?.contains("placing it again") ?? false, "the order keeps its own")
+        }
+        XCTAssertEqual(PerplOutcomeText.notClosedHeadline, "Not closed")
     }
 }

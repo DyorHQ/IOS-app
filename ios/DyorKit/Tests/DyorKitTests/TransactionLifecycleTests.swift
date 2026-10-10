@@ -26,10 +26,11 @@ final class TransactionLifecycleTests: XCTestCase {
 
     private var rpc: RPCClient { RPCClient(url: URL(string: "https://primary.test")!, session: RPCStub.session()) }
 
-    private func sender(chainId: Int = Monad.chainId, receiptPolls: Int = 5) -> TransactionSender {
+    private func sender(chainId: Int = Monad.chainId, receiptPolls: Int = 5, receiptFastPolls: Int = 0) -> TransactionSender {
         var sender = TransactionSender(rpc: rpc, chainId: chainId)
         sender.timing = .init(blockPoll: .milliseconds(1), spacingTimeout: .milliseconds(50), fundingRetry: .milliseconds(1),
-                              resendAttempts: 3, resendBackoff: .milliseconds(1), receiptPolls: receiptPolls, receiptInterval: .milliseconds(1))
+                              resendAttempts: 3, resendBackoff: .milliseconds(1), receiptPolls: receiptPolls, receiptInterval: .milliseconds(1),
+                              receiptFastPolls: receiptFastPolls, receiptFastInterval: .milliseconds(1))
         return sender
     }
 
@@ -257,6 +258,53 @@ final class TransactionLifecycleTests: XCTestCase {
         } catch let error as TransactionError {
             XCTAssertEqual(error.hash, second)
         }
+    }
+
+    /// The fast first phase (real-time spec §6.2): its reads come before the budget's, `fastInterval` apart, and count as
+    /// polls of their own — the budget is still a number of polls (fast + slow + the last read), never a deadline.
+    func testReceiptWaitReadsFastFirst() async throws {
+        let hash = try await broadcastOne()
+        chain.pendingReceiptReads = 3
+        let started = Date()
+        // Slow polls 10 s apart: only the fast phase can find it this soon.
+        let receipt = try await rpc.waitForReceipt(hash, polls: 2, interval: .seconds(10), fastPolls: 5, fastInterval: .milliseconds(1))
+        XCTAssertTrue(receipt.success)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2, "found in the fast phase")
+
+        // 2 fast + 2 slow + the last read: a receipt on the 5th read is found, one on the 6th is not.
+        let second = try await sender().send(TransactionRequest(to: target, data: Data([0x0a])), from: CountingWallet())
+        chain.pendingReceiptReads = 4
+        let found = try await rpc.waitForReceipt(second, polls: 2, interval: .milliseconds(1), fastPolls: 2, fastInterval: .milliseconds(1))
+        XCTAssertTrue(found.success)
+        let third = try await sender().send(TransactionRequest(to: target, data: Data([0x0b])), from: CountingWallet())
+        chain.pendingReceiptReads = 5
+        do {
+            _ = try await rpc.waitForReceipt(third, polls: 2, interval: .milliseconds(1), fastPolls: 2, fastInterval: .milliseconds(1))
+            XCTFail("expected timedOut")
+        } catch let error as TransactionError {
+            XCTAssertEqual(error.hash, third)
+        }
+    }
+
+    /// 20 reads 150 ms apart by default, on Monad only: the Bridge's other chains keep the 500 ms polls. A plan's step on
+    /// Monad uses them.
+    func testFastReceiptPollsAreMonadsOnly() async throws {
+        let defaults = TransactionSender.Timing()
+        XCTAssertEqual(defaults.receiptFastPolls, 20)
+        XCTAssertEqual(defaults.receiptFastInterval, .milliseconds(150))
+        XCTAssertEqual(defaults.receiptPolls, 180, "the budget after them is unchanged")
+        XCTAssertEqual(defaults.receiptInterval, .milliseconds(500))
+        XCTAssertEqual(TransactionSender(rpc: rpc, chainId: Monad.chainId).receiptFastPollCount, 20)
+        XCTAssertEqual(TransactionSender(rpc: rpc, chainId: 1).receiptFastPollCount, 0)
+        XCTAssertEqual(TransactionSender(rpc: rpc, chainId: 8453).receiptFastPollCount, 0)
+
+        // A Monad step whose receipt shows on the third read: found by the fast reads, never waiting out a slow poll.
+        var monad = sender(receiptFastPolls: 5)
+        monad.timing.receiptInterval = .seconds(10)
+        chain.pendingReceiptReads = 2
+        let started = Date()
+        _ = try await monad.run([.call(request, label: "Long BTC-PERP")], from: CountingWallet()) { _ in }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
     }
 
     /// Failed reads (a socket that died while the phone was locked) are polls like any other, not a failure.

@@ -29,7 +29,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 
     /// The launchpad's contract generations, oldest first. A getter a generation lacks reverts, and in a Multicall3
     /// `readAll` one reverted sub-call fails the whole read, so every optional read and plan asks the stack's generation.
-    public enum Generation: Int, Sendable, Hashable, Comparable, CaseIterable, CustomStringConvertible {
+    public enum Generation: Int, Sendable, Hashable, Codable, Comparable, CaseIterable, CustomStringConvertible {
         /// 0xad3d…, the first deployment: the 16-field `getLaunchedToken` record (no `graduationVenue`); every launch
         /// graduates on Monday Trade.
         case legacy
@@ -155,7 +155,7 @@ public struct LaunchpadAddresses: Sendable, Hashable {
 }
 
 /// `Types.Phase` in the contracts: NotGraduated, Swept, PoolCreated, Rescued.
-public enum LaunchPhase: Int, Sendable, Hashable, CaseIterable {
+public enum LaunchPhase: Int, Sendable, Hashable, Codable, CaseIterable {
     case bonding = 0
     case migrating
     case graduated
@@ -224,7 +224,7 @@ public enum LaunchBoard {
 
 /// `Types.GraduationVenue` in the contracts: where a completed curve graduates. The creator chooses at launch;
 /// aBIL-quoted (and any `pairMondayOnly`) launches are forced to Monday. UniswapV4 is the default (enum value 0).
-public enum GraduationVenue: UInt8, Sendable, Hashable, CaseIterable {
+public enum GraduationVenue: UInt8, Sendable, Hashable, Codable, CaseIterable {
     case uniswapV4 = 0
     case monday = 1
 
@@ -239,7 +239,7 @@ public enum GraduationVenue: UInt8, Sendable, Hashable, CaseIterable {
     init(raw: BigUInt) { self = GraduationVenue(rawValue: UInt8(clamping: raw)) ?? .uniswapV4 }
 }
 
-public struct Socials: Hashable, Sendable {
+public struct Socials: Hashable, Sendable, Codable {
     public var twitter: String
     public var telegram: String
     public var discord: String
@@ -258,7 +258,7 @@ public struct Socials: Hashable, Sendable {
 }
 
 /// The asset a curve collects. Native MON is `Address.zero`.
-public struct PairInfo: Hashable, Sendable {
+public struct PairInfo: Hashable, Sendable, Codable {
     public let address: Address
     public let symbol: String
     public let decimals: Int
@@ -437,10 +437,25 @@ public struct LaunchListing: Sendable {
         guard !unread.isEmpty else { return launches }
         return factories.flatMap { factory in (unread[factory] == nil ? launches : previous).filter { $0.factory == factory } }
     }
+
+    /// The newest `limit` launches of each factory, in place, every factory and error kept: what a screen listing fewer
+    /// takes from the list every screen shares (`LaunchpadService.launchListing`), exactly the launches a read of `limit`
+    /// would have listed.
+    public func prefix(perFactory limit: Int) -> LaunchListing {
+        var taken: [Address: Int] = [:]
+        let kept = launches.filter { launch in
+            let count = taken[launch.factory, default: 0]
+            guard count < limit else { return false }
+            taken[launch.factory] = count + 1
+            return true
+        }
+        return LaunchListing(factories: factories, launches: kept, unread: unread)
+    }
 }
 
-/// One launch as the explore list shows it: the factory record plus the token metadata and live curve state.
-public struct Launch: Identifiable, Hashable, Sendable {
+/// One launch as the explore list shows it: the factory record plus the token metadata and live curve state. Codable, so
+/// the screens that list it can keep what they last showed (`SavedScreens`), its text as it was shown.
+public struct Launch: Identifiable, Hashable, Sendable, Codable {
     public var id: Address { token }
 
     public let token: Address
@@ -689,7 +704,7 @@ public struct GraduationFallbackRule: Hashable, Sendable {
 
 /// A wallet's claimable fee-escrow balances, by pair asset. `native` is MON; `tokens` maps each ERC-20 pair asset
 /// (USDC, AUSD, …) to its claimable amount. This is a creator's withdrawable fees, aggregated across their launches.
-public struct EscrowBalances: Hashable, Sendable {
+public struct EscrowBalances: Hashable, Sendable, Codable {
     public let native: BigUInt
     public let tokens: [Address: BigUInt]
 
@@ -706,7 +721,7 @@ public struct EscrowBalances: Hashable, Sendable {
 
 /// One launchpad's fee escrow and what an account can claim from it (`LaunchpadService.escrowReads`): nil balances when
 /// the read failed.
-public struct LaunchpadEscrowRead: Hashable, Sendable {
+public struct LaunchpadEscrowRead: Hashable, Sendable, Codable {
     public let escrow: Address
     public let factory: Address
     public let retired: Bool
@@ -834,6 +849,40 @@ public struct CurveTrade: Identifiable, Hashable, Sendable {
     }
 
     public var transactionHash: Data? { Data(hex: String(id.prefix(66))) }
+}
+
+/// A window of one curve's fills (`LaunchpadService.trades`), and whether all of it was read.
+public struct CurveTrades: Sendable, Hashable {
+    /// The fills read, oldest first.
+    public let trades: [CurveTrade]
+    /// Every block of the window was read, so `trades` are all its fills. False: the read stopped short (its budget spent,
+    /// an endpoint that didn't answer). It reads newest first, so `trades` are the latest fills, every one down to where it
+    /// stopped, and the oldest of the window are missing: a screen says so, and never shows a sum of them (the 24h volume)
+    /// as the whole.
+    public let complete: Bool
+
+    public init(trades: [CurveTrade], complete: Bool) {
+        self.trades = trades
+        self.complete = complete
+    }
+}
+
+/// How many wallets hold a launch coin (`LaunchpadService.holders`): the addresses whose transfers since the launch leave
+/// them a positive balance, the zero address and the coin's curve left out.
+public struct HolderCount: Sendable, Hashable {
+    public let count: Int
+    /// Every transfer from before the coin's launch to the head was read: `count` is exact. False: the read stopped short
+    /// of the launch, and `count` is a minimum. The transfers are read newest first, so what was read runs from some block
+    /// to the head, and an address whose transfers there add up to more in than out holds the coin now, whatever it held
+    /// before (a balance is never below zero): every address counted holds it, and only holders whose last transfer is
+    /// older than the read are missing. Read oldest first, as in build 22 and earlier, the same count was of balances at
+    /// some block in the past, neither a minimum nor the count: a coin launched in the last six days read 0.
+    public let complete: Bool
+
+    public init(count: Int, complete: Bool) {
+        self.count = count
+        self.complete = complete
+    }
 }
 
 /// OHLC bucket for the lightweight chart. `volume` is quote traded, in pair units.

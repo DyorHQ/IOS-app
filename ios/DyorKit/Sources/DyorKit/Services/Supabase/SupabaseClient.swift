@@ -93,6 +93,17 @@ public actor SupabaseClient {
     /// The URL of one of the project's Edge Functions.
     public nonisolated func functionURL(_ name: String) -> URL { baseURL.appending(path: "functions/v1/\(name)") }
 
+    /// Opens the connection to the project before the first read needs it (speed work, 2026-10-10): a `HEAD` of its root,
+    /// which carries no key, reads no table and changes nothing, its answer unread. A new connection cost 0.4–0.8 s of
+    /// handshakes (measured 2026-10-08), paid by the app's first sign-in, settings and profile reads otherwise; every
+    /// request of this client goes over the one it opens (the same session, the same host).
+    public nonisolated func warm() async {
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = RPCClient.readTimeout
+        _ = try? await session.data(for: request)
+    }
+
     /// Headers that authenticate a request to an Edge Function as the signed-in wallet (publishable key + session
     /// JWT). Throws when there is no valid session.
     public func sessionHeaders() throws -> [String: String] {
@@ -267,6 +278,16 @@ public actor SupabaseClient {
         return try decode(data, as: T.self)
     }
 
+    /// `rpc` for a function whose arguments aren't all text — block numbers, a flag, a null (`history_read`'s
+    /// `p_from_block`, `p_meta_only`) — as JSON values: a whole number goes as digits, never "1.0", so PostgREST hands a
+    /// `bigint` argument its value; and the answer as it came, for the caller to parse (`HistoryServerClient`). The same
+    /// request as `rpc`: the publishable key, or the session when `authed`. Throws `SupabaseError.http` with the status and
+    /// body for anything but a 2xx, and the transport's error when there is no answer.
+    public func rpcJSON(name: String, body: [String: JSON], authed: Bool = false) async throws -> Data {
+        let encoded = try JSONEncoder().encode(body)
+        return try await send(method: "POST", path: "rest/v1/rpc/\(name)", query: [], body: encoded, prefer: nil, authed: authed)
+    }
+
     /// Deletes rows matching the query. Requires a session.
     public func delete(_ table: String, query: [URLQueryItem]) async throws {
         guard currentSession != nil else { throw SupabaseError.notSignedIn }
@@ -278,7 +299,8 @@ public actor SupabaseClient {
     /// Uploads bytes to a public Storage bucket and returns the public URL. Requires a session; RLS on
     /// `storage.objects` decides whether the wallet may write to that path. Only the resulting public URL is stored
     /// in a row — never the bytes. `upsert: false` for a write-once bucket (launch-media, whose URLs go on-chain):
-    /// an object that already exists is then refused (`isDuplicateUpload`) instead of overwritten.
+    /// an object that already exists is then refused (`isDuplicateUpload`) instead of overwritten. The object is served
+    /// with its bucket's cache lifetime (`cacheControl(forBucket:)`).
     @discardableResult
     public func uploadPublic(bucket: String, path: String, data: Data, contentType: String, upsert: Bool = true) async throws -> URL {
         let request = try storageUpload(bucket: bucket, path: path, contentType: contentType, upsert: upsert)
@@ -309,6 +331,19 @@ public actor SupabaseClient {
         return (object["statusCode"].map { "\($0)" } == "409") || (object["error"] as? String) == "Duplicate"
     }
 
+    /// The `Cache-Control` an upload to `bucket` is stored with: Storage keeps an upload's header as the object's
+    /// `cacheControl` and answers every read of it with that, and keeps `no-cache` when there is none — which made every
+    /// read of every object a revalidation (all 59 measured 2026-10-08).
+    /// - `launch-media`: a week, as the app keeps its own copy (`ImagePipeline.immutableLifetime`). The bucket is
+    ///   write-once (supabase migration 26: no upload over an object, no move or rename) and its URLs go on chain, so the
+    ///   bytes behind one never change — but a takedown deletes the object, and a browser, a wallet or a proxy showing it
+    ///   outside the app must stop within a week too, which a year's `immutable` would have forbidden for good.
+    /// - Any other bucket, `avatars` among them: none (Storage's `no-cache`). `avatars/<wallet>/avatar.jpg` is uploaded
+    ///   over, and every read reaching Storage is what makes a new one show at once.
+    public static func cacheControl(forBucket bucket: String) -> String? {
+        bucket == "launch-media" ? "public, max-age=604800" : nil // not localized: an HTTP header value
+    }
+
     private func storageUpload(bucket: String, path: String, contentType: String, upsert: Bool) throws -> URLRequest {
         guard let token = currentSession?.accessToken else { throw SupabaseError.notSignedIn }
         var request = URLRequest(url: baseURL.appending(path: "storage/v1/object/\(bucket)/\(path)"))
@@ -317,6 +352,7 @@ public actor SupabaseClient {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue(upsert ? "true" : "false", forHTTPHeaderField: "x-upsert")
+        if let cacheControl = Self.cacheControl(forBucket: bucket) { request.setValue(cacheControl, forHTTPHeaderField: "Cache-Control") }
         request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
         return request

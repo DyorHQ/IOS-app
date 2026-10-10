@@ -239,20 +239,26 @@ public struct Log: Sendable, Hashable, Identifiable {
     public let blockNumber: UInt64
     public let transactionHash: Data
     public let logIndex: Int
+    /// When the log's block was mined (seconds since 1970), as the endpoint said it: Monad's `eth_getLogs` answers carry
+    /// `blockTimestamp` (rpc2, 2026-10-08). Nil where none was given — a receipt, a log kept before the app read it, a
+    /// node that leaves it out — and the time is then estimated from a later block (`BlockClock.time(of:anchor:secondsPerBlock:)`).
+    public let blockTimestamp: Int?
 
     /// `txHash-logIndex`, unique across the chain.
     public var id: String { "\(transactionHash.hexString)-\(logIndex)" }
 
-    public init(address: Address, topics: [Data], data: Data, blockNumber: UInt64, transactionHash: Data, logIndex: Int) {
+    public init(address: Address, topics: [Data], data: Data, blockNumber: UInt64, transactionHash: Data, logIndex: Int, blockTimestamp: Int? = nil) {
         self.address = address
         self.topics = topics
         self.data = data
         self.blockNumber = blockNumber
         self.transactionHash = transactionHash
         self.logIndex = logIndex
+        self.blockTimestamp = blockTimestamp
     }
 
-    /// Parses one log object from a JSON-RPC response. Returns nil when a required field is missing or malformed.
+    /// Parses one log object from a JSON-RPC response. Returns nil when a required field is missing or malformed. The
+    /// block's timestamp is optional: one missing or malformed is left out (nil), never a reason to drop the log.
     public init?(json: JSON) {
         guard let addressHex = json["address"].string, let address = Address(addressHex),
               let topicList = json["topics"].array,
@@ -266,13 +272,43 @@ public struct Log: Sendable, Hashable, Identifiable {
             guard let hex = topic.string, let bytes = Data(hex: hex) else { return nil }
             topics.append(bytes)
         }
-        self.init(address: address, topics: topics, data: data, blockNumber: UInt64(clamping: block), transactionHash: hash, logIndex: Int(clamping: index))
+        let timestamp = json["blockTimestamp"].string.flatMap { BigUInt(hexQuantity: $0) }.map { Int(clamping: $0) }
+        self.init(address: address, topics: topics, data: data, blockNumber: UInt64(clamping: block), transactionHash: hash, logIndex: Int(clamping: index),
+                  blockTimestamp: timestamp)
     }
 
     /// The `index`th indexed parameter as an address (topic 0 is the event signature).
     public func indexedAddress(_ index: Int) -> Address? {
         guard topics.indices.contains(index + 1), topics[index + 1].count == 32 else { return nil }
         return Address(data: topics[index + 1].suffix(20))
+    }
+}
+
+/// The newest logs of a window (`RPCClient.newestLogs`): every log from `readFrom` to the window's end, read in one piece
+/// down from it, and none older — so a figure built from them is of an unbroken run of blocks ending at the head. A gap the
+/// router left lower down (a range no endpoint answered) cuts the run there, and what was read below it is left out:
+/// counted with it, a wallet's transfers in on one side of the gap and out on the other would read as a balance it doesn't
+/// have.
+public struct NewestLogs: Sendable, Equatable {
+    /// The logs from `readFrom` to the window's end, in block order.
+    public let logs: [Log]
+    /// The oldest block of the run read in one piece down from the window's end; nil when the end itself wasn't read
+    /// (then `logs` is empty, and nothing can be said of the window).
+    public let readFrom: UInt64?
+    /// Every block of the window was read: `logs` are all of it.
+    public let complete: Bool
+
+    public init(logs: [Log], readFrom: UInt64?, complete: Bool) {
+        self.logs = logs
+        self.readFrom = readFrom
+        self.complete = complete
+    }
+
+    /// What a router read of `[from, to]` (`LogsRead`) holds of the run down from `to`.
+    public init(_ read: LogsRead, from: UInt64, to: UInt64) {
+        let down = read.downTo(to)
+        self.init(logs: down.map { floor in read.logs.filter { $0.blockNumber >= floor && $0.blockNumber <= to } } ?? [], readFrom: down,
+                  complete: read.covers(from, to))
     }
 }
 
@@ -339,10 +375,9 @@ public extension RPCClient {
     /// This endpoint's budget for one request; see `logBatchSpan(for:)`.
     nonisolated var logBatchSpan: UInt64? { Self.logBatchSpan(for: url) }
 
-    nonisolated var isLocal: Bool {
-        let host = url.host() ?? ""
-        return host == "127.0.0.1" || host == "localhost"
-    }
+    /// Whether this client's endpoint is a node on this machine (a local fork): `RPCClient.isLocal(_:)`, the one rule for
+    /// the log floors and fork-block clamps here and for the read limits and item budget.
+    nonisolated var isLocal: Bool { Self.isLocal(url) }
 
     /// The block a local Anvil fork started from (`anvil_metadata`), cached for the process; nil when the local node
     /// is not Anvil or is not a fork.
@@ -377,9 +412,18 @@ public extension RPCClient {
     /// sending `concurrency` ranges per round trip (fewer where the endpoint counts a request's ranges together,
     /// `logBatchSpan`). A range that fails is read again in smaller parts, as build 15 read it
     /// (`LogScanMode.patient`); what still can't be read leaves a gap rather than failing the whole window, exactly as the
-    /// web app's `chunkedLogs` does, and the caller gets everything that could be read.
+    /// web app's `chunkedLogs` does, and the caller gets everything that could be read, newest ranges first
+    /// (`LogsRouter.Order.descending`).
+    ///
+    /// It says nothing of what it couldn't read, so no screen reads through it: a screen's scan says what it read
+    /// (`chunkedLogsReport`, `newestLogs`: the Launch page's trades and holders, a Moment's holders), and the wallet's NFTs
+    /// come from its history store. What is left here are readers no screen shows (a wallet's launchpad history over a
+    /// given lookback, the swap scan of a window), read newest first since build 23: in build 22 and earlier they read
+    /// oldest first, so a window wider than the scan's budget (80 requests, about 4.8M blocks) came back as its OLDEST
+    /// slice, nothing of the last weeks, and nobody was told.
     func chunkedLogs(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6) async -> [Log] {
-        await chunkedLogsReport(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock, chunkSize: chunkSize, concurrency: concurrency).logs
+        await chunkedLogsReport(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock, chunkSize: chunkSize, concurrency: concurrency,
+                                order: .descending).logs
     }
 
     /// `chunkedLogs`, saying whether the whole window was read: `complete` is false when a range was left as a gap, or the
@@ -390,33 +434,70 @@ public extension RPCClient {
     /// for 45 s; fail-fast, for the wallet's history on Send and the Portfolio, left as a gap, and two rounds in a row with
     /// no range answered end the scan; paced, for the venue token list, as patient, but a throttle is waited out, never
     /// split. Either way no endpoint can keep a scan going for hours (`LogScanLimits`).
+    ///
+    /// On the logs router (mainnet), `concurrency` is the most requests in flight at once for this scan, never more than
+    /// the router's own (the default leaves it at the router's), and `lane` is where they wait at the app's one gate
+    /// (`LogsGate.Lane`): a screen's scan, the default, ahead of the wallet's history rounds and the background. In build
+    /// 22 and earlier the router left both out, so the venue list's "one request at a time" ran four at once, first come
+    /// first served with the screens.
+    ///
+    /// `order` is which end of the window is read first, and so which part a scan that stops short holds: ascending, the
+    /// default, from `fromBlock` up; descending, from `toBlock` down — the newest blocks, what a screen of recent trades or
+    /// a coin's holders needs, read whole before anything older. A window wider than the scan's budget (patient: 80
+    /// requests, about 4.8M blocks on rpc2, 80,000 on the 1,000-block endpoints) is always read in part: ascending, it was
+    /// the oldest weeks of it in build 22 and earlier, a Moment's holders counted from its first days, the wallet's NFTs from
+    /// the chain's first two weeks. Either way the logs come back in block order and `complete` says whether the whole
+    /// window was read.
     func chunkedLogsReport(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6,
-                           mode: LogScanMode = .patient) async -> (logs: [Log], complete: Bool) {
+                           mode: LogScanMode = .patient, lane: LogsGate.Lane = .interactive, order: LogsRouter.Order = .ascending) async -> (logs: [Log], complete: Bool) {
         await chunkedLogsReport(address: address, topics: topics, fromBlock: fromBlock, toBlock: toBlock, chunkSize: chunkSize, concurrency: concurrency,
-                                mode: mode, limits: LogScanLimits())
+                                mode: mode, limits: LogScanLimits(), lane: lane, order: order)
+    }
+
+    /// The newest logs of `[fromBlock, toBlock]`, read newest first within `mode`'s budget (`LogsBudget`), as far down as
+    /// they were read in one piece (`NewestLogs`): what a figure that is a minimum when the read stops short is built from
+    /// — a coin's holders (`LaunchpadService.holders`, `MomentsService.holderStats`) — and a list of the latest events that
+    /// says how far back it reaches (`LaunchpadService.trades`). Off the router (a local fork) the scan doesn't say which
+    /// blocks it read: a read in part holds nothing, rather than a run it can't vouch for.
+    ///
+    /// The read stands on its newest range: with `toBlock` unread there is nothing. A head read from these same endpoints
+    /// (`block(.latest)` on this client) keeps it within what they serve, and a node a few blocks behind it refusing that
+    /// range is asked again after a pause (`LogsRouter.headPause`) rather than three times at once.
+    func newestLogs(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, mode: LogScanMode = .patient,
+                    lane: LogsGate.Lane = .interactive) async -> NewestLogs {
+        guard fromBlock <= toBlock else { return NewestLogs(logs: [], readFrom: toBlock, complete: true) }
+        if let logsRouter {
+            let read = await logsRouter.read(LogsQuery(address: address, topics: topics), from: fromBlock, to: toBlock, order: .descending, budget: LogsBudget(mode: mode), lane: lane)
+            return NewestLogs(read, from: fromBlock, to: toBlock)
+        }
+        var from = fromBlock
+        if isLocal, let forkBlock = await localForkBlock() { from = max(from, forkBlock) }
+        let report = await chunkedLogsReport(address: address, topics: topics, fromBlock: from, toBlock: toBlock, mode: mode, lane: lane, order: .descending)
+        return report.complete ? NewestLogs(logs: report.logs, readFrom: min(from, toBlock), complete: true) : NewestLogs(logs: [], readFrom: nil, complete: false)
     }
 
     /// `chunkedLogsReport` within `limits`.
     internal func chunkedLogsReport(address: Address?, topics: [Data?], fromBlock: UInt64, toBlock: UInt64, chunkSize: UInt64? = nil, concurrency: Int = 6,
-                                    mode: LogScanMode, limits: LogScanLimits) async -> (logs: [Log], complete: Bool) {
+                                    mode: LogScanMode, limits: LogScanLimits, lane: LogsGate.Lane = .interactive,
+                                    order: LogsRouter.Order = .ascending) async -> (logs: [Log], complete: Bool) {
         // A local Anvil fork only holds logs from its fork block on (older ranges are forwarded upstream, where the
         // default RPC caps them at 100 blocks), so a development build scans the fork's own blocks only.
         var fromBlock = fromBlock
         if isLocal, let forkBlock = await localForkBlock() { fromBlock = max(fromBlock, forkBlock) }
         guard fromBlock <= toBlock else { return ([], true) }
-        // On mainnet: across the public endpoints, in ranges each answers, within the mode's budget (`LogsRouter`).
+        // On mainnet: across the public endpoints, in ranges each answers, within the mode's budget, as many requests at
+        // once as the scan asks for and in its lane at the gate (`LogsRouter`).
         if let logsRouter {
-            let read = await logsRouter.read(LogsQuery(address: address, topics: topics), from: fromBlock, to: toBlock, budget: LogsBudget(mode: mode))
+            let read = await logsRouter.read(LogsQuery(address: address, topics: topics), from: fromBlock, to: toBlock, order: order, budget: LogsBudget(mode: mode),
+                                             concurrency: concurrency, lane: lane)
             return (read.logs, read.covers(fromBlock, toBlock))
         }
         let chunk = max(1, chunkSize ?? logChunkSize)
-        var ranges: [LogFilter] = []
-        var start = fromBlock
-        while start <= toBlock {
-            let end = start + chunk - 1 > toBlock ? toBlock : start + chunk - 1
-            ranges.append(LogFilter(address: address, topics: topics, fromBlock: start, toBlock: end))
-            if end == UInt64.max { break }
-            start = end + 1
+        let ranges = Self.logRanges(address: address, topics: topics, from: fromBlock, to: toBlock, chunk: chunk, order: order)
+        // Newest first, the ranges' answers arrive newest first: the caller gets them in block order, as the router gives them.
+        func inOrder(_ read: (logs: [Log], complete: Bool)) -> (logs: [Log], complete: Bool) {
+            guard order == .descending else { return read }
+            return (read.logs.sorted { a, b in a.blockNumber == b.blockNumber ? a.logIndex < b.logIndex : a.blockNumber < b.blockNumber }, read.complete)
         }
         var scan = LogScan(mode: mode, limits: limits)
         // A wallet-scoped filter (a topic beyond the event signature) is cheap for the wide-range endpoints however
@@ -469,9 +550,37 @@ public extension RPCClient {
             }
             guard mode == .failFast else { continue }
             unanswered = answered ? 0 : unanswered + 1
-            if unanswered >= 2 { return (out, false) }
+            if unanswered >= 2 { return inOrder((out, false)) }
         }
-        return (out, complete && next == ranges.count && !scan.down)
+        return inOrder((out, complete && next == ranges.count && !scan.down))
+    }
+
+    /// `[from, to]` cut into ranges of `chunk` blocks, in the order a scan asks them: ascending, from `from`, the last one
+    /// short; descending, from `to` down, each a whole `chunk` but the oldest — so a scan that stops short holds the newest
+    /// blocks, read whole.
+    internal static func logRanges(address: Address?, topics: [Data?], from: UInt64, to: UInt64, chunk: UInt64, order: LogsRouter.Order) -> [LogFilter] {
+        guard from <= to else { return [] }
+        let chunk = max(1, chunk)
+        var ranges: [LogFilter] = []
+        switch order {
+        case .ascending:
+            var start = from
+            while start <= to {
+                let end = start + chunk - 1 > to ? to : start + chunk - 1
+                ranges.append(LogFilter(address: address, topics: topics, fromBlock: start, toBlock: end))
+                if end == UInt64.max { break }
+                start = end + 1
+            }
+        case .descending:
+            var end = to
+            while true {
+                let start = end - from >= chunk ? end - chunk + 1 : from
+                ranges.append(LogFilter(address: address, topics: topics, fromBlock: start, toBlock: end))
+                if start == from { break }
+                end = start - 1
+            }
+        }
+        return ranges
     }
 
     /// What the endpoint answered each of `filters`, in one round trip: those that failed for a reason other than their
@@ -602,12 +711,18 @@ public extension RPCClient {
 
     /// Whether an `eth_getLogs` error refuses the range for ending past the head of the node that answered it — rpc1's
     /// "block range extends beyond current head block" (-32602, probed 2026-09-30), which `refusesSize` would otherwise
-    /// take for a size refusal ("block range") and split — rather than for its size: a smaller range from the same start
-    /// ends there too, and the node reaches it in a moment, so it is asked again first (`LogsAnswer.pastHead`).
+    /// take for a size refusal ("block range") and split; rpc2's "block not available: block not found for eth_getLogs,
+    /// requested toBlock … is not yet available on the node" (-32014, 2026-10-09), and an upstream's
+    /// "ErrUpstreamBlockUnavailable", which read as failures, counted against the range — rather than for its size: a
+    /// smaller range from the same start ends there too, and the node reaches it in a moment, so it is asked again first
+    /// (`LogsAnswer.pastHead`). rpc2 is the endpoint the newest blocks are read on (`LogsEndpoint.clamps`): its refusal
+    /// taken for a failure left them a gap after three asks in a row, a node a few blocks behind the head.
     internal static func refusesPastHead(_ error: RPCError) -> Bool {
         let message = error.message.lowercased()
         // not localized: the endpoint's own English, matched as it sends it
         return message.contains("beyond current head") || message.contains("beyond the current head")
+            || message.contains("not yet available on the node") || message.contains("errupstreamblockunavailable")
+            || (error.code == -32014 && message.contains("block not available"))
     }
 
     /// A range refused — for its size, past the node's head, or, patient, for any reason (`answer`) — read in parts down

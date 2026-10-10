@@ -41,9 +41,11 @@ enum WalletTokens {
         let known = Set(KnownTokenStore.universe(owner: address).map(\.address))
         // The history model's transfers (`HistoryModel`), no scan of its own. While the transfer scan is still filling in
         // (a first read of the wallet), the list waits for it, as it waited for its own scan, up to `historyWait`; the
-        // list is complete once the scan has read its window, and says so otherwise.
+        // list is complete once the scan has read its window, and says so otherwise. Only that scan holds it up
+        // (`WalletHistoryScans.holdings`): not one the list isn't read from, nor one that can't reach the chain, nor a
+        // round reading the blocks since a head read from the device at launch (`readingWindow`): the next read adds them.
         let started = ContinuousClock.now
-        while env.history.wallet == address, !env.history.snapshot.status(WalletHistoryScans.transfersInId).complete, env.history.filling,
+        while env.history.wallet == address, env.history.snapshot.readingWindow(scans: WalletHistoryScans.holdings),
               ContinuousClock.now - started < historyWait, !Task.isCancelled {
             try? await Task.sleep(for: .seconds(1))
         }

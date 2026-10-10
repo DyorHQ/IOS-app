@@ -9,6 +9,10 @@ struct RootView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Router.self) private var router
+    #if DEBUG && targetEnvironment(simulator)
+    /// `-PerpsDemo [scenario]`: the scripted Perps demo, over whatever the session shows (DEBUG + Simulator only).
+    @State private var perpsDemo = PerpsDemo.requested
+    #endif
 
     var body: some View {
         Group {
@@ -86,10 +90,15 @@ struct RootView: View {
                 LogScanClock.suspended()
                 // Alerts arrive while the app is open: checks pause until it is back.
                 env.alerts.enteredBackground()
+                // The wallet's history: the return is a new foreground session, which reads the server's history again
+                // when the scans fell behind, and polls it within a new window (`HistoryModel.resume`).
+                env.history.enteredBackground()
             }
             if phase == .active {
                 session.mera.enteredForeground()
                 settings.appearance.apply()
+                // The connections the reads below go over, opened again (iOS closes idle ones while the app is away).
+                env.warmConnections()
                 // Back from the background: price alerts and open positions are checked at once (a Face ID or passkey
                 // prompt, which only makes the scene inactive, changes nothing).
                 env.alerts.enteredForeground()
@@ -104,7 +113,15 @@ struct RootView: View {
                 // Reconnect the trading socket the instant the app returns (iOS drops it while suspended), so TP/SL is
                 // ready without waiting for the keep-alive loop's next tick. Never a prompt: a passkey account's
                 // socket reconnects only inside a live session, and there is none right after a return.
-                Task { await env.perplTrading.ensureConnected() }
+                Task {
+                    await env.perplTrading.ensureConnected()
+                    // Orders sent before the app left the foreground (or before it was closed) whose result never came:
+                    // read from the stream, Perpl's history and the chain, with no notice.
+                    await env.perplTrading.reconcileLoadedOrders()
+                }
+                // Wallet-signed Perps orders whose receipt wasn't read before the app left (or was killed): read now, so
+                // their row says what they did (no notice, no socket needed).
+                Task { await env.perplTrading.redecodeOnChainOrders() }
                 // On a return from the background only: a log scan that was running while iOS suspended the app measures
                 // an outage from now, not from its last answer before, and the venue list reads on if its last run ended
                 // short (`VenueTokenList.resume`). Face ID, a passkey sheet or Control Center only make the scene
@@ -119,11 +136,17 @@ struct RootView: View {
             env.social.bind(address: session.address)
             // The wallet's on-chain history: from the store at once, filled in behind every screen (`HistoryModel`).
             env.history.start(env: env, wallet: session.address)
+            // My Launchpad keeps one wallet's state between openings: another wallet, or a sign-out, clears it.
+            env.launchpadProfile.follow(session.address)
+            // So does the Portfolio, Total Volume's figures and those saved for the wallet among them.
+            env.portfolio.follow(session.address)
             // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest (RS-2).
             env.bridgeTracker.bind(owner: session.address)
             // Perpl trading and the notification center follow the account at once, not after the backend sign-in's
             // round-trip below, so nothing meanwhile trades for or is filed under the previous account (RS-9).
             env.perplTrading.refresh(account: session.account)
+            // Its wallet-signed Perps orders an earlier run never read the receipt of (a kill right after it confirmed).
+            Task { await env.perplTrading.redecodeOnChainOrders() }
             NotificationHub.shared.bind(owner: session.address)
             // The one alert watcher follows the account with the notification center: started for it, kept while it stays
             // signed in, stopped on a sign-out or a switch (`AlertCenter`). A watched wallet gets its alerts too, worded
@@ -162,15 +185,23 @@ struct RootView: View {
                   let address = session.address, env.social.isBound(to: address), let wallet = session.backgroundWallet else { return }
             await env.social.signIn(address: address, wallet: wallet)
         }
-        // The venue token list: what the last run stored is read at once, for search. The run that reads on from it
-        // (from genesis, on a fresh install) goes through the same gate as the wallet's history, so it starts once the
-        // history is no longer filling in — read to the head, or stalled — or when no wallet is signed in.
+        // The venue token list: what the last run stored is read at once, for search. The run that reads on from it goes
+        // through the same gate as the wallet's history, behind it (`LogsGate.Lane.background`), and waits while the
+        // signed-in wallet's history fills in for the first time — until the history model is on that wallet, and then
+        // until its history is read to the head, or stalled: a run under way is paused, and reads on from its last segment
+        // read in full. With no wallet signed in, a list with nothing read (a fresh install, from genesis) waits for a
+        // sign-in (`VenueTokenList.follow`). Nothing while the session is restored at launch: it is signed in or out a
+        // moment later.
         .task { await env.venueList.load() }
-        .task(id: "\(session.address?.hex ?? "")-\(env.history.filling)") {
-            if session.address == nil || !env.history.filling { env.refreshVenueTokens() }
+        .task(id: "\(session.state == .loading)-\(session.address?.hex ?? "")-\(env.history.wallet?.hex ?? "")-\(env.history.filling)") {
+            guard session.state != .loading else { return }
+            env.followVenueTokens(wallet: session.address, historyFilling: env.history.wallet != session.address || env.history.filling)
         }
         // The DyorHQ coin registry: read at start, then every 5 minutes while the app is in the foreground.
         .task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }
+        #if DEBUG && targetEnvironment(simulator)
+        .fullScreenCover(isPresented: $perpsDemo) { PerpsDemoView() }
+        #endif
     }
 }
 

@@ -5,45 +5,65 @@ import SwiftUI
 // Shared pieces of the Moments screens: artwork, state badges, the discovery card, number formatting.
 
 /// A Moment's media: the image behind its `mediaURI`, or a monogram on the brand tint when there is none or it
-/// fails to load. Loading tries every source in order — the Supabase mirror derived from on-chain provenance when
-/// the creator is known, then each IPFS gateway — so a gateway that is rate-limiting (ipfs.io and dweb.link answer
-/// 429 freely) never leaves a Moment blank while another source has the bytes.
+/// fails to load. It loads through the app's one image pipeline (`RemoteImage`, `ImagePipeline`), like every other
+/// picture: decoded at the size bucket that covers the frame it is drawn in (measured here, so a 44 pt row decodes a
+/// 192 px thumbnail and only a Moment's page header 1200 px), kept on the phone between launches, and shared — the same
+/// bytes and the same cache entries — by the board's card, the page's header, every row and the Moment coin's logo.
+/// Loading tries every source best first — the Supabase mirror derived from on-chain provenance when the creator is
+/// known, then each IPFS gateway — so a gateway that is rate-limiting (ipfs.io and dweb.link answer 429 freely) never
+/// leaves a Moment blank while another source has the bytes.
 struct MomentArtwork: View {
     let provenance: MomentProvenance
     let symbol: String
     /// The Moment's creator, when known: unlocks the derived Supabase mirror as the first source.
     var creator: Address? = nil
-    @State private var image: UIImage?
-    @State private var failed = false
 
-    private var sources: [MomentImageSource] { MomentMediaLoader.imageSources(provenance: provenance, creator: creator) }
+    /// Moment art keeps the full caps at every size, as it always has: a photo is the creator's original (up to 4096 px
+    /// and several MB for a Moment published before build 23, `MomentsMath.photoMaxPixels` since), whose bytes must be
+    /// read whole to check its hash, so a row's thumbnail is decoded from the same checked bytes as the page's header
+    /// rather than refused by the logo-sized caps.
+    static let caps = RemoteMedia.caps(forThumbnail: ImageSizeBucket.largest)
+
+    /// Warms the picture `info`'s card will ask for when it is drawn `side` points across — the same sources, size bucket
+    /// and caps as `body` — ahead of the board's scroll (`BoardPrefetch`, `ImagePipeline.prefetch`).
+    @MainActor static func prefetch(_ info: MomentInfo, side: CGFloat) {
+        RemoteImageLoader.shared.prefetch(imageSources(provenance: info.provenance, creator: info.moment.creator), bucket: ImageSizeBucket.bucket(points: side), caps: caps)
+    }
 
     var body: some View {
-        ZStack {
-            if let image { Image(uiImage: image).resizable().scaledToFill() }
-            else if failed || sources.isEmpty { placeholder }
-            else { Color(.tertiarySystemFill); ProgressView().controlSize(.small) }
+        GeometryReader { frame in
+            let side = max(frame.size.width, frame.size.height)
+            Group {
+                if side > 0 {
+                    RemoteImage(sources: Self.imageSources(provenance: provenance, creator: creator), pointSize: side, caps: Self.caps) { loading in
+                        if loading { ZStack { Color(.tertiarySystemFill); ImageLoadingSpinner() } } else { placeholder }
+                    }
+                } else {
+                    Color(.tertiarySystemFill)
+                }
+            }
+            .frame(width: frame.size.width, height: frame.size.height)
         }
-        .task(id: provenance.mediaURI + "|" + (creator?.hex ?? "")) { await load() }
         .accessibilityIgnoresInvertColors()
     }
 
-    private func load() async {
-        let sources = self.sources
-        guard !sources.isEmpty else { return }
-        let key = Self.cacheKey(provenance: provenance, creator: creator)
-        if let cached = MomentMediaLoader.shared.cached(key) { image = cached; failed = false; return }
-        image = nil; failed = false
-        let loaded = await MomentMediaLoader.shared.load(key: key, sources: sources)
-        guard !Task.isCancelled else { return }
-        if let loaded { image = loaded } else { failed = true }
-    }
-
-    /// The media cache's key for a Moment's image: everything the sources depend on, not the pointer alone. `mediaURI`
-    /// is not unique, so another Moment reusing this CID with its own hash and mirror must never fill this Moment's
-    /// entry. The Share button uses it to offer the artwork already on screen as the share preview.
-    static func cacheKey(provenance: MomentProvenance, creator: Address?) -> String {
-        [provenance.mediaURI, creator?.hex ?? "", provenance.mediaHash.map { String(format: "%02x", $0) }.joined()].joined(separator: "|")
+    /// Where to look for a Moment's image, best first, through `ImageSourcePolicy` (`momentSources`), as a Moment coin's
+    /// icon loads it: only DyorHQ's `launch-media` bucket and the fixed IPFS gateways, never a host the creator chose
+    /// (another https link shows the placeholder). The Supabase mirror derived from the creator + media hash is a
+    /// DyorHQ-hosted object, so it is never shown on trust (security audit 2026-09-26, PR-2):
+    /// - a photo Moment's provenance hash is the keccak-256 of the very JPEG in the mirror, so the mirror goes first (it
+    ///   is fast and DyorHQ-run) but its bytes count only while they still match that hash — and the cache keys the
+    ///   picture by its sources with that hash, so what a hash-checked list kept never answers for one without it;
+    /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which nothing on-chain can check
+    ///   — so the mirror is not a source at all, and the image comes from the content-addressed IPFS pointer only.
+    ///   That includes a video Moment whose on-chain image IS that mirror (earlier builds wrote it when pinning failed):
+    ///   it shows the placeholder, since until the bucket is write-once (supabase migration 26) the creator can swap
+    ///   those bytes.
+    /// Without a creator there is no mirror to derive: the pointer alone, held to the same hosts.
+    static func imageSources(provenance: MomentProvenance, creator: Address?) -> [RemoteImageSource] {
+        let policy = ImageSourcePolicy.app
+        guard let creator else { return policy.creatorSources(provenance.mediaURI).map { RemoteImageSource(url: $0) } }
+        return policy.momentSources(mediaURI: provenance.mediaURI, mediaHash: provenance.mediaHash, isVideo: !provenance.animationURI.isEmpty, creator: creator)
     }
 
     private var placeholder: some View {
@@ -63,102 +83,46 @@ struct MomentArtwork: View {
     }
 }
 
-/// One place to look for a Moment's image. `keccak`, when set, is what the downloaded bytes must hash to (the Moment's
-/// on-chain provenance hash); a source whose bytes don't match is skipped like a failed one.
-struct MomentImageSource: Sendable {
-    let url: URL
-    var keccak: Data? = nil
-}
-
-/// Fetches Moment images from an ordered list of sources and remembers the outcome per media URI for the session —
-/// hits under a memory budget, misses for a minute — so a feed neither re-downloads an image on every scroll nor
-/// re-probes a dead link (an unrecoverable directory CID, say) on every appearance. One in-flight fetch is shared by
-/// every view showing the same Moment, and cancelled once none of them is on screen. Media URIs are written on-chain by
-/// whoever publishes, so each fetch is capped, fetches and decodes run a few at a time app-wide, and only a thumbnail
-/// is decoded (`RemoteMedia`, security audit 2026-09-26, RI-5).
-@MainActor
-final class MomentMediaLoader {
-    static let shared = MomentMediaLoader()
-    /// The longest side, in pixels, a Moment image is decoded at: the full-width detail artwork on a 3x screen.
-    static let maxPixelSize = 1200
-    private let images: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
-        cache.totalCostLimit = 64 * 1024 * 1024
-        return cache
-    }()
-    private var misses: [String: Date] = [:]
-    private let loads = SharedLoads<UIImage>()
-    private let session: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 12
-        config.timeoutIntervalForResource = 30
-        config.httpShouldSetCookies = false
-        config.requestCachePolicy = .returnCacheDataElseLoad
-        return URLSession(configuration: config)
-    }()
-
-    /// Where to look for a Moment's image, best first, through `ImageSourcePolicy` (`momentSources`), as a Moment coin's
-    /// icon loads it: only DyorHQ's `launch-media` bucket and the fixed IPFS gateways, never a host the creator chose
-    /// (another https link shows the placeholder). The Supabase mirror derived from the creator + media hash is a
-    /// DyorHQ-hosted object, so it is never shown on trust (security audit 2026-09-26, PR-2):
-    /// - a photo Moment's provenance hash is the keccak-256 of the very JPEG in the mirror, so the mirror goes first (it
-    ///   is fast and DyorHQ-run) but its bytes count only while they still match that hash;
-    /// - a video Moment's hash is the video's, while the mirror holds its poster frame, which nothing on-chain can check
-    ///   — so the mirror is not a source at all, and the image comes from the content-addressed IPFS pointer only.
-    ///   That includes a video Moment whose on-chain image IS that mirror (earlier builds wrote it when pinning failed):
-    ///   it shows the placeholder, since until the bucket is write-once (supabase migration 26) the creator can swap
-    ///   those bytes.
-    /// Without a creator there is no mirror to derive: the pointer alone, held to the same hosts.
-    static func imageSources(provenance: MomentProvenance, creator: Address?) -> [MomentImageSource] {
-        let policy = ImageSourcePolicy.app
-        guard let creator else { return policy.creatorSources(provenance.mediaURI).map { MomentImageSource(url: $0) } }
-        return policy.momentSources(mediaURI: provenance.mediaURI, mediaHash: provenance.mediaHash, isVideo: !provenance.animationURI.isEmpty, creator: creator)
-            .map { MomentImageSource(url: $0.url, keccak: $0.keccak) }
-    }
-
-    func cached(_ key: String) -> UIImage? { images.object(forKey: key as NSString) }
-
-    /// Forgets every image and every miss (account deletion).
-    func removeAll() {
-        images.removeAllObjects()
-        misses = [:]
-    }
-
-    func load(key: String, sources: [MomentImageSource]) async -> UIImage? {
-        if let hit = cached(key) { return hit }
-        if let missed = misses[key], Date().timeIntervalSince(missed) < 60 { return nil }
-        let session = self.session
-        let maxPixelSize = Self.maxPixelSize
-        let caps = RemoteMedia.caps(forThumbnail: maxPixelSize)
-        let result = await loads.value(for: key) { // fetched and decoded off the main thread
-            for source in sources {
-                guard !Task.isCancelled else { return nil }
-                guard let data = try? await RemoteMedia.fetches.run({ try await RemoteMedia.fetch(source.url, session: session, maxBytes: caps.maxBytes) }),
-                      source.keccak.map({ Keccak.hash256(data) == $0 }) ?? true, // a swapped mirror falls through to IPFS
-                      let image = try? await RemoteMedia.decodes.run({ // an HTML directory listing never decodes
-                          UIImage(cgImage: try RemoteMedia.thumbnail(data, maxPixelSize: maxPixelSize, maxSourcePixels: caps.maxSourcePixels))
-                      }) else { continue }
-                return image
-            }
-            return nil
-        }
-        if let result {
-            images.setObject(result, forKey: key as NSString, cost: RemoteImageLoader.cost(result))
-            misses[key] = nil
-        } else if !Task.isCancelled {
-            misses[key] = Date()
-        }
-        return result
-    }
-}
-
 /// Where a Moment is in its life: collecting (with the time left), window closed, graduation pending, graduated,
-/// expired. Colour never stands alone — the word is always there.
+/// expired. Colour never stands alone — the word is always there. A collecting Moment's badge keeps its own time: it is
+/// drawn again, alone, at each instant its countdown reads differently (`MomentCountdown`, about once a minute) and at
+/// the deadline, so the card or page around it isn't.
 struct MomentStateBadge: View {
     let info: MomentInfo
-    let now: Int
     /// On top of a photo the badge sits on a material so it stays legible whatever the image.
     var onMedia = false
+
+    var body: some View {
+        if info.state == .collecting {
+            TimelineView(CountdownSchedule(deadline: info.moment.deadline)) { context in
+                MomentStateLabel(info: info, now: Int(context.date.timeIntervalSince1970), onMedia: onMedia)
+            }
+        } else {
+            MomentStateLabel(info: info, now: Int(Date().timeIntervalSince1970), onMedia: onMedia)
+        }
+    }
+}
+
+/// The instants a collecting Moment's badge reads differently, from when it is drawn to its deadline
+/// (`MomentCountdown.nextChange`); none after it.
+struct CountdownSchedule: TimelineSchedule {
+    let deadline: Int
+
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
+        var next: Date? = startDate
+        return AnyIterator {
+            guard let current = next else { return nil }
+            next = MomentCountdown.nextChange(after: Int(current.timeIntervalSince1970), deadline: deadline).map { Date(timeIntervalSince1970: TimeInterval($0)) }
+            return current
+        }
+    }
+}
+
+/// `MomentStateBadge` at one time.
+private struct MomentStateLabel: View {
+    let info: MomentInfo
+    let now: Int
+    var onMedia: Bool
 
     /// The badge's words, in the app's language.
     private var text: String {
@@ -203,10 +167,10 @@ struct MomentStateBadge: View {
     }
 }
 
-/// A discovery-grid card: square media with the state badge, then name, ticker, the collect price and progress.
+/// A discovery-grid card: square media with the state badge, then name, ticker, the collect price and progress. Only its
+/// badge moves with the time (`MomentStateBadge`): the card itself is drawn again only when its Moment changes.
 struct MomentCard: View {
     let info: MomentInfo
-    let now: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -215,7 +179,7 @@ struct MomentCard: View {
                     .aspectRatio(1, contentMode: .fit)
                     .overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator) }
                     .clipped()
-                MomentStateBadge(info: info, now: now, onMedia: true).padding(8)
+                MomentStateBadge(info: info, onMedia: true).padding(8)
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -333,14 +297,22 @@ enum MomentsFormat {
     }
 }
 
-/// The unix time now, refreshed every second, for countdowns and vesting math.
+/// The unix time a Moments screen is drawn at, for what it shows that changes with the time alone: whether a Moment is
+/// collecting, can be expired, how much has vested (`MomentBoardTimes`, `MomentPageTimes`). It is checked every second
+/// but moves on only when what the screen shows would change (`run(showing:)`): until build 23 it moved every second,
+/// drawing the whole board or page again each time. Countdowns keep their own time (`MomentStateBadge`).
 @Observable
 @MainActor
 final class Clock {
     private(set) var now = Int(Date().timeIntervalSince1970)
-    func run() async {
+
+    /// Every second, moves `now` to the time if `face` — everything the screen shows that depends on the time alone, at a
+    /// given time — differs there from at `now`; `face` reads the screen's current values each time, so a Moment read
+    /// again is checked as it is now. Until cancelled (the screen closed).
+    func run<Face: Equatable>(showing face: @escaping @MainActor (Int) -> Face) async {
         while !Task.isCancelled {
-            now = Int(Date().timeIntervalSince1970)
+            let time = Int(Date().timeIntervalSince1970)
+            if time != now, face(time) != face(now) { now = time }
             try? await Task.sleep(for: .seconds(1))
         }
     }

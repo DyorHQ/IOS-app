@@ -128,10 +128,12 @@ final class V2ForkTests: V2ForkCase {
         XCTAssertEqual(account.entitlement, quote.entitlement)
         XCTAssertEqual(account.collectAllowance, 0, "the exact approval is used up")
         // The wallets' histories decode the v2 events.
-        let collected = await fork.service.history(account: collector.address)
+        let (collected, collectedComplete) = await fork.service.history(account: collector.address)
+        XCTAssertTrue(collectedComplete, "a fork's few blocks are read whole")
         XCTAssertEqual(collected.collects.map(\.momentId), [id])
         XCTAssertEqual(collected.collects.first?.gross, quote.gross)
-        let published = await fork.service.history(account: creator.address)
+        let (published, publishedComplete) = await fork.service.history(account: creator.address)
+        XCTAssertTrue(publishedComplete)
         XCTAssertEqual(published.publishes.map(\.momentId), [id])
         XCTAssertEqual(published.publishes.first?.coin, detail.info.moment.coin)
 

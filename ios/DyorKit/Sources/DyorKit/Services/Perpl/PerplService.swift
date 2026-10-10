@@ -182,7 +182,8 @@ public actor PerplService {
                 fundingRate: fundingRate,
                 isOpen: config.isOpen,
                 fundingIntervalSeconds: market.fundingIntervalSec ?? 0,
-                fundingIntervalBlocks: market.fundingIntervalBlocks ?? 0
+                fundingIntervalBlocks: market.fundingIntervalBlocks ?? 0,
+                orderTTLBlocks: market.orderTTLBlocks
             )
         }
     }
@@ -234,6 +235,18 @@ public actor PerplService {
     public func accountHistory(key: PerplApiKey, count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplAccountEvent> {
         let (rows, next) = try await signedHistory("/v1/trading/account-history", count: count, cursor: cursor, key: key)
         return PerplHistoryPage(items: rows.compactMap { PerplAccountEvent(event: $0) }, next: next)
+    }
+
+    /// One page of the account's order history (signed), newest first, as order events: what a reconnect or a relaunch
+    /// reads by request id when the stream's own report was missed.
+    public func orderEvents(key: PerplApiKey, count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplOrderEvent> {
+        let (rows, next) = try await signedHistory("/v1/trading/order-history", count: count, cursor: cursor, key: key)
+        return PerplHistoryPage(items: rows.compactMap { PerplOrderEvent(json: $0, snapshot: false) }, next: next)
+    }
+
+    /// What a mined Perpl transaction did, decoded from its receipt (`PerplReceipt`); nil when the receipt never read back.
+    public func receiptRequests(_ hash: Data) async throws -> [PerplReceipt.Request]? {
+        try await PerplReceipt.requests(ofTransaction: hash, rpc: rpc)
     }
 
     /// Signs and fetches one `{d:[…], np:cursor}` history page. `path` is the gateway path with no `/api` prefix.
@@ -289,14 +302,36 @@ public actor PerplService {
     /// Closes a position with a reduce-only order on the opposite side. Defaults to a market close; pass
     /// `kind: .limit` with a `limitPrice` to rest a reduce-only maker order (optionally post-only) instead — the
     /// same order desc the venue uses for any close, so a limit close is as accurate as a market one.
+    /// `size` closes part of the position (`closeFractionSize`); nil closes all of it as the chain reported it.
     public nonisolated func closePositionPlan(market: PerpMarket, position: PerpPosition, slippageBps: Int,
-                                              kind: OrderKind = .market, limitPrice: Double? = nil, postOnly: Bool = false) -> [TransactionStep] {
+                                              kind: OrderKind = .market, limitPrice: Double? = nil, postOnly: Bool = false,
+                                              size: Double? = nil) -> [TransactionStep] {
+        orderPlan(Self.closeInput(market: market, position: position, size: size ?? position.size, slippageBps: slippageBps,
+                                  kind: kind, limitPrice: limitPrice, postOnly: postOnly))
+    }
+
+    /// The reduce-only order that closes `size` of `position`: on the opposite side, at the leverage the position carries
+    /// (rounded as the web app rounds it, at least 1), a market close at `slippageBps` or a resting limit at `limitPrice`
+    /// (optionally post-only). The one close both paths send: the wallet's `execOrders` desc and the trading connection's
+    /// CloseLong / CloseShort frame (`PerplOrders.entry`).
+    public nonisolated static func closeInput(market: PerpMarket, position: PerpPosition, size: Double, slippageBps: Int,
+                                              kind: OrderKind = .market, limitPrice: Double? = nil, postOnly: Bool = false) -> OrderInput {
         let rounded = PerplExchange.jsRound(position.leverage)
         let leverage = max(1, rounded == 0 || rounded.isNaN ? 1 : rounded)
-        let input = OrderInput(market: market, side: position.side.opposite, kind: kind, size: position.size,
-                               price: kind == .limit ? limitPrice : nil, leverage: leverage, reduceOnly: true,
-                               slippageBps: slippageBps, postOnly: postOnly && kind == .limit)
-        return orderPlan(input)
+        return OrderInput(market: market, side: position.side.opposite, kind: kind, size: size,
+                          price: kind == .limit ? limitPrice : nil, leverage: leverage, reduceOnly: true,
+                          slippageBps: slippageBps, postOnly: postOnly && kind == .limit)
+    }
+
+    /// `percent` (25, 50 or 75) of a position of `positionSize`, in whole lots of the market (`lotDecimals`): the position's
+    /// lots × percent / 100, rounded down — so the size reviewed is exactly the size sent, never a fraction of a lot.
+    /// Nil when that is less than one lot (the chip can't close anything). 100 is the size as given.
+    public nonisolated static func closeFractionSize(positionSize: Double, lotDecimals: Int, percent: Int) -> Double? {
+        guard percent < 100 else { return positionSize > 0 ? positionSize : nil }
+        let scale = pow(10, Double(lotDecimals))
+        guard positionSize.isFinite, positionSize > 0, let lots = Int(exactly: (positionSize * scale).rounded()) else { return nil }
+        let part = lots * max(0, percent) / 100
+        return part > 0 ? Double(part) / scale : nil
     }
 
     /// Adds `amount` AUSD of collateral to the open position on `market`, lowering its leverage and pushing the
@@ -396,10 +431,13 @@ private struct ContextMarket: Decodable {
     /// The market's own funding interval, in seconds and in blocks.
     let fundingIntervalSec: Int?
     let fundingIntervalBlocks: Int?
+    /// How many blocks an order sent with `lb: 0` has to execute.
+    let orderTTLBlocks: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, name, config, state, funding
         case fundingIntervalSec = "funding_interval_sec"
         case fundingIntervalBlocks = "funding_interval_blocks"
+        case orderTTLBlocks = "order_ttl_blocks"
     }
 }

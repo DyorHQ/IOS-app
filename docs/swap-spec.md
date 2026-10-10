@@ -35,7 +35,23 @@ sell-only, so a buy of it gets no quote (`SwapEngine.buyRefusal`).
 * Every venue is quoted independently with a 20-second budget, so a slow venue never hides the others. Quotes start
   400 ms after the last edit and refresh every 15 seconds while an amount is entered; a venue that gave no quote shows
   its reason in the list.
-* The best output is preselected; the user can pick another venue. Minimum received follows the slippage setting
+* Each venue's quote shows as it arrives (`SwapEngine.quoteUpdates`): the best so far, with "Best price so far. Still
+  checking N more venues." and a "Checking…" row per venue still asked. Review opens only on the final answer, once
+  every venue has answered or run out of time, for the pair, amount, slippage and wallet on screen
+  (`SwapModel.selectedQuote`); the "Best" badge waits for it too. A refresh keeps the final answer on screen until its
+  own is final. The sell-only check of the coin bought (`buyRefusal`) runs alongside the on-chain venues, and nothing
+  they answer is shown until it clears the coin; Kuru Flow, a third party's API that is told the wallet and the pair,
+  is asked a coin that may be a launchpad's only once the check has cleared it, so a refused buy never reaches it.
+* The route search is kept a minute in the app's shared reads (`SwapRouteCache`, `ChainCache.TTL.swapRoutes`): each
+  pair's Uniswap v3 and Monday Trade pools and their depth, each pair's live v4 pools (either way round), and each
+  launchpad or Moment coin's graduated pool. An amount change or a refresh then costs each venue one quote read, which
+  quotes the 1/1000 price-impact slice too. A settled transaction or a pull to refresh forgets it. Kuru Flow's access
+  token is asked for as Swap opens, and a quote that needs it meanwhile waits for that request; a quote that ends
+  (cancelled, refused or out of time) stops waiting at once, and the request goes on for the next one.
+* The best output is preselected; the user can pick another venue. A venue the user picked stays selected through a
+  round's answers as they arrive — while it hasn't answered, the best so far is shown, and the note under the amount
+  says "Best price so far" only of the best so far — until the final answer: one that quotes it keeps it, one that
+  doesn't gives the selection back to the best quote (`VenueSelection`). Minimum received follows the slippage setting
   (presets 0.1%, 0.5%, 1%, 3%, or a custom value up to 50%; the default is 0.5%). Price impact is measured against
   the venue's own marginal price (a 1/1000 slice quote) and is highlighted above 1%.
 * Review freezes the quote: the sheet builds its plan once from that quote, so what it shows is what is signed, even
@@ -53,9 +69,10 @@ sell-only, so a buy of it gets no quote (`SwapEngine.buyRefusal`).
 
 `ios/DyorHQ/Swap/SwapView.swift` (the screen, the slippage sheet, the token picker and the history list),
 `ios/DyorHQ/Trade/TradeView.swift` (the Swap | Perps switch), and under `ios/DyorKit/Sources/DyorKit/Services/Swap/`:
-`SwapEngine.swift` (per-venue quoting, ranking, the trading-closed and sell-only rules), `SwapTypes.swift` (request,
-quote, errors, slippage and impact math), `UniswapVenue.swift`, `MondayVenue.swift`, `V3Router.swift` (the shared
-v3-style route search), `KuruFlowClient.swift` (the Flow API and the calldata decoder), `SwapCalldata.swift` (every
+`SwapEngine.swift` (per-venue quoting as the answers arrive, ranking, the trading-closed and sell-only rules),
+`SwapTypes.swift` (request, quote, errors, slippage and impact math), `UniswapVenue.swift`, `MondayVenue.swift`,
+`V3Router.swift` (the shared v3-style route search), `SwapRouteCache.swift` (what the route search keeps for a minute),
+`KuruFlowClient.swift` (the Flow API and the calldata decoder), `SwapCalldata.swift` (every
 contract call and router transaction), `TokenPickerList.swift`, `KuruTokenListClient.swift`. Swap history is
 `Services/SwapHistory.swift`. `scripts/dev/pool-inventory.mjs` is a read-only mainnet inventory of pools per venue and
 tier.

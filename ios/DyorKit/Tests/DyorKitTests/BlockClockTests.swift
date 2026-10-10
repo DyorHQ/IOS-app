@@ -116,27 +116,6 @@ final class BlockClockTests: XCTestCase {
         XCTAssertEqual(MomentsService.holderLookback(ageSeconds: -50, secondsPerBlock: 0.3), 2_000, "a clock ahead of the chain reads the margin")
     }
 
-    /// A launched coin's PnL scan (My Launchpad) covers the coin's whole age at the session's pace, plus 20,000 blocks: at
-    /// 0.4 s it undershot a coin's history by about 24%.
-    func testTheLaunchpadProfileLookbackCoversTheCoinsAge() async {
-        let ages: [TimeInterval] = [60, 3_600, 86_400, 7 * 86_400, 29 * 86_400]
-        for age in ages {
-            let lookback = LaunchpadService.tradeLookback(ageSeconds: age, secondsPerBlock: BlockClockFixture.secondsPerBlock)
-            XCTAssertGreaterThanOrEqual(Double(lookback) * BlockClockFixture.secondsPerBlock, age, "age \(age) s")
-            XCTAssertEqual(lookback, BlockClock.blocks(in: age, secondsPerBlock: BlockClockFixture.secondsPerBlock) + LaunchpadService.tradeLookbackMargin)
-        }
-        // Capped at 30 days of blocks at the measured pace, as the profile says.
-        XCTAssertEqual(LaunchpadService.tradeLookback(ageSeconds: 90 * 86_400, secondsPerBlock: BlockClockFixture.secondsPerBlock),
-                       BlockClock.blocks(in: 30 * 86_400, secondsPerBlock: BlockClockFixture.secondsPerBlock) + 20_000)
-        XCTAssertEqual(LaunchpadService.tradeLookback(ageSeconds: -10, secondsPerBlock: 0.3), 20_000)
-
-        // The service reads its clock's pace: a coin launched a week before the stub's clock.
-        let service = LaunchpadService(rpc: VenueChainStub.rpc(), addresses: .monadMainnet, clock: BlockClock(rpc: VenueChainStub.rpc(), measured: 0.3))
-        let launchedAt = 1_800_000_000 - 7 * 86_400
-        let lookback = await service.tradeLookback(launchedAt: launchedAt, now: Date(timeIntervalSince1970: 1_800_000_000))
-        XCTAssertEqual(lookback, 2_016_000 + 20_000)
-    }
-
     /// Scan windows that are block budgets keep their counts, and say blocks; the history filters a user picks are their
     /// true length at the measured pace.
     func testScanBudgetsKeepTheirBlocksAndFiltersAreTrueTimes() {

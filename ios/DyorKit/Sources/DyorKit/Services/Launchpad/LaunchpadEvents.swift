@@ -1,53 +1,97 @@
 import BigInt
 import Foundation
 
-/* On-chain history without an indexer: `eth_getLogs` over recent blocks in chunks the endpoint accepts (see
-   `RPCClient.chunkedLogs`). Windows are deliberately recent (hours, not months). A port of the web app's
+/* On-chain history without an indexer: `eth_getLogs` over recent blocks in chunks the endpoint accepts, newest first (see
+   `RPCClient.newestLogs`). Windows are deliberately recent (hours, or a coin's life, not months). A port of the web app's
    `launchpad/events.ts`. */
 
 public extension LaunchpadService {
     /// Curve fills for one launch over the last `lookbackBlocks` blocks, or the last 24 hours (`clock`) when nil, oldest
-    /// first. `pair` scales prices to pair units so they line up with `Launch.pairPrice`; each fill's time is estimated at the
-    /// session's measured pace.
-    func trades(curve: Address, pair: PairInfo, lookbackBlocks: UInt64? = nil) async throws -> [CurveTrade] {
-        let anchor = try await rpc.block(.latest)
+    /// first, and whether the window was read in full (`CurveTrades`). `pair` scales prices to pair units so they line up
+    /// with `Launch.pairPrice`; each fill's time is estimated at the session's measured pace. Nil when the head, or the
+    /// newest blocks of the buys or of the sells, couldn't be read: no trades at all, never "no trades" — the screen keeps
+    /// the last good read and says this one failed.
+    ///
+    /// The buys and the sells are read newest first (`RPCClient.newestLogs`), and a read that stops short keeps the fills
+    /// of the run read in one piece down from the head — of both, down to the later of where each stopped — so what it
+    /// gives is every fill from some block to now, never a scatter. In build 22 and earlier both read oldest first and the
+    /// result said nothing of what was missing: on the 1,000-block endpoints (the 24 hours are about 290 requests there, the
+    /// budget 80) the chart held the day's first hours and the 24h volume was theirs, shown as the whole.
+    ///
+    /// The head comes from the endpoints the logs are read from (`logsRPC`), as a coin's holders' does: read from the app's
+    /// own endpoint (`rpc`), a node of the logs endpoint a few blocks behind it refused the newest range, which the router
+    /// asks again only after a pause (`LogsRouter.headPause`). The window ends at the head, not a margin below it as the
+    /// venue list's does (`VenueTokensService.headMargin`): a trade made on this page a moment ago is in its newest
+    /// blocks, and the page reads its trades again as soon as it is made.
+    func trades(curve: Address, pair: PairInfo, lookbackBlocks: UInt64? = nil) async -> CurveTrades? {
+        guard let anchor = try? await logsRPC.block(.latest) else { return nil }
         let secondsPerBlock = await clock.secondsPerBlock()
         let lookback = lookbackBlocks ?? BlockClock.blocks(in: 86_400, secondsPerBlock: secondsPerBlock)
         let from = anchor.number > lookback ? anchor.number - lookback : 0
-        async let buyLogs = logsRPC.chunkedLogs(address: curve, topics: [LaunchpadABI.Events.buyTopic], fromBlock: from, toBlock: anchor.number)
-        async let sellLogs = logsRPC.chunkedLogs(address: curve, topics: [LaunchpadABI.Events.sellTopic], fromBlock: from, toBlock: anchor.number)
-        let (buys, sells) = await (buyLogs, sellLogs)
+        async let buyRead = logsRPC.newestLogs(address: curve, topics: [LaunchpadABI.Events.buyTopic], fromBlock: from, toBlock: anchor.number)
+        async let sellRead = logsRPC.newestLogs(address: curve, topics: [LaunchpadABI.Events.sellTopic], fromBlock: from, toBlock: anchor.number)
+        let (buys, sells) = await (buyRead, sellRead)
         return Self.trades(buys: buys, sells: sells, anchor: anchor, pair: pair, secondsPerBlock: secondsPerBlock)
     }
 
-    /// The blocks a coin launched at `launchedAt` (seconds since 1970) has existed for, plus `tradeLookbackMargin`, at the
-    /// session's pace, for reading its whole trade history (a profile's PnL); at most `maxTradeLookback` of them.
-    func tradeLookback(launchedAt: Int, now: Date = Date()) async -> UInt64 {
-        Self.tradeLookback(ageSeconds: now.timeIntervalSince1970 - TimeInterval(launchedAt), secondsPerBlock: await clock.secondsPerBlock())
+    /// Pure half of `trades(curve:pair:lookbackBlocks:)` for reads that may have stopped short: the fills of both down to
+    /// the later of the two `readFrom`s, complete only when both are. Nil when a side's newest block wasn't read: there is
+    /// nothing to stand on, and an empty read in its place wiped the page's last good trades and showed a 24h volume of 0.
+    nonisolated static func trades(buys: NewestLogs, sells: NewestLogs, anchor: BlockHeader, pair: PairInfo, secondsPerBlock: Double) -> CurveTrades? {
+        guard let buysFrom = buys.readFrom, let sellsFrom = sells.readFrom else { return nil }
+        let floor = max(buysFrom, sellsFrom)
+        let fills = trades(buys: buys.logs.filter { $0.blockNumber >= floor }, sells: sells.logs.filter { $0.blockNumber >= floor }, anchor: anchor, pair: pair,
+                           secondsPerBlock: secondsPerBlock)
+        return CurveTrades(trades: fills, complete: buys.complete && sells.complete)
     }
 
-    /// Pure half of `tradeLookback(launchedAt:now:)`: a coin's age (no less than 0, no more than `maxTradeLookback`) in
-    /// blocks, rounded up, plus `tradeLookbackMargin`.
-    nonisolated static func tradeLookback(ageSeconds: TimeInterval, secondsPerBlock: Double) -> UInt64 {
-        BlockClock.blocks(in: min(maxTradeLookback, max(0, ageSeconds)), secondsPerBlock: secondsPerBlock) + tradeLookbackMargin
+    /// How many wallets hold a launch coin (`HolderCount`): the addresses with a positive net balance from the coin's
+    /// `Transfer` events since its launch (`launchedAt`, seconds since 1970; its block estimated early, `launchBlock`).
+    /// Mints/burns (the zero address) and any `excluding` address (e.g. the bonding curve, which holds the unsold supply)
+    /// are left out. Nil when the head, or the newest of the coin's blocks, couldn't be read: no count at all, never 0.
+    ///
+    /// The transfers are read newest first (`RPCClient.newestLogs`) within the patient budget (80 requests): a coin older
+    /// than that reaches back gets a minimum (`HolderCount.complete` false), never a count of balances at some past block.
+    /// In build 22 and earlier the window was the last 6,480,000 blocks (about 22.7 days) whatever the coin's age, which
+    /// needs 108 requests, read oldest first: it stopped at 80, the newest 1.7M blocks (about six days) unread, so a coin
+    /// launched since read 0 holders, and the count was shown as exact.
+    func holders(token: Address, excluding: Set<Address> = [], launchedAt: Int) async -> HolderCount? {
+        guard let anchor = try? await logsRPC.block(.latest) else { return nil }
+        let from = Self.launchBlock(launchedAt: launchedAt, anchor: anchor, secondsPerBlock: await clock.secondsPerBlock())
+        let read = await logsRPC.newestLogs(address: token, topics: [ABI.eventTopic("Transfer(address,address,uint256)")], fromBlock: from, toBlock: anchor.number)
+        return Self.holders(read, excluding: excluding)
     }
 
-    /// Approximate holder count: the number of addresses with a positive net token balance, from the token's
-    /// `Transfer` events over the last `lookbackBlocks` blocks (a budget, `holderScanBlocks`). Mints/burns (the zero
-    /// address) and any `excluding` address (e.g. the bonding curve, which holds the unsold supply) are left out. Exact
-    /// counts want an indexer; this is right for a new coin.
-    func holderCount(token: Address, excluding: Set<Address> = [], lookbackBlocks: UInt64 = LaunchpadService.holderScanBlocks) async -> Int {
-        guard let anchor = try? await logsRPC.block(.latest) else { return 0 }
-        let from = anchor.number > lookbackBlocks ? anchor.number - lookbackBlocks : 0
-        let logs = await logsRPC.chunkedLogs(address: token, topics: [ABI.eventTopic("Transfer(address,address,uint256)")], fromBlock: from, toBlock: anchor.number)
+    /// Pure half of `holders(token:excluding:launchedAt:)`: nil when nothing was read down from the head.
+    nonisolated static func holders(_ read: NewestLogs, excluding: Set<Address>) -> HolderCount? {
+        guard read.readFrom != nil else { return nil }
+        return HolderCount(count: holderCount(transfers: read.logs, excluding: excluding), complete: read.complete)
+    }
+
+    /// The addresses `transfers` leave with a positive net balance, the zero address and `excluding` left out. Of the
+    /// transfers from some block to the head, a minimum of the holders (`HolderCount.complete`); of every transfer since
+    /// the coin was minted, their number.
+    nonisolated static func holderCount(transfers: [Log], excluding: Set<Address>) -> Int {
         var net: [Address: BigInt] = [:]
-        for log in logs {
+        for log in transfers {
             guard let sender = log.indexedAddress(0), let recipient = log.indexedAddress(1) else { continue }
             let amount = BigInt(BigUInt(log.data))
             if !sender.isZero { net[sender, default: 0] -= amount }
             if !recipient.isZero { net[recipient, default: 0] += amount }
         }
         return net.reduce(0) { count, entry in count + (entry.value > 0 && !excluding.contains(entry.key) ? 1 : 0) }
+    }
+
+    /// The block a coin launched at `launchedAt` (seconds since 1970) was launched in, estimated early from `anchor`: its
+    /// age a quarter longer at `secondsPerBlock`, plus `tradeLookbackMargin`, so a chain a little faster than measured still
+    /// puts the launch after it; never before the first launchpad's block (`LaunchpadAddresses.feeHistoryStart`), before
+    /// which no DyorHQ curve traded. The one estimate a coin's holders and the wallet's fills on it are read from
+    /// (`WalletHistorySnapshot.launchBlock`).
+    nonisolated static func launchBlock(launchedAt: Int, anchor: BlockHeader, secondsPerBlock: Double) -> UInt64 {
+        let age = max(0, TimeInterval(anchor.timestamp - launchedAt))
+        let back = BlockClock.blocks(in: age * 1.25, secondsPerBlock: secondsPerBlock).addingReportingOverflow(tradeLookbackMargin)
+        let estimate = back.overflow || back.partialValue >= anchor.number ? 0 : anchor.number - back.partialValue
+        return max(estimate, LaunchpadAddresses.feeHistoryStart)
     }
 
     /// Pure half of `trades(curve:pair:lookbackBlocks:)`, so the parser can be tested on canned logs. Times are estimated
@@ -120,56 +164,5 @@ public extension LaunchpadService {
             }
         }
         return filled
-    }
-
-    /// Everything that happened on the launchpad in the last `lookbackBlocks` blocks (9 000 by default, about 45 minutes):
-    /// launches, curve trades and graduations, newest first, at most `limit` rows. Trades are matched against
-    /// `launches` (the explore list) so only curves these factories created count; when nil, the newest 60 launches
-    /// of every stack are read first. Launch and graduation events come from the live and the retired factories
-    /// (whose curves still trade and graduate); while the live stack is pending (v2), from the retired ones alone.
-    func activity(limit: Int = 50, lookbackBlocks: UInt64 = 9_000, launches known: [Launch]? = nil) async throws -> [ActivityItem] {
-        guard limit > 0, !stacks.isEmpty else { return [] }
-        let launches: [Launch]
-        if let known { launches = known } else { launches = try await allLaunches(limit: 60) }
-        let curves = Dictionary(launches.map { ($0.curve, $0.token) }, uniquingKeysWith: { first, _ in first })
-        let anchor = try await rpc.block(.latest)
-        let secondsPerBlock = await clock.secondsPerBlock()
-        let from = anchor.number > lookbackBlocks ? anchor.number - lookbackBlocks : 0
-        // One scan per event across every factory, kept to the factories of this launchpad's stacks.
-        let factories = Set(stacks.map(\.factory))
-        async let launched = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.launchedTopic], fromBlock: from, toBlock: anchor.number)
-        async let graduated = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.graduatedTopic], fromBlock: from, toBlock: anchor.number)
-        async let buys = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.buyTopic], fromBlock: from, toBlock: anchor.number)
-        async let sells = logsRPC.chunkedLogs(address: nil, topics: [LaunchpadABI.Events.sellTopic], fromBlock: from, toBlock: anchor.number)
-        let items = Self.activity(
-            launched: await launched.filter { factories.contains($0.address) }, graduated: await graduated.filter { factories.contains($0.address) },
-            buys: await buys, sells: await sells, anchor: anchor, secondsPerBlock: secondsPerBlock, curves: curves
-        )
-        return Array(items.prefix(limit))
-    }
-
-    /// Pure half of `activity`, newest first, each item's time estimated from `anchor` at `secondsPerBlock`.
-    nonisolated static func activity(launched: [Log], graduated: [Log], buys: [Log], sells: [Log], anchor: BlockHeader, secondsPerBlock: Double, curves: [Address: Address]) -> [ActivityItem] {
-        func time(_ log: Log) -> Int { Self.time(anchor: anchor, block: log.blockNumber, secondsPerBlock: secondsPerBlock) }
-        var items: [ActivityItem] = []
-        for log in launched {
-            guard let event = LaunchpadABI.launched(log) else { continue }
-            items.append(ActivityItem(id: log.id, block: log.blockNumber, logIndex: log.logIndex, time: time(log), transactionHash: log.transactionHash, kind: .launch(token: event.token, curve: event.curve, deployer: event.deployer)))
-        }
-        for log in graduated {
-            guard let event = LaunchpadABI.graduated(log) else { continue }
-            items.append(ActivityItem(id: log.id, block: log.blockNumber, logIndex: log.logIndex, time: time(log), transactionHash: log.transactionHash, kind: .graduated(token: event.token, poolId: event.poolId)))
-        }
-        for log in buys {
-            // Feed rows show the gross quote a buyer paid.
-            guard let token = curves[log.address], let fill = LaunchpadABI.fill(log) else { continue }
-            items.append(ActivityItem(id: log.id, block: log.blockNumber, logIndex: log.logIndex, time: time(log), transactionHash: log.transactionHash, kind: .trade(token: token, curve: log.address, trader: fill.trader, isBuy: true, quoteAmount: fill.amountIn, tokenAmount: fill.amountOut)))
-        }
-        for log in sells {
-            // And the net quote a seller received.
-            guard let token = curves[log.address], let fill = LaunchpadABI.fill(log) else { continue }
-            items.append(ActivityItem(id: log.id, block: log.blockNumber, logIndex: log.logIndex, time: time(log), transactionHash: log.transactionHash, kind: .trade(token: token, curve: log.address, trader: fill.trader, isBuy: false, quoteAmount: fill.amountOut, tokenAmount: fill.amountIn)))
-        }
-        return items.sorted { a, b in a.block == b.block ? a.logIndex > b.logIndex : a.block > b.block }
     }
 }

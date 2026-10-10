@@ -19,7 +19,8 @@ final class ScreenLayoutTests: XCTestCase {
 
     /// The price chart's time axis: a few marks the span decides, labelled in hours for a day and in days beyond, in the
     /// app's language read from the environment, so a change of language draws them again; the "no trades" note only while
-    /// the curve trades.
+    /// the curve trades, and only once its last 24 hours were read in full (a read that stopped short or failed isn't "no
+    /// trades"), and the 24h volume "—" until they were read, a minimum ("+") while they were read in part.
     func testThePriceChartsTimeAxis() throws {
         let home = try DocsLinksTests.appSource("Home/HomeView.swift")
         let chart = try XCTUnwrap(home.range(of: "struct PriceChart: View {")).upperBound
@@ -33,7 +34,11 @@ final class ScreenLayoutTests: XCTestCase {
         XCTAssertFalse(body.contains(".stride(by: .hour"), "a mark every few hours over weeks is a hundred labels")
 
         let launch = Self.squeezed(try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift"))
-        XCTAssertTrue(launch.contains("if trades.isEmpty, !loadingTrades, launch.phase == .bonding { Paragraph(\"No trades yet"))
+        XCTAssertTrue(launch.contains("if trades.isEmpty, !loadingTrades, tradesRead, tradesComplete, !tradesUnread, launch.phase == .bonding { Paragraph(\"No trades yet"))
+        XCTAssertTrue(launch.contains("guard tradesRead else { return \"—\" }"))
+        XCTAssertTrue(launch.contains("return tradesComplete && !tradesUnread ? value : value + \"+\""))
+        XCTAssertTrue(launch.contains("stat(\"24h Volume\", volume24Text)"))
+        XCTAssertTrue(launch.contains("stat(\"Holders\", holdersText)"))
     }
 
     /// A DyorHQ coin's badge shrinks a little before it truncates: its point is the whole name.

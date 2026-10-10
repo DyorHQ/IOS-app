@@ -87,6 +87,31 @@ final class RetiredMomentsPinTests: XCTestCase {
         XCTAssertFalse(MomentsChainStub.logQueries().isEmpty, "the history was scanned")
     }
 
+    /// A cut list completed from the wallet's Moments history the app's history store already holds (every cohort, read in
+    /// full) scans nothing of its own: the holder's #2 is found by id from it, and the positions still say they may be
+    /// incomplete (a Moment received by transfer is in no history).
+    func testACutListUsesTheHistoryStoresMomentsHistoryWithNoScan() async throws {
+        let (stack, cohort) = install(later: 250, held: 2)
+        let collected = Log(address: stack.addresses.collect, topics: [MomentsABI.Events.collectedTopic, BigUInt(2).word, Self.holder.data.leftPadded(to: 32)],
+                            data: try ABI.encode([.uint(1_000_000), .uint(1), .uint(1), .uint(0), .uint(750_000), .uint(200_000), .uint(50_000), .uint(0)],
+                                                 "uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256"),
+                            blockNumber: 500, transactionHash: Data(repeating: 2, count: 32), logIndex: 0)
+        let known = MomentsService.history(collected: [collected], claimed: [], withdrawn: [], feesWithdrawn: [], published: [], anchor: MomentsChainStub.head,
+                                           secondsPerBlock: 0.3, factory: stack.addresses.factory)
+        let read = try await cohort.positions(account: Self.holder, history: known)
+        XCTAssertEqual(read.positions.map(\.key), [MomentKey(factory: stack.addresses.factory, id: 2)], "the holder's own Moment, read by id")
+        XCTAssertFalse(read.complete)
+        XCTAssertEqual(MomentsChainStub.logQueries(), [], "no scan of its own")
+    }
+
+    /// The cohort's own history scan reads newest first and says whether it read the whole window.
+    func testTheCohortsOwnHistorySaysItWasReadWhole() async {
+        let (_, cohort) = install(later: 0, collected: [1])
+        let (history, complete) = await cohort.history(account: Self.holder)
+        XCTAssertEqual(history.collects.map(\.momentId), [1])
+        XCTAssertTrue(complete)
+    }
+
     /// A holder of a left-out Moment it only received by transfer isn't in any history: it can't be found, and the
     /// positions say they may be incomplete rather than that there is nothing.
     func testACutListWithoutHistorySaysItMayBeIncomplete() async throws {

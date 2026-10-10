@@ -1,119 +1,78 @@
 import DyorKit
 import SwiftUI
 
-/// The one way the app shows an image from a host it doesn't control (security audit 2026-09-26, RI-5): coin logos,
-/// launch artwork, avatars, NFT art, news thumbnails. Each fetch is capped (`RemoteMedia.fetch`) — tighter for a logo-
-/// sized image (`RemoteMedia.caps(forThumbnail:)`) — and only a thumbnail at the size the view asks for is decoded
-/// (`RemoteMedia.thumbnail`), never the full image. Fetches and decodes run a few at a time app-wide
-/// (`RemoteMedia.fetches` / `.decodes`), so a list of hostile images can't all be in memory at once. Thumbnails are
-/// cached for the session under a memory budget, misses for a minute (`RecentMisses`), and one fetch is shared by every
-/// view showing the same image — and cancelled once none of them is on screen any more. An image with several sources
-/// (a coin's picture: DyorHQ's mirror, then the IPFS gateways, `ImageSourcePolicy`) tries them in order, under the same
-/// caps, and the first that decodes wins; one whose bytes must hash to a known value (`RemoteImageSource.keccak`) counts
-/// only when they do. Such an image is cached under the whole ordered list.
-@MainActor
-final class RemoteImageLoader {
-    static let shared = RemoteImageLoader()
-    private let images: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
-        cache.totalCostLimit = 48 * 1024 * 1024
-        return cache
-    }()
-    private var misses = RecentMisses()
-    private let loads = SharedLoads<UIImage>()
-    private let session = RemoteMedia.makeSession()
-
-    /// The cache key of `sources` at `maxPixelSize`: the ordered list, each source's hash included. One plain URL keys as
-    /// it always has.
-    static func key(_ sources: [RemoteImageSource], _ maxPixelSize: Int) -> String {
-        let list = sources.map { source in
-            source.url.absoluteString + (source.keccak.map { "#" + $0.map { String(format: "%02x", $0) }.joined() } ?? "")
-        }
-        return "\(maxPixelSize)|" + list.joined(separator: " ")
-    }
-
-    func cached(_ sources: [RemoteImageSource], maxPixelSize: Int) -> UIImage? { images.object(forKey: Self.key(sources, maxPixelSize) as NSString) }
-
-    /// Whether `sources` failed less than a minute ago: `image` would answer nil without asking.
-    func failedLately(_ sources: [RemoteImageSource], maxPixelSize: Int) -> Bool { misses.contains(Self.key(sources, maxPixelSize)) }
-
-    /// The first image of `sources` that can be fetched within the caps and decoded, at most `maxPixelSize` pixels on its
-    /// longer side (a source with a `keccak` only while its bytes hash to it), or nil when none can.
-    func image(_ sources: [RemoteImageSource], maxPixelSize: Int) async -> UIImage? {
-        guard !sources.isEmpty else { return nil }
-        let key = Self.key(sources, maxPixelSize)
-        if let hit = images.object(forKey: key as NSString) { return hit }
-        if misses.contains(key) { return nil }
-        let session = self.session
-        let caps = RemoteMedia.caps(forThumbnail: maxPixelSize)
-        let result = await loads.value(for: key) { // fetched and decoded off the main thread
-            for source in sources {
-                guard !Task.isCancelled else { return nil }
-                guard let data = try? await RemoteMedia.fetches.run({ try await RemoteMedia.fetch(source.url, session: session, maxBytes: caps.maxBytes) }),
-                      source.keccak.map({ Keccak.hash256(data) == $0 }) ?? true,
-                      let image = try? await RemoteMedia.decodes.run({
-                          UIImage(cgImage: try RemoteMedia.thumbnail(data, maxPixelSize: maxPixelSize, maxSourcePixels: caps.maxSourcePixels))
-                      }) else { continue }
-                return image
-            }
-            return nil
-        }
-        if let result {
-            images.setObject(result, forKey: key as NSString, cost: Self.cost(result))
-            misses.remove(key)
-        } else if !Task.isCancelled {
-            misses.record(key) // a view that left before the answer came doesn't make it a miss
-        }
-        return result
-    }
-
-    /// Forgets every image and every miss (account deletion). A load under way still finishes for the views that wait on
-    /// it.
-    func removeAll() {
-        images.removeAllObjects()
-        misses = RecentMisses()
-    }
-
-    /// What a decoded thumbnail costs an image cache: its bitmap's bytes.
-    static func cost(_ image: UIImage) -> Int {
-        guard let cgImage = image.cgImage else { return 1 }
-        return max(1, cgImage.bytesPerRow * cgImage.height)
-    }
+/// The app's one image pipeline (`ImagePipeline`, security audit 2026-09-26, RI-5) for every image from a host it
+/// doesn't control: coin logos, launch and Moment artwork, avatars, NFT art, news thumbnails, chain badges. Each fetch is
+/// capped (`RemoteMedia.fetch`) — tighter for a logo-sized image (`RemoteMedia.caps(forThumbnail:)`) — and only a
+/// thumbnail at the size bucket the view shows is decoded (`ImageSizeBucket`), never the full image. What it accepted is
+/// kept in memory and in Caches (`ImageDiskCache`, about 200 MB), so a picture seen once paints from the phone on the
+/// next launch; a picture that can't change (DyorHQ's write-once bucket, an IPFS CID) isn't asked about again for a
+/// week, any other for an hour, and past that the kept copy still shows at once while it is asked again. An image with
+/// several sources (a coin's picture: DyorHQ's mirror, then the IPFS gateways, `ImageSourcePolicy`) tries them best
+/// first under the same caps; one whose bytes must hash to a known value (`RemoteImageSource.keccak`) counts only when
+/// they do. A list-sized thumbnail of an unchecked picture in DyorHQ's write-once bucket (a launch logo) comes from
+/// Storage's resized copy at its size, the original after it (`ImageSourcePolicy.renderURL`); a new avatar is drawn from
+/// the bytes just uploaded (`ImagePipeline.seed`); the boards warm their next rows (`BoardPrefetch`). Its disk index is
+/// read as the app starts (`ImagePipeline.prepare`, from the app delegate). Deleting the account or forgetting this device
+/// empties it (`Session.eraseLocalData`).
+enum RemoteImageLoader {
+    @MainActor static let shared = ImagePipeline(policy: .app, directory: ImageDiskCache.defaultDirectory)
 }
 
-/// A remote image through `RemoteImageLoader`, sized for a view `pointSize` points across (the thumbnail is decoded at
-/// three pixels per point), or `placeholder` while it loads (`true`) and when it can't be shown (`false`). Its
-/// `sources` are tried in order and the first that decodes shows (`RemoteImageLoader.image`); none is the placeholder.
+/// A remote image through `RemoteImageLoader`, sized for a view whose longer side is `pointSize` points (decoded at the
+/// size bucket that covers it, `ImageSizeBucket`), or `placeholder` while it loads (`true`) and when it can't be shown
+/// (`false`). Its `sources` are tried best first and the first that is accepted shows; none is the placeholder. `caps`
+/// overrides the caps the size would give (Moment art keeps the full caps at every size, `MomentArtwork`).
+///
 /// A view with letters to stand in for the image passes a `grace` (`RemoteImageWait.grace`): the loading placeholder
 /// shows only that long, then the letters while the image keeps loading, and the letters at once for an image that
-/// failed lately. Without one, the loading placeholder (a spinner) stays until the answer. A cached image shows from the
-/// first frame.
+/// failed lately. Without one, the loading placeholder stays until the answer (`ImageLoadingSpinner`: a plain fill, and
+/// a spinner only once the load takes a moment).
+///
+/// What it shows first, with no frame of placeholder for a picture the app already has in memory: the image in memory,
+/// read in `init` and whenever the view is given another picture (at this size or larger; a smaller one while this size
+/// loads); then the copy kept on the phone; then the network. A kept copy past its lifetime shows while the network is
+/// asked behind it, and stays when that fails — unless every source says the picture is gone. A picture that failed
+/// lately shows the stand-in, and is asked once more when its miss runs out (`ImagePipeline.retryAfter`) while the view
+/// is still there.
 struct RemoteImage<Placeholder: View>: View {
     let sources: [RemoteImageSource]
     let pointSize: CGFloat
     var contentMode: ContentMode
     var grace: Duration?
     let placeholder: (_ loading: Bool) -> Placeholder
-    @State private var image: UIImage?
-    @State private var failed: Bool
+    /// The picture's key (`ImagePipeline.key`), the bucket it is shown at, and the caps it loads under.
+    private let key: String
+    private let bucket: Int
+    private let caps: RemoteMedia.Caps
+    @State private var image: CGImage?
+    /// The key `image` belongs to: a view given another picture never shows the last one's, even for a frame.
+    @State private var imageKey: String?
+    /// The key of the picture this view gave up on: its stand-in shows for that picture, never for the next.
+    @State private var failedKey: String?
     @State private var graceOver = false
     /// The image `graceOver` was counted for: a row scrolled back on screen keeps its letters rather than showing the
     /// disc again for another grace.
     @State private var graceKey: String?
 
-    init(sources: [RemoteImageSource], pointSize: CGFloat, contentMode: ContentMode = .fill, grace: Duration? = nil,
+    init(sources: [RemoteImageSource], pointSize: CGFloat, contentMode: ContentMode = .fill, grace: Duration? = nil, caps: RemoteMedia.Caps? = nil,
          @ViewBuilder placeholder: @escaping (_ loading: Bool) -> Placeholder) {
         self.sources = sources
         self.pointSize = pointSize
         self.contentMode = contentMode
         self.grace = grace
         self.placeholder = placeholder
-        // Read here rather than in `load`, which runs after the first frame: a logo already loaded never shows its
-        // placeholder for a frame, and one that failed lately never shows the disc.
-        let size = Self.maxPixelSize(pointSize)
-        let cached = sources.isEmpty ? nil : RemoteImageLoader.shared.cached(sources, maxPixelSize: size)
-        _image = State(initialValue: cached)
-        _failed = State(initialValue: cached == nil && (sources.isEmpty || RemoteImageLoader.shared.failedLately(sources, maxPixelSize: size)))
+        let key = ImagePipeline.key(sources)
+        let bucket = ImageSizeBucket.bucket(points: pointSize)
+        let caps = caps ?? RemoteMedia.caps(forThumbnail: bucket)
+        self.key = key
+        self.bucket = bucket
+        self.caps = caps
+        // Read here rather than in `load`, which runs after the first frame: a picture already in memory never shows its
+        // placeholder for a frame (and one that failed lately never shows the disc, `isFailed`).
+        let shown = RemoteImageLoader.shared.memoryImage(sources, bucket: bucket)
+        _image = State(initialValue: shown?.image)
+        _imageKey = State(initialValue: shown == nil ? nil : key)
     }
 
     /// The image at `url` alone; none for nil.
@@ -122,37 +81,103 @@ struct RemoteImage<Placeholder: View>: View {
         self.init(sources: url.map { [RemoteImageSource(url: $0)] } ?? [], pointSize: pointSize, contentMode: contentMode, grace: grace, placeholder: placeholder)
     }
 
-    private static func maxPixelSize(_ pointSize: CGFloat) -> Int { max(64, Int((pointSize * 3).rounded(.up))) }
-    private var maxPixelSize: Int { Self.maxPixelSize(pointSize) }
-    /// What the view shows: the ordered sources, as the cache keys them.
-    private var key: String { RemoteImageLoader.key(sources, maxPixelSize) }
+    /// The image to draw: this picture's, from state — or, in a view just given another picture whose load hasn't run
+    /// yet, that picture's from memory, whatever the view held before — never the last picture's.
+    private var shown: CGImage? {
+        RemoteImageWait.drawn(held: image, heldKey: imageKey, key: key) { RemoteImageLoader.shared.memoryImage(sources, bucket: bucket)?.image }
+    }
+
+    /// Whether the placeholder is the stand-in rather than the loading one: for this picture, never the last one's.
+    private var isFailed: Bool {
+        RemoteImageWait.failed(failedKey: failedKey, key: key, hasURL: !sources.isEmpty) { RemoteImageLoader.shared.failedLately(sources, caps: caps) }
+    }
 
     var body: some View {
         Group {
-            if let image {
-                Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
+            if let shown {
+                Image(decorative: shown, scale: 1).resizable().aspectRatio(contentMode: contentMode)
             } else {
-                placeholder(RemoteImageWait.shown(hasImage: false, hasURL: !sources.isEmpty, failed: failed, graceOver: graceOver) == .loading)
+                placeholder(RemoteImageWait.shown(hasImage: false, hasURL: !sources.isEmpty, failed: isFailed, graceOver: graceOver) == .loading)
             }
         }
-        .task(id: key) { await load() }
+        .task(id: "\(bucket)|\(key)") { await load() }
         .task(id: key) {
             if graceKey != key { graceOver = false; graceKey = key }
-            guard !graceOver, let grace, image == nil, await RemoteImageWait.graceElapses(grace) else { return }
+            guard !graceOver, let grace, shown == nil, await RemoteImageWait.graceElapses(grace) else { return }
             graceOver = true
         }
     }
 
+    private func show(_ picture: CGImage) {
+        image = picture
+        imageKey = key
+        failedKey = nil
+    }
+
+    /// This picture can't be shown now: its stand-in, unless the view already shows a copy of it.
+    private func giveUp() {
+        failedKey = imageKey == key ? nil : key
+    }
+
     private func load() async {
-        guard !sources.isEmpty else { image = nil; failed = true; return }
+        guard !sources.isEmpty else { image = nil; imageKey = nil; failedKey = key; return }
         let loader = RemoteImageLoader.shared
-        if let hit = loader.cached(sources, maxPixelSize: maxPixelSize) { image = hit; failed = false; return }
-        image = nil
-        failed = loader.failedLately(sources, maxPixelSize: maxPixelSize)
-        guard !failed else { return }
-        let loaded = await loader.image(sources, maxPixelSize: maxPixelSize)
-        guard !Task.isCancelled else { return }
-        image = loaded
-        failed = loaded == nil
+        // Memory: this size (or larger) and fresh is all there is to do; a smaller or older one shows meanwhile.
+        if let memory = loader.memoryImage(sources, bucket: bucket) {
+            show(memory.image)
+            if memory.exact, memory.fresh { return }
+        } else if imageKey != key {
+            // Another picture than the one shown: its own state, not the last one's.
+            image = nil
+            imageKey = nil
+        }
+        // The phone, with no network.
+        if let kept = await loader.stored(sources, bucket: bucket, caps: caps) {
+            guard !Task.isCancelled else { return }
+            show(kept.image)
+            if kept.exact, kept.fresh { return }
+        }
+        // The network: not again for a picture that failed a moment ago — once more when that runs out, if the view is
+        // still here, and no more.
+        var waited = false
+        while !Task.isCancelled {
+            if let wait = loader.retryAfter(sources, caps: caps) {
+                giveUp()
+                guard !waited, await RemoteImageWait.graceElapses(.seconds(wait)) else { return }
+                waited = true
+                continue
+            }
+            switch await loader.fetch(sources, bucket: bucket, caps: caps) {
+            case .image(let fresh):
+                guard !Task.isCancelled else { return }
+                show(fresh)
+                return
+            case .gone:
+                guard !Task.isCancelled else { return }
+                image = nil
+                imageKey = nil
+                failedKey = key
+                return
+            case .failed:
+                guard !Task.isCancelled else { return }
+                giveUp()
+                // A miss is waited out once (above); a failure that left none (a picture that didn't decode) isn't asked again.
+                guard !waited, loader.retryAfter(sources, caps: caps) != nil else { return }
+            }
+        }
+    }
+}
+
+/// What a picture with no letters to stand in for it (a Moment's art, a launch's, an avatar, an NFT) shows while it
+/// loads: nothing over the view's own fill at first, and a spinner only once the load has taken
+/// `RemoteImageWait.spinnerDelay` — a picture kept on the phone arrives within that, so it never flashes a spinner (after
+/// a relaunch, memory is empty and the phone answers a moment after the first frame).
+struct ImageLoadingSpinner: View {
+    @State private var spinning = false
+
+    var body: some View {
+        Color.clear
+            .overlay { if spinning { ProgressView().controlSize(.small) } }
+            .task { if await RemoteImageWait.graceElapses(RemoteImageWait.spinnerDelay) { spinning = true } }
     }
 }

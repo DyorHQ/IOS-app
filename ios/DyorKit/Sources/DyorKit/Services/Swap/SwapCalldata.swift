@@ -25,7 +25,7 @@ public struct V3Route: Hashable, Sendable {
 }
 
 /// A Uniswap v4 pool key. `id` is what StateView and the quoter address pools by.
-public struct PoolKey: Hashable, Sendable {
+public struct PoolKey: Hashable, Sendable, Codable {
     public let currency0: Address
     public let currency1: Address
     public let fee: Int

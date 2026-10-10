@@ -160,10 +160,14 @@ public struct PerpPositionWatch: Sendable {
         public var filled: [PerpPosition] = []
         /// Positions that ended, as they were at the last read that held them.
         public var ended: [PerpPosition] = []
+        /// By market, the size each `filled` position added: what it grew by, or its whole size when it is new or
+        /// flipped side (base units).
+        public var growth: [Int: Double] = [:]
 
-        public init(filled: [PerpPosition] = [], ended: [PerpPosition] = []) {
+        public init(filled: [PerpPosition] = [], ended: [PerpPosition] = [], growth: [Int: Double] = [:]) {
             self.filled = filled
             self.ended = ended
+            self.growth = growth
         }
     }
 
@@ -180,8 +184,18 @@ public struct PerpPositionWatch: Sendable {
         let freshIds = Set(fresh.map(\.perpId))
         if primed {
             for position in fresh {
-                guard let old = last[position.perpId] else { changes.filled.append(position); continue }
-                if old.side != position.side || position.size > old.size + 1e-9 { changes.filled.append(position) }
+                guard let old = last[position.perpId] else {
+                    changes.filled.append(position)
+                    changes.growth[position.perpId] = position.size
+                    continue
+                }
+                if old.side != position.side {
+                    changes.filled.append(position)
+                    changes.growth[position.perpId] = position.size
+                } else if position.size > old.size + 1e-9 {
+                    changes.filled.append(position)
+                    changes.growth[position.perpId] = position.size - old.size
+                }
             }
             for (perpId, old) in last.sorted(by: { $0.key < $1.key }) where !freshIds.contains(perpId) && !stillOpen.contains(perpId) {
                 changes.ended.append(old)
@@ -192,6 +206,95 @@ public struct PerpPositionWatch: Sendable {
         last = next
         primed = true
         return changes
+    }
+}
+
+/// Orders the app sent that can grow a position, so the app-wide watcher neither races an order's own result nor
+/// repeats it. One notice per fill: the order's own (`announced`), or the watcher's.
+///
+/// An order is expected from the moment it is sent until its result is in (`release`, or `announced` when it posted its
+/// own fill notice for that much growth). While one is expected on a side of a market, a growth the watcher sees there
+/// waits (`decide` → `.wait`) rather than racing the order's own notice, for at most two seconds past the order's
+/// deadline. A growth the order's own notices explain (within the market's lot rounding, at most two minutes after them)
+/// is quiet, and used up: the same growth seen again is a new fill. Anything else the watcher announces.
+public struct PerpExpectedFills: Sendable {
+    public enum Decision: Sendable, Equatable { case announce, quiet, wait }
+
+    /// How long a fill the order announced explains a growth the watcher sees.
+    public static let noteWindow: TimeInterval = 120
+    /// How long past an expectation's deadline the watcher still waits for the order's own result.
+    public static let waitGrace: TimeInterval = 2
+    /// How long an expectation's market and side are remembered after it was released (a late fill can still note).
+    static let memory: TimeInterval = 600
+
+    struct Side: Hashable, Sendable { let perpId: Int; let side: PositionSide }
+    struct Expectation: Sendable {
+        let side: Side
+        let growth: Double
+        let until: Date
+        let since: Date
+        var open = true
+    }
+    struct Note: Sendable {
+        let side: Side
+        var size: Double
+        let at: Date
+    }
+
+    private var expectations: [UUID: Expectation] = [:]
+    private var notes: [Note] = []
+    private var watcherNotices: [Side: Date] = [:]
+
+    public init() {}
+
+    /// At the send: `growth` from `PerplPositionEvidence.expectedGrowth` (an order that can grow nothing isn't expected).
+    public mutating func expect(_ id: UUID, perpId: Int, side: PositionSide, growth: Double, until: Date) {
+        expectations[id] = Expectation(side: Side(perpId: perpId, side: side), growth: growth, until: until, since: Date())
+    }
+
+    /// The order posted its own fill notice for `size` of growth on its side; its result is in.
+    public mutating func announced(_ id: UUID, size: Double, at: Date) {
+        guard let side = expectations[id]?.side else { return }
+        expectations[id]?.open = false
+        guard size > 0 else { return }
+        notes.append(Note(side: side, size: size, at: at))
+    }
+
+    /// The order's result is in and it posts no fill notice (nothing filled, notifications off, resting, late).
+    public mutating func release(_ id: UUID) {
+        expectations[id]?.open = false
+    }
+
+    /// The watcher announced a fill on this side of the market.
+    public mutating func watcherAnnounced(perpId: Int, side: PositionSide, at: Date) {
+        watcherNotices[Side(perpId: perpId, side: side)] = at
+    }
+
+    /// The watcher announced a fill on this side of the market at or after `since`.
+    public func watcherAnnounced(perpId: Int, side: PositionSide, since: Date) -> Bool {
+        watcherNotices[Side(perpId: perpId, side: side)].map { $0 >= since } ?? false
+    }
+
+    /// What the watcher does with `growth` it saw on this side of the market: quiet when the orders' own notices explain
+    /// it (it uses them up), wait while an order there is still expected (until two seconds past its deadline), else
+    /// announce.
+    public mutating func decide(perpId: Int, side: PositionSide, growth: Double, tolerance: Double, now: Date) -> Decision {
+        let key = Side(perpId: perpId, side: side)
+        notes.removeAll { now.timeIntervalSince($0.at) > Self.noteWindow }
+        expectations = expectations.filter { now.timeIntervalSince($0.value.since) < Self.memory || $0.value.open && now < $0.value.until.addingTimeInterval(Self.waitGrace) }
+        let explained = notes.filter { $0.side == key }.reduce(0) { $0 + $1.size }
+        if explained > 0, growth <= explained + tolerance {
+            var left = growth
+            for index in notes.indices where notes[index].side == key && left > 0 {
+                let used = min(notes[index].size, left)
+                notes[index].size -= used
+                left -= used
+            }
+            notes.removeAll { $0.size <= tolerance }
+            return .quiet
+        }
+        if expectations.values.contains(where: { $0.side == key && $0.open && now < $0.until.addingTimeInterval(Self.waitGrace) }) { return .wait }
+        return .announce
     }
 }
 

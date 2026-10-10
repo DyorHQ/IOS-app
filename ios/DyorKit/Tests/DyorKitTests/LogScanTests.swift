@@ -298,8 +298,9 @@ final class LogScanTests: XCTestCase {
     }
 
     /// Only the wallet's history on Send and the Portfolio (`WalletTokens.history`) is read fail-fast: every other log
-    /// scan — the launchpad's events and holdings, Moments' history, swap history, NFTs, venue tokens, Home's 30-day
-    /// discovery — keeps the patient default, whose callers take what it read.
+    /// scan — the launchpad's events and holdings, Moments' history, swap history, venue tokens, Home's 30-day discovery —
+    /// keeps the patient default, whose callers take what it read (the wallet's NFTs scan nothing since build 23: they come
+    /// from the history store).
     func testOnlyTheWalletsHistoryIsReadFailFast() throws {
         var ios = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
@@ -323,8 +324,14 @@ final class LogScanTests: XCTestCase {
         let discovery = try String(contentsOf: kit.appendingPathComponent("Services/WalletTokenDiscovery.swift"), encoding: .utf8)
         XCTAssertTrue(discovery.contains("logScan: LogScanMode = .patient"))
         XCTAssertTrue(discovery.contains("fromBlock: from, toBlock: latest, mode: logScan)"))
-        let logs = try String(contentsOf: kit.appendingPathComponent("Core/Logs.swift"), encoding: .utf8)
-        XCTAssertTrue(logs.contains("mode: LogScanMode = .patient) async -> (logs: [Log], complete: Bool)"))
+        // Read with every run of whitespace as one space: the checks pin the code, not its line breaks or indentation.
+        let logs = try String(contentsOf: kit.appendingPathComponent("Core/Logs.swift"), encoding: .utf8).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        // A scan is a screen's at the gate unless it says otherwise (`LogsGate.Lane`), and the router reads it in its lane,
+        // as many requests at once as it asks for, from the end it asks for (`LogsRouter.Order`): oldest first unless it
+        // says newest first, as every wide scan a screen shows does (`newestLogs`, `NewestFirstScanTests`).
+        XCTAssertTrue(logs.contains("mode: LogScanMode = .patient, lane: LogsGate.Lane = .interactive, order: LogsRouter.Order = .ascending) async -> (logs: [Log], complete: Bool)"))
+        XCTAssertTrue(logs.contains("from: fromBlock, to: toBlock, order: order, budget: LogsBudget(mode: mode), concurrency: concurrency, lane: lane)"))
+        XCTAssertTrue(logs.contains("from: fromBlock, to: toBlock, order: .descending, budget: LogsBudget(mode: mode), lane: lane)"), "newestLogs reads newest first")
     }
 
     /// The finding (build 17): rpc3 answers 1,000 blocks a request, however many ranges it holds, and refuses the rest,
@@ -612,6 +619,15 @@ final class LogScanTests: XCTestCase {
         let pastHead = RPCError(code: -32602, message: "block range extends beyond current head block")
         XCTAssertTrue(RPCClient.refusesPastHead(pastHead))
         XCTAssertFalse(RPCClient.refusesSize(pastHead))
+        // rpc2's (2026-10-09), the endpoint the newest blocks are read on, and an upstream's: past the head, never a failure
+        // counted against the range, nor a size.
+        for refusal in [RPCError(code: -32014, message: "block not available: block not found for eth_getLogs, requested toBlock 111739189 is not yet available on the node"),
+                        RPCError(code: -32014, message: "block not available"),
+                        RPCError(code: -32603, message: "ErrUpstreamBlockUnavailable: upstream does not have the requested block yet")] {
+            XCTAssertTrue(RPCClient.refusesPastHead(refusal), refusal.message)
+            XCTAssertFalse(RPCClient.refusesSize(refusal), refusal.message)
+        }
+        XCTAssertFalse(RPCClient.refusesPastHead(RPCError(code: -32000, message: "block not available")), "-32014's words alone, under another code")
         let other = [
             RPCError(code: -32603, message: "Internal error"),
             RPCError(code: -32000, message: "header not found"),
@@ -620,7 +636,10 @@ final class LogScanTests: XCTestCase {
             RPCError(code: -32602, message: "Invalid params"),
             RPCError(code: -1, message: "Malformed log response"),
         ]
-        for error in other { XCTAssertFalse(RPCClient.refusesSize(error), error.message) }
+        for error in other {
+            XCTAssertFalse(RPCClient.refusesSize(error), error.message)
+            XCTAssertFalse(RPCClient.refusesPastHead(error), error.message)
+        }
     }
 }
 
@@ -630,7 +649,13 @@ final class LogScanTests: XCTestCase {
 /// or lets it be answered from `logs`. With `batchSpan`, a request's ranges share that many blocks, as on rpc3: a range
 /// past what the ranges before it in the request used is refused for its size. With `singleErrorStatus`, a single-object
 /// request (not an array) whose call is refused gets that HTTP status, the error still its body, as rpc1 sends a size
-/// refusal (400).
+/// refusal (400). With `answer`, a call other than the logs (a transaction, a receipt, a balance or a nonce at a block) is
+/// answered by the test, by the host asked. A log with a block timestamp is answered with it (`blockTimestamp`), as
+/// Monad's endpoints answer. With `clampedAt`, a host whose node is behind the chain's head answers its own head, and a
+/// range past it CLAMPED, as rpc4, rpc3 and rpc1 answer one (measured 2026-10-08/09): the logs up to its node's head,
+/// those past it left out, with no error. With `refusingBatches`, a host answers any JSON array (a batch of any size) with
+/// HTTP 403 "Restricted JSON RPC method", as rpc1 does (2026-10-09); every request sent as an array is counted by host
+/// (`batchHosts()`).
 final class LogsStub: URLProtocol {
     struct Range: Hashable, Sendable {
         let from: UInt64
@@ -655,6 +680,8 @@ final class LogsStub: URLProtocol {
     }
 
     typealias Rule = @Sendable (Range) -> Failure?
+    /// Answers a call that isn't `eth_getLogs`, by host, method and params: nil leaves it to the stub.
+    typealias Answer = @Sendable (String, String, JSON) -> JSON?
     /// A rule by host as well (`LogsRouter` tests): consulted before `rule`.
     typealias HostRule = @Sendable (String, Range) -> Failure?
 
@@ -680,12 +707,29 @@ final class LogsStub: URLProtocol {
     /// The block the stub wallet sent its first transaction in (`eth_getTransactionCount` answers 1 from it on); nil
     /// says it never did.
     nonisolated(unsafe) private static var firstTransaction: UInt64?
+    nonisolated(unsafe) private static var answer: Answer?
+    /// Requests asking a range `holding` matches wait, unanswered, until `release()` (or the next `install`), counted in
+    /// `held()`: a test holds a scan at a point of its choosing, whatever the machine's pace.
+    nonisolated(unsafe) private static var holding: (@Sendable (Range) -> Bool)?
+    nonisolated(unsafe) private static var waiting = 0
+    private static let released = NSCondition()
+    /// By host: the head of the node answering it, behind the chain's (`clampedAt`).
+    nonisolated(unsafe) private static var nodeHeads: [String: UInt64] = [:]
+    /// Hosts answering any JSON array with HTTP 403 (`refusingBatches`), and the host of every request sent as one.
+    nonisolated(unsafe) private static var batchRefusers: Set<String> = []
+    nonisolated(unsafe) private static var batched: [String] = []
 
     /// `latency`: how long each request takes to answer, so requests sent together overlap (`maxInFlight()`). `logCap`: a
     /// range matching more logs is refused as rpc1 refuses one over its 10K, naming the range from its start that fits.
     static func install(head: UInt64, logs: [Log] = [], batchSpan: UInt64? = nil, singleErrorStatus: Int = 200, latency: TimeInterval = 0,
-                        logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, rule: @escaping Rule) {
+                        logCap: Int? = nil, firstTransaction: UInt64? = nil, hostRule: HostRule? = nil, answer: Answer? = nil,
+                        holding: (@Sendable (Range) -> Bool)? = nil, clampedAt: [String: UInt64] = [:], refusingBatches: Set<String> = [], rule: @escaping Rule) {
+        released.lock()
+        self.holding = holding
+        released.broadcast()
+        released.unlock()
         lock.lock(); defer { lock.unlock() }
+        self.answer = answer
         self.head = head
         chainLogs = logs
         self.batchSpan = batchSpan
@@ -695,6 +739,9 @@ final class LogsStub: URLProtocol {
         self.firstTransaction = firstTransaction
         self.rule = rule
         self.hostRule = hostRule
+        nodeHeads = clampedAt
+        batchRefusers = refusingBatches
+        batched = []
         failHead = false
         asked = []
         askedAddresses = []
@@ -702,6 +749,12 @@ final class LogsStub: URLProtocol {
         requestCount = 0
         inFlight = 0
         mostInFlight = 0
+    }
+
+    /// The host of every request sent as a JSON array (a batch), in order.
+    static func batchHosts() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return batched
     }
 
     /// The address each range in `queries()` asked for, in the same order.
@@ -720,6 +773,20 @@ final class LogsStub: URLProtocol {
     static func maxInFlight() -> Int {
         lock.lock(); defer { lock.unlock() }
         return mostInFlight
+    }
+
+    /// Lets every request `holding` held through, and holds no more.
+    static func release() {
+        released.lock()
+        holding = nil
+        released.broadcast()
+        released.unlock()
+    }
+
+    /// How many requests `holding` holds now.
+    static func held() -> Int {
+        released.lock(); defer { released.unlock() }
+        return waiting
     }
 
     /// How many requests were made.
@@ -753,11 +820,25 @@ final class LogsStub: URLProtocol {
         Self.mostInFlight = max(Self.mostInFlight, Self.inFlight)
         let latency = Self.latency
         Self.lock.unlock()
+        Self.waitWhileHeld(calls)
         if latency > 0 { Thread.sleep(forTimeInterval: latency) }
         defer { Self.lock.lock(); Self.inFlight -= 1; Self.lock.unlock() }
         // Every call is recorded, even in a request that is to get no answer.
         var spent: UInt64 = 0
         let host = request.url?.host() ?? ""
+        // A batch, of any size, to a host that refuses one (rpc1): HTTP 403, the calls unread.
+        if decoded.array != nil {
+            Self.lock.lock(); Self.batched.append(host); let refused = Self.batchRefusers.contains(host); Self.lock.unlock()
+            if refused {
+                let response = HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+                // not localized: rpc1's own English, as it sends it
+                let body = #"{"jsonrpc":"2.0","id":null,"error":{"code":-32601,"message":"Restricted JSON RPC method"}}"#
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(body.utf8))
+                client?.urlProtocolDidFinishLoading(self)
+                return
+            }
+        }
         let answers = calls.map { Self.reply($0, host: host, spent: &spent) }
         let replies = answers.compactMap { $0 }
         guard replies.count == answers.count else {
@@ -779,6 +860,20 @@ final class LogsStub: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
+    /// Waits while `holding` matches a range `calls` ask (`release`).
+    private static func waitWhileHeld(_ calls: [JSON]) {
+        let ranges = calls.filter { $0["method"].string == "eth_getLogs" }.map { call -> Range in
+            let filter = call["params"][0]
+            return Range(from: filter["fromBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0,
+                         to: filter["toBlock"].string.flatMap { BigUInt(hexQuantity: $0) }.map { UInt64($0) } ?? 0)
+        }
+        released.lock(); defer { released.unlock() }
+        guard let holding, ranges.contains(where: holding) else { return }
+        waiting += 1
+        while let holding = self.holding, ranges.contains(where: holding) { released.wait() }
+        waiting -= 1
+    }
+
     /// The answer to one call; nil when the request is to get no answer at all. `spent`: the blocks the ranges answered
     /// before it in the same request used (`batchSpan`).
     private static func reply(_ call: JSON, host: String, spent: inout UInt64) -> JSON? {
@@ -787,7 +882,11 @@ final class LogsStub: URLProtocol {
         func error(_ code: Int, _ message: String) -> JSON {
             .object(["jsonrpc": .string("2.0"), "id": id, "error": .object(["code": .number(Double(code)), "message": .string(message)])])
         }
-        lock.lock(); let head = self.head; let logs = chainLogs; let rule = self.rule; let hostRule = self.hostRule; let budget = batchSpan; let cap = logCap; let failHead = self.failHead; lock.unlock()
+        lock.lock(); let chainHead = self.head; let logs = chainLogs; let rule = self.rule; let hostRule = self.hostRule; let budget = batchSpan; let cap = logCap; let failHead = self.failHead; let answer = self.answer; lock.unlock()
+        // A host whose node is behind answers its own head, and the logs up to it only (`clampedAt`).
+        lock.lock(); let nodeHead = nodeHeads[host]; lock.unlock()
+        let head = nodeHead ?? chainHead
+        if let answer, let method = call["method"].string, method != "eth_getLogs", let value = answer(host, method, call["params"]) { return result(value) }
         switch call["method"].string {
         case "eth_getBlockByNumber":
             if failHead { return nil }
@@ -824,8 +923,9 @@ final class LogsStub: URLProtocol {
                 if let list = position.array { return list.compactMap { $0.string.flatMap { Data(hex: $0) } } }
                 return nil
             }
+            // Clamped: a range past the node's head is answered up to it, the blocks past it left out with no error.
             let matching = logs.filter { log in
-                (addresses.isEmpty || addresses.contains(log.address)) && range.contains(log.blockNumber)
+                (addresses.isEmpty || addresses.contains(log.address)) && range.contains(log.blockNumber) && (nodeHead.map { log.blockNumber <= $0 } ?? true)
                     && topics.enumerated().allSatisfy { i, topic in topic == nil || (log.topics.indices.contains(i) && topic!.contains(log.topics[i])) }
             }
             if let cap, matching.count > cap {
@@ -839,9 +939,11 @@ final class LogsStub: URLProtocol {
     }
 
     private static func json(_ log: Log) -> JSON {
-        .object(["address": .string(log.address.hex), "topics": .array(log.topics.map { .string($0.hexString) }), "data": .string(log.data.hexString),
-                 "blockNumber": .string(BigUInt(log.blockNumber).hexQuantity), "transactionHash": .string(log.transactionHash.hexString),
-                 "logIndex": .string(BigUInt(log.logIndex).hexQuantity)])
+        var object: [String: JSON] = ["address": .string(log.address.hex), "topics": .array(log.topics.map { .string($0.hexString) }), "data": .string(log.data.hexString),
+                                      "blockNumber": .string(BigUInt(log.blockNumber).hexQuantity), "transactionHash": .string(log.transactionHash.hexString),
+                                      "logIndex": .string(BigUInt(log.logIndex).hexQuantity)]
+        if let timestamp = log.blockTimestamp { object["blockTimestamp"] = .string(BigUInt(timestamp).hexQuantity) }
+        return .object(object)
     }
 
     private static func body(_ request: URLRequest) -> Data {

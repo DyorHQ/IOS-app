@@ -72,8 +72,13 @@ struct MomentLinkView: View {
 /// has it) as the share sheet's preview on the sender's phone. Until the name is looked up, or if the lookup fails, it
 /// shares the id form of the same link (`dyorhq.fun/moments/[cN/]<id>`, the NFT's own external_url), which opens the
 /// same Moment. Recipients without the app get the website's Moments page and its generic preview card.
+///
+/// The name is looked up once the page's own reads have answered (`ready`): a first lookup reads every cohort's names
+/// (`MomentDirectory`), and until build 23 it ran beside the page's reads on the same endpoint, holding them up.
 struct MomentShareButton: View {
     let info: MomentInfo
+    /// The page's reads have answered: the name may be looked up.
+    var ready = true
     @Environment(AppEnvironment.self) private var env
     @State private var named: MomentLink?
 
@@ -83,13 +88,18 @@ struct MomentShareButton: View {
                 Image(systemName: "square.and.arrow.up")
             }
             .accessibilityLabel("Share this Moment")
-            .task(id: info.key) { named = try? await env.momentDirectory.link(for: info.key) }
+            .task(id: "\(info.key.description)-\(ready)") {
+                guard ready else { return }
+                named = try? await env.momentDirectory.link(for: info.key)
+            }
         }
     }
 
+    /// The artwork the page shows, from memory (the largest size kept, the page header's), or the wordmark.
     private var artwork: Image {
-        if let cached = MomentMediaLoader.shared.cached(MomentArtwork.cacheKey(provenance: info.provenance, creator: info.moment.creator)) {
-            return Image(uiImage: cached)
+        let sources = MomentArtwork.imageSources(provenance: info.provenance, creator: info.moment.creator)
+        if let shown = RemoteImageLoader.shared.memoryImage(sources, bucket: ImageSizeBucket.largest) {
+            return Image(uiImage: UIImage(cgImage: shown.image))
         }
         return Image(.wordmark)
     }

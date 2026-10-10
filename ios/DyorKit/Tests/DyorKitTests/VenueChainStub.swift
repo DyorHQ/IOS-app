@@ -7,7 +7,8 @@ import Foundation
 /// `eth_call` — plain, inside a Multicall3 `aggregate3`, or batched — is answered at the block it names ("latest" is the
 /// head) from `answers` (the exact target and calldata at that block, then at any block), then from what an empty chain
 /// says: no pool on any factory, no liquidity in any v4 pool, an empty record of any coin on every DyorHQ launchpad,
-/// Moment id 0 on every cohort. Anything else reverts. Every header asked and every call answered is recorded.
+/// Moment id 0 on every cohort, and Multicall3's `getBlockNumber` the block asked at. Anything else reverts. Every header
+/// asked and every call answered is recorded, and every HTTP request and `aggregate3` envelope counted.
 final class VenueChainStub: URLProtocol {
     struct Call: Hashable {
         let block: UInt64
@@ -25,6 +26,9 @@ final class VenueChainStub: URLProtocol {
         var failHeaders = false
         var headersAsked: [UInt64?] = []
         var calls: [Call] = []
+        /// HTTP requests answered (a batch is one), and Multicall3 `aggregate3` envelopes among their calls.
+        var requests = 0
+        var aggregates = 0
         /// The request held next (`hold`).
         var gate: Gate?
     }
@@ -102,15 +106,27 @@ final class VenueChainStub: URLProtocol {
 
     override func startLoading() {
         let json = (try? JSONDecoder().decode(JSON.self, from: Self.body(of: request))) ?? .null
+        Self.update { $0.requests += 1 }
         var asked: Set<Data> = []
         let response: JSON = json.array.map { .array($0.map { Self.reply($0, asked: &asked) }) } ?? Self.reply(json, asked: &asked)
-        if let gate = Self.takeGate(asked: asked) {
+        let body = try! JSONEncoder().encode(response)
+        guard let gate = Self.takeGate(asked: asked) else { return deliver(body) }
+        // Held without blocking the thread it was asked on, which every custom protocol in the process shares: the other
+        // requests are answered meanwhile, and this one's answer is sent on that thread once the gate is released.
+        let thread = Thread.current
+        DispatchQueue.global().async { [self] in
             gate.arrived.signal()
             _ = gate.release.wait(timeout: .now() + 30)
+            perform(#selector(deliverHeld(_:)), on: thread, with: body, waitUntilDone: false, modes: [RunLoop.Mode.common.rawValue])
         }
+    }
+
+    @objc private func deliverHeld(_ body: Data) { deliver(body) }
+
+    private func deliver(_ body: Data) {
         let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["content-type": "application/json"])!
         client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: try! JSONEncoder().encode(response))
+        client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
 
@@ -155,6 +171,7 @@ final class VenueChainStub: URLProtocol {
             guard let at = block(request["params"][1]), let to = tx["to"].string.flatMap(Address.init),
                   let data = tx["data"].string.flatMap({ Data(hex: $0) }) else { return error(-32602, "bad call") }
             if to == Multicall.address, let inner = try? ABI.decode(data.dropFirst(4), "(address,bool,bytes)[]")[0].elements {
+                update { $0.aggregates += 1 }
                 let items: [ABIValue] = inner.map { call in
                     asked.insert(Data(call[2].bytes.prefix(4)))
                     let answer = Self.answer(at: at, to: call[0].address, call[2].bytes)
@@ -179,6 +196,9 @@ final class VenueChainStub: URLProtocol {
         func encode(_ values: [ABIValue], _ types: String) -> Data { try! ABI.encode(values, types) }
         if selector == ABI.selector("getPool(address,address,uint24)") || selector == ABI.selector("getPair(address,address)") {
             return encode([.address(.zero)], "address")
+        }
+        if selector == ABI.selector("getBlockNumber()"), to == Multicall.address {
+            return encode([.uint(BigUInt(block))], "uint256")
         }
         if selector == ABI.selector("getLiquidity(bytes32)"), to == Uniswap.stateView {
             let poolId = Data(data.dropFirst(4).prefix(32))

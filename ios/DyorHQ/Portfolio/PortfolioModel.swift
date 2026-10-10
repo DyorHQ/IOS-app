@@ -48,7 +48,8 @@ final class PortfolioModel {
         }
     }
 
-    struct Stats: Hashable {
+    /// Codable: a period's figures are saved per section once final (`SavedFigures`).
+    struct Stats: Hashable, Codable {
         var volume = 0.0
         var fees = 0.0
         var pnl = 0.0
@@ -85,14 +86,35 @@ final class PortfolioModel {
     /// The wallet the latest load is for. A load started for another (a refresh or a reload that outlived an account
     /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back (RS-10).
     private var loadingFor: Address?
-    /// The on-chain history as the history model has it (`applyHistory`): still filling in, how far, whether the chain
-    /// could be reached, and the day the transfer history reaches back to.
-    private(set) var historyFilling = false
-    private(set) var historyComplete = false
+    /// The on-chain history as the history model has it (`applyHistory`): how far each period's figures have been read
+    /// (`historyFilling`, `historyProgress`), whether the chain could be reached, and the day the transfer history
+    /// reaches back to.
+    private var history = WalletHistorySnapshot.empty
     private(set) var historyUnreachable = false
-    private(set) var historyProgress = 0.0
     private(set) var historySince: Date?
     private var historyVersion = -1
+
+    /// What each period's figures were when last final for the wallet (`SavedFigures`, `SavedScreens.Screen.portfolio`):
+    /// shown, said to be saved ("Updated 3 min ago"), until a load lands whole, or lands at all for a period with none
+    /// saved (`showsLive`) — and on Home while the history's first read hasn't either — never taken for this load's. Nil
+    /// without any, and for another wallet.
+    private(set) var saved: SavedFigures?
+    /// Where the figures are saved, and the erase count when the load they come from began: nothing read before an erase
+    /// of this device's data is saved after it (`SavedScreens.epoch`).
+    @ObservationIgnored private var savedScreens: SavedScreens?
+    @ObservationIgnored private var loadEpoch = 0
+    /// What was last saved for the wallet, or restored: a period not final now keeps its figures from it (`saveFigures`).
+    @ObservationIgnored private var lastSaved: SavedFigures?
+    /// The wallet whose saved figures were last taken in (`restoreSaved`), found or not: a screen asking again before its
+    /// load starts (`showSaved`) reads no file twice. Nil after `reset`.
+    @ObservationIgnored private var savedFor: Address?
+    /// The history model's `version` when the history was last reset under saved figures (`dropSaved`): nothing is saved
+    /// from a snapshot published before then, built on the history dropped. The version only moves on, whatever the wallet.
+    @ObservationIgnored private var droppedThrough: Int?
+    /// A load for the wallet has landed with everything it reads read (`error` nil) in this session. From then on its
+    /// figures are whole: a later load that fails keeps what the last good one read (the launches, the Moments, the
+    /// prices), so they never fall back on the saved ones (`showsLive`).
+    private var landedWhole = false
 
     // Raw, period-agnostic material.
     private var swaps: [SwapRecord] = []
@@ -115,6 +137,52 @@ final class PortfolioModel {
 
     func totals(_ period: VolumePeriod) -> Stats {
         Section.allCases.reduce(Stats()) { $0 + stats($1, period) }
+    }
+
+    /// `section`'s figures for `period` as last saved for the wallet (`saved`); nil when none were.
+    func savedStats(_ section: Section, _ period: VolumePeriod) -> Stats? {
+        saved?.periods[period.rawValue]?.sections[section.rawValue]
+    }
+
+    /// Every section's saved figures for `period` together (`savedStats`); nil when the period has none saved.
+    func savedTotals(_ period: VolumePeriod) -> Stats? {
+        guard let figures = saved?.periods[period.rawValue] else { return nil }
+        return Section.allCases.reduce(Stats()) { $0 + (figures.sections[$1.rawValue] ?? Stats()) }
+    }
+
+    /// When `period`'s saved figures were read (`savedStats`); nil when it has none saved.
+    func savedAt(_ period: VolumePeriod) -> Date? {
+        saved?.periods[period.rawValue]?.savedAt
+    }
+
+    /// Whether `period`'s figures are this session's (`totals`, `stats`) rather than those saved when the wallet was last
+    /// read in full (`savedTotals`): once a load has landed (`hasLoaded`), unless no load has landed whole yet
+    /// (`landedWhole`) while the period has saved figures. A first load that couldn't read the prices or a launchpad
+    /// counts the swaps and fills priced by them at $0 — there are no last good ones to keep after `reset` — so the saved
+    /// figures, whole when saved, stay with their time, beside the load's error (`error`), until a load lands whole.
+    func showsLive(_ period: VolumePeriod) -> Bool {
+        hasLoaded && (landedWhole || savedTotals(period) == nil)
+    }
+
+    /// Why perps history was missing from `period`'s saved figures, as the Perps card said it then (`perpsNote`).
+    func savedPerpsNote(_ period: VolumePeriod) -> String? { saved?.periods[period.rawValue]?.perpsNote }
+
+    /// Whether `period`'s figures built from `scans` (`WalletHistoryScans.volume` for Total Volume, every scan where fees
+    /// received show too) are still being read: some of those scans hasn't read every block since the period began (All:
+    /// its whole window), with the chain reachable. The store reads newest first, so the last day is read long before
+    /// the last month: each period says so only until its own window is. Until then its figures are a part, and say so.
+    func historyFilling(_ period: VolumePeriod, scans: [String]) -> Bool {
+        history.filling(since: historyStart(period), scans: scans)
+    }
+
+    /// How far `scans` have read `period`'s window, 0 to 1 (`historyFilling`).
+    func historyProgress(_ period: VolumePeriod, scans: [String]) -> Double {
+        history.progress(since: historyStart(period), scans: scans)
+    }
+
+    /// The moment `period`'s window starts at, as its figures are cut (`stats`); nil for All, every scan's whole window.
+    private func historyStart(_ period: VolumePeriod) -> Date? {
+        period.seconds == nil ? nil : period.since()
     }
 
     func stats(_ section: Section, _ period: VolumePeriod) -> Stats {
@@ -358,8 +426,15 @@ final class PortfolioModel {
             applyHistory(env.history.snapshot, version: env.history.version, for: address)
             return
         }
-        if loadedFor != address { reset() }
+        if loadedFor != address {
+            reset()
+            // What was saved for this wallet when it was last read in full shows at once, said to be saved, until this
+            // load lands (`savedStats`).
+            restoreSaved(env: env, address: address)
+        }
         loadingFor = address
+        savedScreens = env.savedScreens
+        loadEpoch = env.savedScreens.epoch
         loading = true
         defer { loading = false }
         // Nothing is published until every read is back, and a failed read never replaces what the last good one showed
@@ -424,14 +499,37 @@ final class PortfolioModel {
         loadedFor = address
         hasLoaded = true
         applyHistory(env.history.snapshot, version: env.history.version, for: address, force: true)
-        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio for \(address.short, privacy: .public): swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count) history \(self.historyProgress)")
+        Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio for \(address.short, privacy: .public): swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count) history \(self.history.progress)")
         if !listing.complete || fetchedMoments == nil || !retired.complete || fetchedPrices == nil {
             error = tr("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.")
             updatedAt = nil
         } else {
             error = nil
             updatedAt = .now
+            landedWhole = true
         }
+        saveFigures()
+    }
+
+    /// Follows the wallet signed in (RootView): a sign-out — an erase of this device's data among them — or another wallet
+    /// clears everything held for the last one, the figures saved for it included, so nothing of it shows again, not even
+    /// for that wallet signed in again after an erase. What the model holds for `address` itself stays: its load under
+    /// way, or its saved figures taken in before Home's first frame (`showSaved`).
+    func follow(_ address: Address?) {
+        let held = [loadedFor, loadingFor, savedFor].compactMap { $0 }
+        guard !held.isEmpty, !held.contains(where: { $0 == address }) else { return }
+        reset()
+    }
+
+    /// Takes in what was saved for `address` before Home's first frame (`HomeView`'s `onAppear`), while nothing of it is on
+    /// hand — no load for it has landed or begun, and its saved figures weren't taken in — after another wallet's figures
+    /// go (RS-10): a small file on the device, read on the spot (`restoreSaved`). So Total Volume opens on the figure saved
+    /// for the wallet, said to be ("Updated 3 hr ago"), rather than on a placeholder until the load's task starts; the load
+    /// takes it in again as it begins.
+    func showSaved(env: AppEnvironment, address: Address?) {
+        guard let address, loadedFor != address, loadingFor != address, savedFor != address else { return }
+        reset()
+        restoreSaved(env: env, address: address)
     }
 
     /// The wallet's on-chain history as the history model has it now (`HistoryModel.snapshot`): the swaps, launchpad
@@ -440,16 +538,81 @@ final class PortfolioModel {
     func applyHistory(_ snapshot: WalletHistorySnapshot, version: Int, for address: Address?, force: Bool = false) {
         guard let address, loadedFor == address || loadingFor == address, force || version != historyVersion else { return }
         historyVersion = version
+        history = snapshot
         swaps = snapshot.swaps
         launchHistory = snapshot.launch
         momentsHistory = snapshot.moments
-        historyFilling = snapshot.filling
-        historyComplete = snapshot.complete
         historyUnreachable = snapshot.unreachable
-        historyProgress = snapshot.progress
         if let anchor = snapshot.anchor, let floor = snapshot.status(WalletHistoryScans.transfersInId).floor {
             historySince = BlockClock.time(of: floor, anchor: anchor, secondsPerBlock: BlockClock.fallbackSecondsPerBlock)
         }
+        // A period the history has now read in full is final: saved, for the next time the wallet opens.
+        if !force, hasLoaded, loadedFor == address { saveFigures() }
+    }
+
+    // MARK: Saved figures
+
+    /// Each period's figures per section, as last final for a wallet, when each period's were read, and the Perps card's
+    /// note then (`perpsNote`), so saved perps figures missing their history say so as the live ones do.
+    struct SavedFigures: Codable, Sendable, Equatable {
+        struct Period: Codable, Sendable, Equatable {
+            let savedAt: Date
+            /// By `Section.rawValue`.
+            let sections: [String: Stats]
+            let perpsNote: String?
+        }
+
+        /// By `VolumePeriod.rawValue`.
+        var periods: [String: Period]
+    }
+
+    /// Takes in what was saved for `address` (`SavedScreens`), each period only while under a day old
+    /// (`SavedScreens.isShowable`).
+    private func restoreSaved(env: AppEnvironment, address: Address) {
+        savedFor = address
+        guard var figures = env.savedScreens.load(SavedFigures.self, .portfolio, wallet: address)?.value else { return }
+        let now = Date()
+        figures.periods = figures.periods.filter { SavedScreens.isShowable(savedAt: $0.value.savedAt, now: now) }
+            .mapValues { SavedFigures.Period(savedAt: min($0.savedAt, now), sections: $0.sections, perpsNote: $0.perpsNote) }
+        saved = figures.periods.isEmpty ? nil : figures
+        lastSaved = saved
+    }
+
+    /// Saves the figures of every period that is final now — the latest load read everything it reads (`error` nil), and
+    /// the history has read the period's whole window in every scan (`WalletHistorySnapshot.covers`), the chain reachable
+    /// — dated by that load (`updatedAt`): the prices and the Perpl fills the figures are valued with are its, however much
+    /// later the history moved them (`applyHistory` saves on every round of it, and Home loads at most every five
+    /// minutes), so a cold start never says "Updated 1 min ago" of hours-old prices. A period still being read keeps what
+    /// was saved for it before, with its own time, while that is under a day old: a part is never saved as the whole.
+    /// Nothing for another wallet, or after an erase of this device's data since the load began (`loadEpoch`).
+    private func saveFigures() {
+        guard let address = loadedFor, hasLoaded, error == nil, !history.unreachable, history.read, let savedScreens else { return }
+        // Nothing built on a snapshot published before the history was reset under the saved figures (`dropSaved`).
+        if let droppedThrough, historyVersion <= droppedThrough { return }
+        let now = Date()
+        let readAt = min(updatedAt ?? now, now)
+        var periods = lastSaved?.periods.filter { SavedScreens.isShowable(savedAt: $0.value.savedAt, now: now) } ?? [:]
+        for period in VolumePeriod.allCases where history.covers(since: historyStart(period), scans: WalletHistoryScans.ids, now: now) {
+            periods[period.rawValue] = SavedFigures.Period(savedAt: readAt, sections: Dictionary(uniqueKeysWithValues: Section.allCases.map { ($0.rawValue, stats($0, period)) }),
+                                                           perpsNote: perpsNote)
+        }
+        guard let newest = periods.values.map(\.savedAt).max() else { return }
+        let figures = SavedFigures(periods: periods)
+        lastSaved = figures
+        savedScreens.save(figures, .portfolio, wallet: address, savedAt: newest, epoch: loadEpoch)
+    }
+
+    /// The wallet's history was reset — the owner raised the history epoch, or the day's spot check found the server's
+    /// history wrong (`HistoryModel.restart`) — so the figures saved for it may be built on history that is gone: they are
+    /// forgotten, on the device and here, and none is saved again from a snapshot published before the reset (`version`,
+    /// the history model's then; `saveFigures`). Total Volume and the Portfolio show this session's figures, or a
+    /// placeholder, until the history's rounds land. What is held for another wallet stays.
+    func dropSaved(env: AppEnvironment, for wallet: Address, historyVersion version: Int) {
+        env.savedScreens.remove(.portfolio, wallet: wallet)
+        droppedThrough = max(droppedThrough ?? version, version)
+        guard [loadedFor, loadingFor, savedFor].contains(where: { $0 == wallet }) else { return }
+        saved = nil
+        lastSaved = nil
     }
 
     private func reset() {
@@ -458,8 +621,8 @@ final class PortfolioModel {
         launchHistory = .empty; momentsHistory = .empty
         launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsByKey = [:]
         tokens = [:]; prices = [:]
-        hasLoaded = false; updatedAt = nil; loadedFor = nil; perpsNote = nil
-        historyFilling = false; historyComplete = false; historyUnreachable = false; historyProgress = 0; historySince = nil; historyVersion = -1
+        hasLoaded = false; landedWhole = false; updatedAt = nil; loadedFor = nil; perpsNote = nil; saved = nil; lastSaved = nil; savedFor = nil
+        history = .empty; historyUnreachable = false; historySince = nil; historyVersion = -1
     }
 
     /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events. Without

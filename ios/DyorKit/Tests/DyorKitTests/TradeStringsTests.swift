@@ -188,7 +188,8 @@ final class TradeStringsTests: XCTestCase {
     /// "one" form with the singular noun and an "other" form with the plural, directly or through a substitution.
     func testPluralKeysHaveEnglishOneAndOtherForms() throws {
         let plurals = [("%lld editions", "edition"), ("%lld editions · %@ %@", "edition"),
-                       ("%lld trades in the period", "trade"), ("%lld claims · fees and rewards", "claim")]
+                       ("%lld trades in the period", "trade"), ("%lld claims · fees and rewards", "claim"),
+                       ("Best price so far. Still checking %lld more venues.", "venue")]
         // The reader finds a direct plural and one inside a substitution.
         let direct: [String: Any] = ["variations": ["plural": ["one": ["stringUnit": ["value": "%lld edition"]],
                                                                "other": ["stringUnit": ["value": "%lld editions"]]]]]

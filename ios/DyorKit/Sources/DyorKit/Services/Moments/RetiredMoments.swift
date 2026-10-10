@@ -64,10 +64,12 @@ public struct RetiredMoments: Sendable {
     public let addresses: MomentsAddresses
     let service: MomentsService
 
-    /// `clock` turns its history's blocks into times: the app's one session clock, or its own when nil.
-    public init(rpc: RPCClient, addresses: MomentsAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil) {
+    /// `clock` turns its history's blocks into times: the app's one session clock, or its own when nil. `cache` shares the
+    /// cohort's list between the screens that read it (`ChainCache`), and `store` keeps its Moments' records and text,
+    /// frozen like the cohort, on the device (`MomentStatics`), so only their state is read again.
+    public init(rpc: RPCClient, addresses: MomentsAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil, cache: ChainCache? = nil, store: ChainStore? = nil) {
         self.addresses = addresses
-        service = MomentsService(rpc: rpc, addresses: addresses, logsRPC: logsRPC, clock: clock)
+        service = MomentsService(rpc: rpc, addresses: addresses, logsRPC: logsRPC, clock: clock, cache: cache, store: store)
     }
 
     public var factory: Address { addresses.factory }
@@ -95,16 +97,25 @@ public struct RetiredMoments: Sendable {
     /// cohort in all (its newest 200), so whatever the counts, every id build 16 read is read here too.
     static let laterLimit = 200
 
-    /// Every Moment of `cohorts`, cohort by cohort (`moments`), and whether every cohort was read. A cohort whose read
-    /// fails keeps its Moments from `previous` (an earlier read's, of any cohorts; none when there was none) and makes
-    /// `complete` false: a cohort is never left out unsaid.
+    /// Every Moment of `cohorts`, in their order (`moments`), the cohorts read side by side, and whether every cohort was
+    /// read. A cohort whose read fails keeps its Moments from `previous` (an earlier read's, of any cohorts; none when there
+    /// was none) and makes `complete` false: a cohort is never left out unsaid.
     public static func moments(of cohorts: [RetiredMoments], keeping previous: [MomentInfo] = []) async -> (moments: [MomentInfo], complete: Bool) {
+        let reads = await withTaskGroup(of: (Int, Result<[MomentInfo], Error>).self) { group in
+            for (i, cohort) in cohorts.enumerated() {
+                group.addTask { (i, await ERC20.captured { try await cohort.moments() }) }
+            }
+            var out = [Result<[MomentInfo], Error>](repeating: .failure(ChainListUnread(.moment)), count: cohorts.count)
+            for await (i, read) in group { out[i] = read }
+            return out
+        }
         var out: [MomentInfo] = []
         var complete = true
-        for cohort in cohorts {
-            do {
-                out += try await cohort.moments()
-            } catch {
+        for (cohort, read) in zip(cohorts, reads) {
+            switch read {
+            case .success(let moments):
+                out += moments
+            case .failure:
                 complete = false
                 out += previous.filter { $0.moment.factory == cohort.factory }
             }
@@ -132,16 +143,21 @@ public struct RetiredMoments: Sendable {
     /// The Moments of this cohort the account still has something in (see `RetiredMomentPosition.isOpen`), newest first,
     /// among `moments` (Moments a caller already read; this cohort's are kept, and `cut` says whether that read left
     /// Moments out) or, when nil, the cohort's own `list`. When the list was cut, the Moments of this cohort the account
-    /// collected, claimed, withdrew from or published (`history`) that aren't in it are read by id and counted too. That
-    /// history is a log scan, and a Moment the account only received by transfer is in none of it, so the positions of a
-    /// cut list may still miss one: `complete` is then false. A scan or a read of those Moments that fails leaves them out
-    /// (the list's positions stay; `complete` is false already). A list that wasn't cut scans nothing.
-    public func positions(account: Address, moments: [MomentInfo]? = nil, cut: Bool = false) async throws -> (positions: [RetiredMomentPosition], complete: Bool) {
+    /// collected, claimed, withdrew from or published that aren't in it are read by id and counted too: from `history` when
+    /// the caller has it read in full — the app's history store scans every cohort for the wallet already
+    /// (`WalletHistoryScans.moments`) — else from this cohort's own scan (`history(account:)`). That history is a log scan,
+    /// and a Moment the account only received by transfer is in none of it, so the positions of a cut list may still miss
+    /// one: `complete` is then false. A scan or a read of those Moments that fails leaves them out (the list's positions
+    /// stay; `complete` is false already). A list that wasn't cut scans nothing.
+    public func positions(account: Address, moments: [MomentInfo]? = nil, cut: Bool = false, history known: MomentsAccountHistory? = nil) async throws
+        -> (positions: [RetiredMomentPosition], complete: Bool) {
         let read: (moments: [MomentInfo], cut: Bool)
         if let moments { read = (moments.filter { $0.moment.factory == factory }, cut) } else { read = try await list() }
         var list = read.moments
         if read.cut {
-            let missing = Self.ownIds(await history(account: account), factory: factory).subtracting(list.map(\.id))
+            let own: MomentsAccountHistory
+            if let known { own = known } else { own = await history(account: account).history }
+            let missing = Self.ownIds(own, factory: factory).subtracting(list.map(\.id))
             if !missing.isEmpty {
                 list += (try? await service.infos(ids: missing.sorted(by: >))) ?? []
                 list.sort { $0.id > $1.id }
@@ -159,8 +175,9 @@ public struct RetiredMoments: Sendable {
         return Set(keys.filter { $0.factory == factory }.map(\.id))
     }
 
-    /// Everything the account did on this cohort since its deployment block; every record carries this factory.
-    public func history(account: Address) async -> MomentsAccountHistory {
+    /// Everything the account did on this cohort since its deployment block, every record carrying this factory, and
+    /// whether it was read in full (`MomentsService.history(account:fromBlock:)`, newest first).
+    public func history(account: Address) async -> (history: MomentsAccountHistory, complete: Bool) {
         await service.history(account: account)
     }
 

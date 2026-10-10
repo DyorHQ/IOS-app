@@ -429,7 +429,12 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         XCTAssertTrue(board.contains(".navigationDestination(for: LaunchPage.self) { page in\n                switch page {\n                case .launch(let launch): LaunchDetailView(launch: launch)\n                case .reference(let reference): LaunchReferenceView(reference: reference)\n                }\n            }"))
         XCTAssertFalse(board.contains("navigationDestination(item:"))
         XCTAssertFalse(board.contains("navigationDestination(isPresented:"))
-        XCTAssertEqual(board.components(separatedBy: "NavigationLink(value: LaunchPage.launch(launch))").count - 1, 2, "each grid's cards push a page")
+        XCTAssertEqual(board.components(separatedBy: "NavigationLink(value: page(for: launch, saved: ").count - 1, 2, "each grid's cards push a page")
+        XCTAssertTrue(board.contains("NavigationLink(value: page(for: launch, saved: saved))"), "a section's, saved as its coins are")
+        XCTAssertTrue(board.contains("NavigationLink(value: page(for: launch, saved: boardSaved))"), "Explore's")
+        // A card saved when the board was last read pushes its reference: the page reads the launch now.
+        XCTAssertTrue(board.contains("saved ? .reference(LaunchReference(token: launch.token, factory: launch.factory)) : .launch(launch)"))
+        XCTAssertTrue(board.contains("private var boardSaved: Bool { model.savedAt != nil }"))
         XCTAssertFalse(board.contains("NavigationLink(value: launch)"))
         XCTAssertTrue(board.contains(".onChange(of: router.pendingLaunch) { _, launch in\n                guard let launch else { return }\n                open(.launch(launch))\n                router.pendingLaunch = nil"))
         XCTAssertTrue(board.contains(".onChange(of: router.pendingLaunchReference) { _, reference in\n                guard let reference else { return }\n                open(.reference(reference))\n                router.pendingLaunchReference = nil"))
@@ -458,7 +463,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         XCTAssertEqual(board.components(separatedBy: "model.launches").count - 1, 2, "only the listed coins and the first load")
         XCTAssertTrue(board.contains("if graduated.isEmpty, climbing.isEmpty, refundAndMigrating.isEmpty, sellOnly.isEmpty, !firstLoad {"))
         XCTAssertTrue(board.contains("if !refundAndMigrating.isEmpty {\n                        section(title: \"Refund & Migrating\", count: refundAndMigrating.count,"))
-        XCTAssertTrue(board.contains("coins: refundAndMigrating)"))
+        XCTAssertTrue(board.contains("coins: refundAndMigrating, saved: boardSaved)"))
         XCTAssertEqual(Set(LaunchPhase.allCases.map(\.boardSection)), Set(LaunchBoardSection.allCases), "every section lists some phase")
     }
 
@@ -502,7 +507,9 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         let launchTab = try XCTUnwrap(home.range(of: "case .launchpad:"))
         let momentsTab = try XCTUnwrap(home.range(of: "case .moments:", range: launchTab.upperBound..<home.endIndex))
         let launchHoldings = String(home[launchTab.upperBound..<momentsTab.lowerBound])
-        XCTAssertTrue(launchHoldings.contains("Button { router.openLaunch(holding.launch) }"), "each launch holding opens its own Launch page")
+        XCTAssertTrue(launchHoldings.contains("Button { openLaunch(holding.launch) }"), "each launch holding opens its own Launch page")
+        // One saved when the wallet was last read opens by reference: the page reads the launch now.
+        XCTAssertTrue(home.contains("if model.reads.isSaved(.launch) {\n            router.openLaunch(LaunchReference(token: launch.token, factory: launch.factory))\n        } else {\n            router.openLaunch(launch)"))
         XCTAssertFalse(launchHoldings.contains("openSwap"))
         // Held coins always; a created one at zero only while the board lists it (not a retired launchpad's sell-only coin).
         XCTAssertTrue(home.contains("guard balance > 0 || (created && launch.listsOnBoard) else { return nil }"))
@@ -514,10 +521,11 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         // every coin created and every pair asset, so a hidden retired coin's fees (aBIL in 0xad3d's escrow) are still read.
         let profile = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadProfileView.swift"), encoding: .utf8)
         XCTAssertTrue(profile.contains("var launched: [Created] { created.filter(\\.launch.listsOnBoard) }"))
-        XCTAssertTrue(profile.contains("stat(\"Launched\", \"\\(model.launched.count)\")"))
+        XCTAssertTrue(profile.contains("stat(\"Launched\", model.launchesRead ? \"\\(model.launched.count)\" : model.launchesUnread ? \"—\" : \"0\", reading: !model.launchesRead && !model.launchesUnread)"),
+                      "the count of what the board lists, a placeholder until the launches are read")
         XCTAssertTrue(profile.contains("ForEach(model.launched) { item in"))
         XCTAssertFalse(profile.contains("model.created"), "the view shows only what the board lists")
-        XCTAssertTrue(profile.contains("let createdPairs = launches.filter { $0.deployer == address }.map(\\.pairToken)\n        let escrowReads = await env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)"),
+        XCTAssertTrue(profile.contains("let createdPairs = launches.filter { $0.deployer == address }.map(\\.pairToken)\n        async let escrowRead = env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)"),
                       "the escrow pairs come from every coin created, unfiltered")
         XCTAssertTrue(Token.launchpadPairAssets.contains(Token.abil.address), "and every escrow reads aBIL, a pair asset, whatever was created")
 

@@ -34,33 +34,51 @@ final class RPCFailoverTests: XCTestCase {
         XCTAssertEqual(fallback.maxFee, BigUInt(204_000_000_000))
     }
 
+    /// The same request sent as a read (the head: raced across the endpoints, `RPCClient.race`) and as anything else (the
+    /// gas price a transaction is signed with: one endpoint at a time, `post`, the path of broadcasts, receipts, the
+    /// pending nonce, gas and the base fee), with what each answers here. Failover, backoff, fail-fast and the preference
+    /// must hold for both.
+    private let sends: [(kind: String, send: (RPCClient) async throws -> BigUInt, answer: BigUInt)] = [
+        ("a read", { BigUInt(try await $0.blockNumber()) }, 0x10),
+        ("not a read", { try await $0.gasPrice() }, BigUInt(102_000_000_000)),
+    ]
+
     func testFailsOverOn429() async throws {
-        RPCStub.status["primary.test"] = 429
-        let block = try await client().blockNumber()
-        XCTAssertEqual(block, 0x10)
-        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"])
+        for (kind, send, answer) in sends {
+            RPCStub.reset()
+            RPCStub.status["primary.test"] = 429
+            let value = try await send(client())
+            XCTAssertEqual(value, answer, kind)
+            XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"], kind)
+        }
     }
 
     func testFailsOverOnServerErrorAndTransportFailure() async throws {
-        RPCStub.status["primary.test"] = 503
-        _ = try await client().blockNumber()
-        XCTAssertEqual(RPCStub.hosts.last, "secondary.test")
+        for (kind, send, _) in sends {
+            RPCStub.reset()
+            RPCStub.status["primary.test"] = 503
+            _ = try await send(client())
+            XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"], kind)
 
-        RPCStub.reset()
-        RPCStub.transportFailure.insert("primary.test")
-        _ = try await client().blockNumber()
-        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"])
+            RPCStub.reset()
+            RPCStub.transportFailure.insert("primary.test")
+            _ = try await send(client())
+            XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"], kind)
+        }
     }
 
     func testDoesNotFailOverOnARequestError() async {
-        RPCStub.status["primary.test"] = 400
-        do {
-            _ = try await client().blockNumber()
-            XCTFail("expected badStatus(400)")
-        } catch NetworkError.badStatus(let code) {
-            XCTAssertEqual(code, 400)
-        } catch { XCTFail("unexpected \(error)") }
-        XCTAssertEqual(RPCStub.hosts, ["primary.test"])
+        for (kind, send, _) in sends {
+            RPCStub.reset()
+            RPCStub.status["primary.test"] = 400
+            do {
+                _ = try await send(client())
+                XCTFail("\(kind): expected badStatus(400)")
+            } catch NetworkError.badStatus(let code) {
+                XCTAssertEqual(code, 400, kind)
+            } catch { XCTFail("\(kind): unexpected \(error)") }
+            XCTAssertEqual(RPCStub.hosts, ["primary.test"], kind)
+        }
     }
 
     /// A request error whose body is the JSON-RPC error of the call is that error, as rpc1 sends a single-object
@@ -93,74 +111,95 @@ final class RPCFailoverTests: XCTestCase {
 
     /// Anything else in a request error's body is the status, as before: none, text, an error for another id, a result.
     func testARequestErrorWithoutTheCallsJSONRPCErrorIsItsStatus() async {
-        for body in ["", "Bad Request", #"{"jsonrpc":"2.0","id":999,"error":{"code":-32602,"message":"x"}}"#, #"{"jsonrpc":"2.0","id":1,"result":"0x10"}"#] {
-            RPCStub.reset()
-            RPCStub.status["primary.test"] = 400
-            RPCStub.statusBody["primary.test"] = body
-            do {
-                _ = try await client().blockNumber()
-                XCTFail("expected badStatus(400)")
-            } catch NetworkError.badStatus(let code) {
-                XCTAssertEqual(code, 400, body)
-            } catch { XCTFail("unexpected \(error) for \(body)") }
-            XCTAssertEqual(RPCStub.hosts, ["primary.test"], body)
+        for (kind, send, _) in sends {
+            for body in ["", "Bad Request", #"{"jsonrpc":"2.0","id":999,"error":{"code":-32602,"message":"x"}}"#, #"{"jsonrpc":"2.0","id":1,"result":"0x10"}"#] {
+                RPCStub.reset()
+                RPCStub.status["primary.test"] = 400
+                RPCStub.statusBody["primary.test"] = body
+                do {
+                    _ = try await send(client())
+                    XCTFail("expected badStatus(400)")
+                } catch NetworkError.badStatus(let code) {
+                    XCTAssertEqual(code, 400, "\(kind) \(body)")
+                } catch { XCTFail("unexpected \(error) for \(kind) \(body)") }
+                XCTAssertEqual(RPCStub.hosts, ["primary.test"], "\(kind) \(body)")
+            }
         }
     }
 
     /// A 429 or a 5xx fails over and backs off as before, whatever its body says.
     func testAThrottleWithAJSONRPCBodyStillFailsOver() async throws {
-        RPCStub.status["primary.test"] = 429
-        RPCStub.statusError["primary.test"] = (-32005, "rate limit exceeded")
-        let block = try await client().blockNumber()
-        XCTAssertEqual(block, 0x10)
-        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"])
+        for (kind, send, answer) in sends {
+            RPCStub.reset()
+            RPCStub.status["primary.test"] = 429
+            RPCStub.statusError["primary.test"] = (-32005, "rate limit exceeded")
+            let value = try await send(client())
+            XCTAssertEqual(value, answer, kind)
+            XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test"], kind)
 
-        RPCStub.reset()
-        RPCStub.status = ["primary.test": 429, "secondary.test": 503]
-        RPCStub.statusError = ["primary.test": (-32005, "rate limit exceeded"), "secondary.test": (-32603, "Internal error")]
-        do {
-            _ = try await client().blockNumber()
-            XCTFail("expected failure")
-        } catch NetworkError.badStatus(let code) {
-            XCTAssertEqual(code, 503)
-        } catch { XCTFail("unexpected \(error)") }
-        XCTAssertEqual(RPCStub.hosts.count, 10, "every endpoint in each of the five rounds, as before")
+            RPCStub.reset()
+            RPCStub.status = ["primary.test": 429, "secondary.test": 503]
+            RPCStub.statusError = ["primary.test": (-32005, "rate limit exceeded"), "secondary.test": (-32603, "Internal error")]
+            do {
+                _ = try await send(client())
+                XCTFail("\(kind): expected failure")
+            } catch NetworkError.badStatus(let code) {
+                XCTAssertEqual(code, 503, kind)
+            } catch { XCTFail("\(kind): unexpected \(error)") }
+            XCTAssertEqual(RPCStub.hosts.count, 10, "\(kind): every endpoint in each of the five rounds, as before")
+        }
     }
 
     func testThrowsWhenEveryEndpointFails() async {
-        RPCStub.status["primary.test"] = 429
-        RPCStub.status["secondary.test"] = 502
-        do {
-            _ = try await client().blockNumber()
-            XCTFail("expected failure")
-        } catch NetworkError.badStatus(let code) {
-            XCTAssertEqual(code, 502)
-        } catch { XCTFail("unexpected \(error)") }
+        for (kind, send, _) in sends {
+            RPCStub.reset()
+            RPCStub.status["primary.test"] = 429
+            RPCStub.status["secondary.test"] = 502
+            do {
+                _ = try await send(client())
+                XCTFail("\(kind): expected failure")
+            } catch NetworkError.badStatus(let code) {
+                XCTAssertEqual(code, 502, kind)
+            } catch { XCTFail("\(kind): unexpected \(error)") }
+        }
     }
 
     func testBacksOffWhenEveryEndpointThrottlesAtOnce() async throws {
-        // Measured live: under a burst both public endpoints can answer 429 to the same request.
-        RPCStub.failFirst = ["primary.test": 1, "secondary.test": 1]
-        let block = try await client().blockNumber()
-        XCTAssertEqual(block, 0x10)
-        XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test", "primary.test"], "one full round throttled, then a retry after backoff")
+        for (kind, send, answer) in sends {
+            RPCStub.reset()
+            // Measured live: under a burst both public endpoints can answer 429 to the same request.
+            RPCStub.failFirst = ["primary.test": 1, "secondary.test": 1]
+            let value = try await send(client())
+            XCTAssertEqual(value, answer, kind)
+            XCTAssertEqual(RPCStub.hosts, ["primary.test", "secondary.test", "primary.test"], "\(kind): one full round throttled, then a retry after backoff")
+        }
     }
 
     func testFailsFastWhenOffline() async {
-        RPCStub.transportFailure = ["primary.test", "secondary.test"]
-        let start = Date()
-        do { _ = try await client().blockNumber(); XCTFail("expected a transport error") } catch {}
-        XCTAssertEqual(RPCStub.hosts.count, 2, "no backoff rounds when nothing answered at all")
-        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        for (kind, send, _) in sends {
+            RPCStub.reset()
+            RPCStub.transportFailure = ["primary.test", "secondary.test"]
+            let start = Date()
+            do { _ = try await send(client()); XCTFail("\(kind): expected a transport error") } catch {}
+            XCTAssertEqual(RPCStub.hosts.count, 2, "\(kind): no backoff rounds when nothing answered at all")
+            XCTAssertLessThan(Date().timeIntervalSince(start), 1, kind)
+        }
     }
 
     func testPrefersTheEndpointThatAnswered() async throws {
-        let rpc = client()
-        RPCStub.status["primary.test"] = 429
-        _ = try await rpc.blockNumber()
-        RPCStub.hosts = []
-        _ = try await rpc.blockNumber()
-        XCTAssertEqual(RPCStub.hosts, ["secondary.test"], "a throttled primary is not retried on every call")
+        for (kind, send, _) in sends {
+            RPCStub.reset()
+            let rpc = client()
+            RPCStub.status["primary.test"] = 429
+            _ = try await send(rpc)
+            RPCStub.hosts = []
+            _ = try await send(rpc)
+            XCTAssertEqual(RPCStub.hosts, ["secondary.test"], "\(kind): a throttled primary is not retried on every call")
+            // And the other kind of request after it, on the same client: the preference is the client's, not the path's.
+            RPCStub.hosts = []
+            _ = try await sends.first { $0.kind != kind }!.send(rpc)
+            XCTAssertEqual(RPCStub.hosts, ["secondary.test"], kind)
+        }
     }
 
     func testSplitsBatchesAtTheCapAndKeepsOrder() async throws {
@@ -208,10 +247,10 @@ final class RPCFailoverTests: XCTestCase {
 
     /// Live burst against Monad's real public endpoints — opt-in (DYORHQ_NETWORK_TESTS=1) so CI stays offline. Mixes the
     /// shapes that trip each endpoint's limit: an oversized batch, a burst of concurrent single calls, and concurrent
-    /// batches. The client must answer every call.
+    /// batches. The client, made as the app makes it, must answer every call.
     func testLiveBurstAgainstPublicMonadRPC() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["DYORHQ_NETWORK_TESTS"] == "1", "set DYORHQ_NETWORK_TESTS=1")
-        let rpc = RPCClient(urls: Monad.publicRPCs, maxBatch: 40)
+        let rpc = RPCClient(urls: Monad.publicRPCs, maxBatch: 40, itemsPerSecond: 50)
         let big = try await rpc.batch((0..<150).map { _ in (method: "eth_chainId", params: []) })
         let singles = try await withThrowingTaskGroup(of: Int.self) { group in
             for _ in 0..<60 { group.addTask { try await rpc.chainId() } }
@@ -273,11 +312,17 @@ final class RPCStub: URLProtocol {
     nonisolated(unsafe) static var gasPrice: String? = "0x17bfac7c00" // 102 gwei
     /// A small simulated chain for running whole plans; nil keeps the fixed answers the transport tests rely on.
     nonisolated(unsafe) static var chain: SimulatedChain?
+    /// Receipts by transaction hash (lowercased hex): `eth_getTransactionReceipt` answers them, after `nullReceiptReads`
+    /// null answers (a node that hasn't seen the block yet). A hash with none fails as before.
+    nonisolated(unsafe) static var receipts: [String: JSON] = [:]
+    nonisolated(unsafe) static var nullReceiptReads = 0
+    nonisolated(unsafe) static var receiptReads = 0
 
     static func reset() {
         status = [:]; transportFailure = []; hosts = []; requestSizes = []; sendError = nil; knownTransactions = []; itemBudget = [:]; failFirst = [:]
         statusError = [:]; statusBody = [:]
         baseFee = nil; tip = nil; gasPrice = "0x17bfac7c00"; chain = nil
+        receipts = [:]; nullReceiptReads = 0; receiptReads = 0
     }
 
     static func session() -> URLSession {
@@ -351,6 +396,12 @@ final class RPCStub: URLProtocol {
         case "eth_getTransactionByHash":
             let asked = call["params"].array?.first?.string ?? ""
             return knownTransactions.contains(asked) ? result(.object(["hash": .string(asked)])) : result(.null)
+        case "eth_getTransactionReceipt":
+            let asked = (call["params"].array?.first?.string ?? "").lowercased()
+            guard let receipt = receipts[asked] else { return failure("method not found") }
+            receiptReads += 1
+            if nullReceiptReads > 0 { nullReceiptReads -= 1; return result(.null) }
+            return result(receipt)
         default: return failure("method not found")
         }
     }

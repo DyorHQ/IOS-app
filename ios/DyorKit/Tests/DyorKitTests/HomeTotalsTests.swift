@@ -94,21 +94,27 @@ final class HomeTotalsTests: XCTestCase {
 
     /// Home's hero, split, allocation ring and tab rows go through `HomeTotals`: no section is summed on its own, a
     /// launch holding carries the Launch tab's price (Spot's first), a Moment is valued at its pool's live price (never
-    /// its opening one) when Spot has none, and a Moment still collecting says "Not trading yet".
+    /// its opening one) when Spot has none, and a Moment still collecting says "Not trading yet". Each section's figure
+    /// is the totals' once its part of the wallet is read (`HomeReadState`), and the total is the four sections' sum.
     func testHomeCountsThroughHomeTotals() throws {
         let home = try DocsLinksTests.appSource("Home/HomeView.swift")
         let model = try XCTUnwrap(home.range(of: "final class HomeModel {")).upperBound
         let modelEnd = try XCTUnwrap(home.range(of: "struct TokenDetailView: View {")).lowerBound
         let body = String(home[model..<modelEnd])
         for part in ["var totals: HomeTotals {", "price: $0.usd) }", "price: $0.priceUSD) }", "price: WalletHoldings.momentPrice($0.moment)) })",
-                     "var spotValue: Double { totals.spot }", "var launchpadValue: Double { totals.launch }", "var momentsValue: Double { totals.moments }",
-                     "rows.isEmpty ? nil : totals.total + perpsValue",
+                     "var spotValue: Double? { reads.showsValue(of: .spot) ? totals.spot : nil }",
+                     "var launchpadValue: Double? { reads.showsValue(of: .launch) ? totals.launch : nil }",
+                     "var momentsValue: Double? { reads.showsValue(of: .moments) ? totals.moments : nil }",
+                     "return Split(spot: spot, perps: perps, launch: launch, moments: moments)",
+                     "var total: Double { spot + perps + launch + moments }", "var totalValue: Double? { split?.total }",
                      "return LaunchHolding(launch: launch, balance: balance, priceUSD: DyorPrice.launch(launch, spot: priceMap[launch.token]?.usd, pairUSD: pairUSD))"] {
             XCTAssertTrue(body.contains(part), part)
         }
         XCTAssertFalse(body.contains("usdcPerCoin"), "a Moment is never valued at its opening price")
-        XCTAssertFalse(body.contains("Value: Double { holdings.") || body.contains("Value: Double { launchHoldings.") || body.contains("Value: Double { momentRows."),
-                       "no section summed on its own")
+        for type in ["Double", "Double?"] {
+            XCTAssertFalse(body.contains("Value: \(type) { holdings.") || body.contains("Value: \(type) { launchHoldings.") || body.contains("Value: \(type) { momentRows."),
+                           "no section summed on its own")
+        }
         XCTAssertTrue(home.contains("LaunchHoldingRow(holding: holding, value: totals.value(of: holding.id, units: holding.units))"))
         XCTAssertTrue(home.contains("MomentHoldingRow(row: row, value: totals.value(of: row.moment.moment.coin, units: HomeModel.coins(row)))"))
         XCTAssertTrue(home.contains("if row.moment.isNotTradingYet {\n                    Text(\"Not trading yet\")"))

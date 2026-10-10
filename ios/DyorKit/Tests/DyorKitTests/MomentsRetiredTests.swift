@@ -240,7 +240,7 @@ final class MomentsRetiredTests: XCTestCase {
             if cohort == cohort1 { XCTAssertTrue(moments.first { $0.id == 2 }?.graduated ?? false, "cohort-1 #2 graduated") }
             // The creator of each cohort's first Moment: a history scan from the cohort's deployment block.
             let creator = cohort == cohort3 ? Address(literal: "0x90f3e7c3B4E32494b06814Fd2F4556671F5F4C47") : Address(literal: "0x6115cAF237026B45B037191B20056d1e4AfAfFa3")
-            let history = await client.history(account: creator)
+            let (history, _) = await client.history(account: creator)
             XCTAssertTrue(history.publishes.allSatisfy { $0.factory == cohort.factory && $0.block >= cohort.deployBlock })
             XCTAssertFalse(history.publishes.isEmpty)
         }

@@ -40,7 +40,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>22</string>
+	<string>23</string>
 	<key>FeeEscrow</key>
 	<string>$(DYOR_DEBUG_FEE_ESCROW)</string>
 	<key>HolderFeeSharing</key>

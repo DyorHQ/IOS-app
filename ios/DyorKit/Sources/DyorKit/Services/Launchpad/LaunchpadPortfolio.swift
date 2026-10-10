@@ -148,7 +148,9 @@ public extension LaunchpadAddresses {
 public extension LaunchpadService {
     /// The wallet's curve fills and fee claims over the last `lookbackBlocks` blocks, newest first. Fills are
     /// matched to `curves` (curve → token) so only these factories' launches count; claims are read from the escrow
-    /// and fee-sharing contracts of the live stack (once deployed) and of every retired one.
+    /// and fee-sharing contracts of the live stack (once deployed) and of every retired one. The scans read newest first
+    /// and don't say what they couldn't read (`RPCClient.chunkedLogs`): no screen shows this — the app's screens build the
+    /// wallet's fills and fees from its history store (`WalletHistoryService`), which says how far it has read.
     func walletHistory(wallet: Address, lookbackBlocks: UInt64, curves: Set<Address>) async -> LaunchpadWalletHistory {
         guard !stacks.isEmpty, let anchor = try? await logsRPC.block(.latest) else { return .empty }
         let secondsPerBlock = await clock.secondsPerBlock()
@@ -172,7 +174,9 @@ public extension LaunchpadService {
 
     /// Everything the wallet has received in launchpad fees, from the first escrow's deployment to the head
     /// (`LaunchpadFeeIncome`). One wallet-filtered read per contract: every event an escrow emits names its recipient
-    /// first, so a single scan per escrow finds the fees it paid the wallet and those the wallet claimed.
+    /// first, so a single scan per escrow finds the fees it paid the wallet and those the wallet claimed. Each reads newest
+    /// first, and one that stops short (the window is wider than a scan's budget) makes `complete` false. The app reads the
+    /// wallet's fees from its history store (`WalletHistoryService`), not from here.
     func feeIncome(wallet: Address) async -> LaunchpadFeeIncome {
         guard !stacks.isEmpty, let head = try? await logsRPC.blockNumber() else {
             return LaunchpadFeeIncome(paid: [:], claimed: [:], rewardsClaimed: [:], complete: false)
@@ -185,13 +189,13 @@ public extension LaunchpadService {
         let reads = await withTaskGroup(of: (escrow: Bool, logs: [Log], complete: Bool).self) { group in
             for escrow in escrows {
                 group.addTask {
-                    let report = await rpc.chunkedLogsReport(address: escrow, topics: [nil, word], fromBlock: from, toBlock: head)
+                    let report = await rpc.chunkedLogsReport(address: escrow, topics: [nil, word], fromBlock: from, toBlock: head, order: .descending)
                     return (true, report.logs, report.complete)
                 }
             }
             for sharing in sharings {
                 group.addTask {
-                    let report = await rpc.chunkedLogsReport(address: sharing, topics: [LaunchpadABI.Events.sharingClaimedTopic, nil, word], fromBlock: from, toBlock: head)
+                    let report = await rpc.chunkedLogsReport(address: sharing, topics: [LaunchpadABI.Events.sharingClaimedTopic, nil, word], fromBlock: from, toBlock: head, order: .descending)
                     return (false, report.logs, report.complete)
                 }
             }
@@ -251,10 +255,14 @@ public extension LaunchpadService {
         return list.filter { !$0.isZero && seen.insert($0).inserted }
     }
 
-    /// Pure half of `walletHistory`, each row's time estimated from `anchor` at `secondsPerBlock`.
+    /// Pure half of `walletHistory`, each row's time its block's own when the log carries it (`Log.blockTimestamp`), else
+    /// estimated from `anchor` at `secondsPerBlock`.
     nonisolated static func walletHistory(buys: [Log], sells: [Log], escrowNative: [Log], escrowToken: [Log], sharing: [Log], paid: [Log] = [], paidToken: [Log] = [],
                                           anchor: BlockHeader, secondsPerBlock: Double, curves: Set<Address>) -> LaunchpadWalletHistory {
-        func when(_ log: Log) -> Date { Date(timeIntervalSince1970: TimeInterval(time(anchor: anchor, block: log.blockNumber, secondsPerBlock: secondsPerBlock))) }
+        func when(_ log: Log) -> Date {
+            if let timestamp = log.blockTimestamp { return Date(timeIntervalSince1970: TimeInterval(timestamp)) }
+            return Date(timeIntervalSince1970: TimeInterval(time(anchor: anchor, block: log.blockNumber, secondsPerBlock: secondsPerBlock)))
+        }
         var fills: [WalletCurveFill] = []
         for log in buys where curves.contains(log.address) {
             guard let fill = LaunchpadABI.fill(log) else { continue }

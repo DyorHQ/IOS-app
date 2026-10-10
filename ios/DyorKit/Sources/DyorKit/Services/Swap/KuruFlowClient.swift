@@ -10,10 +10,32 @@ actor KuruFlowClient {
         let expiresAt: TimeInterval
     }
 
+    /// The token request under way for one address, and who waits for its answer: each waiter's continuation, resumed
+    /// once — by the request's answer, or with `CancellationError` as soon as its own task is cancelled.
+    private struct TokenRequest {
+        let id: UUID
+        var waiters: [UUID: CheckedContinuation<Credential, Error>] = [:]
+    }
+
+    /// How long a token request may take in all, its answer included, whatever the connection does: a quote waits for it,
+    /// within the venue's own 20 s (`SwapEngine.quoteTimeout`). `URLRequest.timeoutInterval` only bounds the wait between
+    /// two packets, so a trickling endpoint would hold it without end.
+    static let tokenDeadline: TimeInterval = 8
+
     private let session: URLSession
     private var credentials: [Address: Credential] = [:]
+    /// The token request under way for each address. Whoever needs that address's token meanwhile (the first quote, while
+    /// Swap's prefetch is still asking, `prepare(for:)`) waits for its answer rather than asking again: Kuru takes one
+    /// token request a second.
+    private var tokenRequests: [Address: TokenRequest] = [:]
 
     init(session: URLSession) { self.session = session }
+
+    /// Asks for `account`'s access token ahead of its first quote (Swap opening), so that quote doesn't wait a round trip
+    /// for it. Nothing is asked while the token held is still good; a failure is left for the quote to meet, and retry.
+    func prepare(for account: Address) async {
+        _ = try? await jwt(for: account)
+    }
 
     func quote(_ req: SwapRequest) async throws -> VenueQuote? {
         // A retired Moment coin never reaches the API: its calldata comes back ready-made, so refuse before asking.
@@ -98,27 +120,80 @@ actor KuruFlowClient {
         return (data, status)
     }
 
+    /// The token held for `address` while it has more than a minute left; else the answer of the request under way for
+    /// it, waited for; else a new request's, which callers asking meanwhile share. The request runs in a task of its own,
+    /// so a caller that leaves (Swap closed) doesn't cancel it, and its token is still kept for the next quote. The wait is
+    /// the caller's own and ends the moment its task is cancelled — a round of quotes refused, or past the venue's time
+    /// (`SwapEngine.withTimeout`, whose task group waits for its children) — while the request itself goes on.
     private func jwt(for address: Address) async throws -> String {
         let now = Date().timeIntervalSince1970
         if let cached = credentials[address], cached.expiresAt - 60 > now { return cached.token }
+        let waiter = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Credential, Error>) in
+                wait(waiter, for: address, continuation)
+            }
+        } onCancel: {
+            Task { await self.leave(waiter, for: address) }
+        }.token
+    }
+
+    /// Adds `waiter` to the waiters of `address`'s token request, starting one when none is under way. A task cancelled
+    /// before it got here is answered at once (its cancellation handler may already have run, finding nothing to end).
+    private func wait(_ waiter: UUID, for address: Address, _ continuation: CheckedContinuation<Credential, Error>) {
+        guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+        if tokenRequests[address] == nil {
+            let id = UUID()
+            tokenRequests[address] = TokenRequest(id: id)
+            Task {
+                let result: Result<Credential, Error>
+                do { result = .success(try await self.requestToken(for: address)) } catch { result = .failure(error) }
+                self.finish(id, for: address, with: result)
+            }
+        }
+        tokenRequests[address]?.waiters[waiter] = continuation
+    }
+
+    /// Ends `waiter`'s wait (its task was cancelled); the request goes on for the others, and its token is still kept.
+    private func leave(_ waiter: UUID, for address: Address) {
+        tokenRequests[address]?.waiters.removeValue(forKey: waiter)?.resume(throwing: CancellationError())
+    }
+
+    /// The answer of `address`'s token request `id`, given to everyone still waiting for it.
+    private func finish(_ id: UUID, for address: Address, with result: Result<Credential, Error>) {
+        guard let request = tokenRequests[address], request.id == id else { return }
+        tokenRequests[address] = nil
+        for continuation in request.waiters.values { continuation.resume(with: result) }
+    }
+
+    /// One token request for `address`, kept in `credentials` once it answers, given `tokenDeadline` in all.
+    private func requestToken(for address: Address) async throws -> Credential {
+        let now = Date().timeIntervalSince1970
         var request = URLRequest(url: Kuru.api.appending(path: "api/generate-token"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(JSON.object(["user_address": .string(address.checksummed)]))
         request.timeoutInterval = 20
-        let (data, status) = try await send(request)
+        let (data, status) = try await send(request, limit: Self.tokenDeadline)
         guard (200..<300).contains(status) else { throw SwapError.venue(L10n.tr("Kuru Flow token request failed (\(String(status))).")) }
         let json = (try? JSONDecoder().decode(JSON.self, from: data)) ?? .null
         guard let token = Self.text(json["token"]) else { throw SwapError.venue(L10n.tr("Kuru Flow did not return an access token.")) }
         let expiresAt = json["expires_at"].number ?? json["expires_at"].string.flatMap(Double.init) ?? (now + 3600)
-        credentials[address] = Credential(token: token, expiresAt: expiresAt)
-        return token
+        let credential = Credential(token: token, expiresAt: expiresAt)
+        credentials[address] = credential
+        return credential
     }
 
-    private func send(_ request: URLRequest) async throws -> (Data, Int) {
+    /// Sends `request`, given `limit` seconds in all when set (`RPCClient.data(for:session:limit:)`); else the session's own
+    /// wait between two packets alone, and the venue's time (`SwapEngine.quoteTimeout`), which cancels it.
+    private func send(_ request: URLRequest, limit: TimeInterval? = nil) async throws -> (Data, Int) {
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            if let limit {
+                (data, response) = try await RPCClient.data(for: request, session: session, limit: limit)
+            } else {
+                (data, response) = try await session.data(for: request)
+            }
         } catch {
             throw NetworkError.transport(error)
         }

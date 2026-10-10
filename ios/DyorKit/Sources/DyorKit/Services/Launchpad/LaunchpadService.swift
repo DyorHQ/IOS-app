@@ -9,15 +9,9 @@ public actor LaunchpadService {
     public static let defaultLogsRPC = URL(string: "https://rpc1.monad.xyz")!
     /// `LaunchpadFactory.MAX_EXEMPTIONS`.
     public static let maxExemptions = 32
-    /// The launchpad activity a profile and the recent-activity feed scan (`activity(limit:lookbackBlocks:launches:)`): a
-    /// block budget, 1,512,000 blocks (about 5.3 days at Monad's pace), kept as it was when it was called seven days so
-    /// the scans cost what they did.
-    public static let recentActivityBlocks: UInt64 = 1_512_000
-    /// How far back `holderCount` reads a coin's transfers: a block budget, 6,480,000 blocks (about 22.7 days).
-    public static let holderScanBlocks: UInt64 = 6_480_000
-    /// The longest a coin's trade history is read for its PnL (`tradeLookback`): 30 days.
-    public static let maxTradeLookback: TimeInterval = 30 * 86_400
-    /// Blocks added to a trade history read from a coin's age (`tradeLookback`), so the launch itself is inside it.
+    /// Blocks added to a coin's age in blocks when the block it launched in is estimated (`launchBlock`), so the launch
+    /// itself is inside the window its fills and its holders are read from. (A coin's holders were read over a fixed
+    /// 6,480,000 blocks, `holderScanBlocks`, until build 23: they are read from its launch now, `holders`.)
     public static let tradeLookbackMargin: UInt64 = 20_000
 
     public let rpc: RPCClient
@@ -28,8 +22,20 @@ public actor LaunchpadService {
     public let clock: BlockClock
     let multicall: Multicall
     private var pairCache: [Address: PairInfo] = [:]
+    /// The reads the app's screens share (`ChainCache`): the launch list is read once for every screen that asks within
+    /// its time (`launchListing`). Nil reads it every time, as a test does.
+    let cache: ChainCache?
+    /// Where each settled launch's fixed facts are kept between launches (`LaunchStatics`), so a refresh of the shared
+    /// list reads only what moves. Nil reads them every time.
+    let store: ChainStore?
+    /// The device clock: which launches are settled enough to keep (`ChainSettled`).
+    private let now: @Sendable () -> Date
+    /// What `store` keeps, by factory and index in its list, as of `staticsEpoch` (nil until read).
+    private var statics: [Address: [Int: LaunchStatics]] = [:]
+    private var staticsEpoch: Int?
 
-    public init(rpc: RPCClient, addresses: LaunchpadAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil) {
+    public init(rpc: RPCClient, addresses: LaunchpadAddresses, logsRPC: RPCClient? = nil, clock: BlockClock? = nil,
+                cache: ChainCache? = nil, store: ChainStore? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
         self.rpc = rpc
         self.addresses = addresses
         let text = rpc.url.absoluteString
@@ -37,6 +43,9 @@ public actor LaunchpadService {
         self.logsRPC = logsRPC ?? (local ? rpc : RPCClient(url: Self.defaultLogsRPC))
         self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
+        self.cache = cache
+        self.store = store
+        self.now = now
     }
 
     /// Swaps in the deployed addresses once they are known. Cached pair metadata survives; it is chain data.
@@ -211,7 +220,8 @@ public actor LaunchpadService {
     /// Launches recorded by a specific factory — the live one or a retired one whose history still counts. Every coin the
     /// factory lists is on the page: one whose text can't be read shows stand-ins (`hydrate`), and a read that doesn't
     /// answer for every coin throws (`ChainListUnread`), never a shorter list. The records hold no text, so they are read
-    /// all or nothing: a listed coin whose record is missing or empty was read on a node behind the one that listed it.
+    /// all or nothing: a listed coin whose record is missing or empty, like a page shorter than the count, was read on a
+    /// node behind the one that listed it.
     public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
         guard !factory.isZero, limit > 0 else { return [] }
         let legacy = stack(for: factory).generation.legacyRecord
@@ -219,7 +229,9 @@ public actor LaunchpadService {
         guard total > 0 else { return [] }
         let offset = max(0, total - limit)
         let page = try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunches, [.uint(offset), .uint(total - offset)], returns: "address[]")])[0][0].elements.map(\.address)
-        guard !page.isEmpty else { return [] }
+        // A page shorter than the count (an empty one included) was read on a node behind the one that counted: the shared
+        // list's read refuses it too (`launches(limit:factory:total:epoch:)`).
+        guard page.count == total - offset else { throw ChainListUnread(.launch) }
         let records = try await multicall.readAll(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
             .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
         for (token, record) in zip(page, records) where !record.exists || record.token != token { throw ChainListUnread(.launch) }
@@ -230,7 +242,58 @@ public actor LaunchpadService {
     /// so the whole list stays newest first, with every factory whose launches couldn't be read (`LaunchListing.unread`):
     /// one factory's failure never takes the others down, and is never mistaken for a factory with fewer launches. While
     /// the live stack is not deployed (v2 pending) the list is the retired stacks' launches alone.
+    ///
+    /// With the app's shared reads (`cache`), every screen's list comes from one read of `listingLimit` launches per
+    /// factory (`sharedListing`), each screen taking its own newest `limit` (`LaunchListing.prefix(perFactory:)`): Home,
+    /// the Portfolio, the board, My Launchpad and Recent Activity asking within `ChainCache.TTL.listing` share it, and
+    /// a screen asking while it is read waits for it. A list that couldn't be read in full is never kept, so a Retry
+    /// reads again at once.
+    ///
+    /// A factory the shared read couldn't read (its `listingLimit` launches: a page, a record or a curve that didn't
+    /// answer, a cold device keeping none of them) is read again for a screen listing fewer, with that screen's own
+    /// `limit` (`factoryLaunches`): Home's 30 and the board's 60 are never unread for want of the Portfolio's 200, and are
+    /// exactly what a read of `limit` lists. Screens asking for the same `limit` at once share that read too.
     public func launchListing(limit: Int = 48) async -> LaunchListing {
+        guard let cache, limit > 0, limit <= Self.listingLimit else { return await readListing(limit: limit) }
+        let key = "launchpad.listing." + stacks.map(\.factory.hex).joined(separator: ",")
+        // `sharedListing` can't fail (a factory's failure is in the listing), so neither can this read.
+        guard let shared = try? await cache.value(key, ttl: ChainCache.TTL.listing, keep: { (listing: LaunchListing) in listing.complete },
+                                                  read: { await self.sharedListing() }) else { return await readListing(limit: limit) }
+        let listing = shared.prefix(perFactory: limit)
+        guard limit < Self.listingLimit, !listing.unread.isEmpty else { return listing }
+        let unread = listing.factories.filter { listing.unread[$0] != nil }
+        let reads = await withTaskGroup(of: (Address, Result<[Launch], Error>).self) { group in
+            for factory in unread {
+                group.addTask {
+                    (factory, await ERC20.captured {
+                        try await cache.value("launchpad.factory.\(factory.hex).\(limit)", ttl: ChainCache.TTL.listing) { try await self.factoryLaunches(limit: limit, factory: factory) }
+                    })
+                }
+            }
+            var out: [Address: Result<[Launch], Error>] = [:]
+            for await (factory, read) in group { out[factory] = read }
+            return out
+        }
+        return Self.listing(factories: listing.factories, reads: listing.factories.map { factory in
+            reads[factory] ?? .success(listing.launches.filter { $0.factory == factory })
+        })
+    }
+
+    /// One factory's newest `limit` launches for a screen the shared read failed it for (`launchListing`): its count, then
+    /// its launches as the shared read reads them (`launches(limit:factory:total:epoch:)`), those the device keeps for what
+    /// moves only.
+    private func factoryLaunches(limit: Int, factory: Address) async throws -> [Launch] {
+        let epoch = store?.epoch
+        let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.launchCount, returns: "uint256")])[0][0])
+        return try await launches(limit: limit, factory: factory, total: total, epoch: epoch)
+    }
+
+    /// The most launches of each factory a screen lists (the Portfolio's 200): what the shared list reads
+    /// (`launchListing`), every screen taking its own newest from it.
+    public static let listingLimit = 200
+
+    /// `launchListing` read now, factory by factory, each in full.
+    private func readListing(limit: Int) async -> LaunchListing {
         let factories = stacks.map(\.factory)
         let reads = await withTaskGroup(of: (Int, Result<[Launch], Error>).self) { group in
             for (i, factory) in factories.enumerated() {
@@ -240,6 +303,32 @@ public actor LaunchpadService {
             for await (i, read) in group { out[i] = read }
             return out
         }
+        return Self.listing(factories: factories, reads: reads)
+    }
+
+    /// The list every screen shares (`launchListing`): the newest `listingLimit` launches of every factory, all their
+    /// counts in one read (`launchCounts`), then each factory's launches (`launches(limit:factory:total:epoch:)`): a launch
+    /// kept on the device has only what moves read again — its record, its curve's price, reserves and state, and its
+    /// pool's price once graduated — and any other is read in full. Factories are read side by side, and one that can't be
+    /// read is named in the listing, as `readListing` names it.
+    private func sharedListing() async -> LaunchListing {
+        let factories = stacks.map(\.factory)
+        let epoch = store?.epoch
+        let counts = await launchCounts(factories)
+        let reads = await withTaskGroup(of: (Int, Result<[Launch], Error>).self) { group in
+            for (i, factory) in factories.enumerated() {
+                let count = counts[i]
+                group.addTask { (i, await ERC20.captured { try await self.launches(limit: Self.listingLimit, factory: factory, total: try count.get(), epoch: epoch) }) }
+            }
+            var out = Array(repeating: Result<[Launch], Error>.success([]), count: factories.count)
+            for await (i, read) in group { out[i] = read }
+            return out
+        }
+        return Self.listing(factories: factories, reads: reads)
+    }
+
+    /// The listing of `factories` from each one's read, in order: its launches, or its error (`LaunchListing.unread`).
+    private static func listing(factories: [Address], reads: [Result<[Launch], Error>]) -> LaunchListing {
         var launches: [Launch] = []
         var unread: [Address: any Error] = [:]
         for (factory, read) in zip(factories, reads) {
@@ -249,6 +338,67 @@ public actor LaunchpadService {
             }
         }
         return LaunchListing(factories: factories, launches: launches, unread: unread)
+    }
+
+    /// Every factory's `launchCount()` in one aggregate, each answer or failure in `factories`' order. An aggregate the
+    /// node refuses as a whole (an `eth_call` error about the call itself: out of gas, a revert) is asked again factory
+    /// by factory, side by side, so one factory can't take the others' counts down; any other failure (no answer,
+    /// throttling) is every factory's, as it would be one by one.
+    func launchCounts(_ factories: [Address]) async -> [Result<Int, Error>] {
+        guard !factories.isEmpty else { return [] }
+        let calls = factories.map { LaunchpadABI.call($0, LaunchpadABI.Factory.launchCount, returns: "uint256") }
+        do {
+            return try await multicall.read(calls).map { result in result.map { LaunchpadABI.int($0[0]) } }
+        } catch where ERC20.isCallError(error) {
+            let multicall = multicall
+            return await withTaskGroup(of: (Int, Result<Int, Error>).self) { group in
+                for (i, call) in calls.enumerated() {
+                    group.addTask { (i, await ERC20.captured { LaunchpadABI.int(try await multicall.readAll([call])[0][0]) }) }
+                }
+                var out = Array(repeating: Result<Int, Error>.failure(ChainListUnread(.launch)), count: calls.count)
+                for await (i, read) in group { out[i] = read }
+                return out
+            }
+        } catch {
+            return factories.map { _ in .failure(error) }
+        }
+    }
+
+    /// One factory's newest `limit` launches of the `total` it lists (its count, read with every factory's), newest first,
+    /// for the shared list: each launch the device keeps (`LaunchStatics`) has only what moves read (`hydrateKnown`), side
+    /// by side with the full read of any other — its token from the factory's list, its record, then its text and curve
+    /// (`hydrate`) — which is kept once the launch settled with its text read whole (`ChainSettled`). A list answered
+    /// shorter than the count, or a listed coin with no record, was read on a node behind, and throws (`ChainListUnread`),
+    /// never a shorter list. `epoch` is the store's when the listing began: nothing is kept after an erase.
+    private func launches(limit: Int, factory: Address, total: Int, epoch: Int?) async throws -> [Launch] {
+        guard !factory.isZero, limit > 0, total > 0 else { return [] }
+        let legacy = stack(for: factory).generation.legacyRecord
+        let window = max(0, total - limit) ..< total
+        let saved = savedStatics(of: factory)
+        async let knownRead = hydrateKnown(window.compactMap { saved[$0] }, factory: factory)
+        var fresh: [(index: Int, launch: Launch)] = []
+        if let first = window.first(where: { saved[$0] == nil }) {
+            let page = try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunches, [.uint(first), .uint(total - first)], returns: "address[]")])[0][0].elements.map(\.address)
+            guard page.count == total - first else { throw ChainListUnread(.launch) }
+            let indices = (first ..< total).filter { saved[$0] == nil }
+            let tokens = indices.map { page[$0 - first] }
+            let records = try await multicall.readAll(tokens.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
+                .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
+            for (token, record) in zip(tokens, records) where !record.exists || record.token != token { throw ChainListUnread(.launch) }
+            let read = try await hydrateReading(records, factory: factory)
+            var settled: [LaunchStatics] = []
+            for (index, (record, entry)) in zip(indices, zip(records, read)) {
+                fresh.append((index, entry.launch))
+                if let text = entry.text, ChainSettled.isSettled(entry.launch.launchedAt, now: now()),
+                   ChainSettled.isKeepable([text.name, text.symbol, text.logo, text.description, text.socials.twitter, text.socials.telegram,
+                                            text.socials.discord, text.socials.website, text.socials.farcaster]) {
+                    settled.append(LaunchStatics(factory: factory, index: index, record: record, text: text, launchedAt: entry.launch.launchedAt, supply: entry.launch.supply))
+                }
+            }
+            if let epoch { keepStatics(settled, readSince: epoch) }
+        }
+        let all = try await knownRead + fresh
+        return all.sorted { $0.index > $1.index }.map(\.launch)
     }
 
     /// Every factory's launches (`launchListing`), or the error of the first factory (the live one first) whose launches
@@ -427,6 +577,12 @@ public actor LaunchpadService {
     /// as they show (`ChainText.shown`), so none can reorder or hide the app's text around it; the logo and links are
     /// kept as read (they are only opened, never shown).
     func hydrate(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [Launch] {
+        try await hydrateReading(records, factory: factory).map(\.launch)
+    }
+
+    /// `hydrate`, each launch with its creator's text as the chain holds it when all of it was read (`text`), nil when any
+    /// of it stands in as unread: what of a launch the shared list may keep (`LaunchStatics`).
+    private func hydrateReading(_ records: [LaunchpadABI.LaunchRecord], factory: Address) async throws -> [(launch: Launch, text: LaunchText?)] {
         guard !records.isEmpty else { return [] }
         typealias T = LaunchpadABI.Token
         typealias C = LaunchpadABI.Curve
@@ -451,41 +607,146 @@ public actor LaunchpadService {
         return try records.enumerated().map { i, r in
             let item = results[i]
             func value(_ at: Int) throws -> [ABIValue] { try item[at].get() }
-            func text(_ at: Int) -> String { (try? item[at].get())?.first?.stringOrNil ?? ChainText.unreadable }
+            func text(_ at: Int) -> String? { (try? item[at].get())?.first?.stringOrNil }
             let info = (try? value(2)).map(LaunchpadABI.TokenInfo.init)
-            let curvePrice = try value(3)[0].uint
-            let realQuoteReserve = try value(4)[0].uint
-            let supply = try value(8)[0].uint
-            let graduated = r.phase == .graduated
-            let price = livePrices[r.token]?.price ?? curvePrice
-            // The decimal price: the curve's reserves until it graduates, then its pool's — never the curve's last one.
-            let pairPrice = graduated ? livePrices[r.token]?.pairPrice
-                : Self.pairPerCoin(try value(9), graduated: false, token: r.token, pairSide: r.pairToken, pairDecimals: (pairs[r.pairToken] ?? .mon).decimals)
-            return Launch(
-                token: r.token, curve: r.curve, deployer: r.deployer, creatorFeeRecipient: r.creatorFeeRecipient, pairToken: r.pairToken,
-                graduationThreshold: r.graduationThreshold, creatorTaxBps: r.creatorTaxBps, poolFeeBps: r.poolFeeBps, tickSpacing: r.tickSpacing,
-                holderFeeSharing: r.holderFeeSharing, graduationVenue: r.graduationVenue, phase: r.phase, sweptQuote: r.sweptQuote, sweptTokens: r.sweptTokens, sweptAt: r.sweptAt, poolId: r.poolId,
-                name: ChainText.shown(text(0)), symbol: ChainText.shown(text(1)), logo: info?.logo ?? "", description: ChainText.shown(info?.description ?? "", multiline: true),
-                socials: info?.socials ?? Socials(),
-                pair: pairs[r.pairToken] ?? .mon,
-                price: price,
-                realQuoteReserve: graduated ? r.sweptQuote : realQuoteReserve,
-                completed: try value(5)[0].bool,
-                rescued: try value(6)[0].bool,
-                launchedAt: LaunchpadABI.int(try value(7)[0]),
-                supply: supply,
-                marketCap: LaunchpadMath.marketCap(price: price, supply: supply),
-                progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold),
-                factory: factory,
-                generation: generation,
-                pairPrice: pairPrice
-            )
+            let name = text(0), symbol = text(1)
+            let read = LaunchText(name: name ?? ChainText.unreadable, symbol: symbol ?? ChainText.unreadable, logo: info?.logo ?? "",
+                                  description: info?.description ?? "", socials: info?.socials ?? Socials())
+            let launch = try Self.launch(r, text: read, curvePrice: try value(3)[0].uint, realQuoteReserve: try value(4)[0].uint,
+                                         completed: try value(5)[0].bool, rescued: try value(6)[0].bool, launchedAt: LaunchpadABI.int(try value(7)[0]),
+                                         supply: try value(8)[0].uint, reserves: { try value(9) }, pairs: pairs, live: livePrices[r.token],
+                                         factory: factory, generation: generation)
+            return (launch, name != nil && symbol != nil && info != nil ? read : nil)
         }
+    }
+
+    /// Launches the device keeps (`LaunchStatics`, in the order given), each with only what moves read: its record (its
+    /// phase, what was swept, its pool) and its curve's price, reserve, state and reserves, every launch's in reads of
+    /// `Multicall.textChunk` (`Multicall.readItems`, protocol values only, so any that fails throws `ChainListUnread`), then
+    /// a graduated one's pool price (`poolPrices`); the rest is what was kept. A record that no longer names the kept
+    /// token, curve and pair asset (a file that isn't this chain's) forgets every launch kept of the factory, and throws:
+    /// the next read reads them in full. Each launch with its index in the factory's list.
+    private func hydrateKnown(_ known: [LaunchStatics], factory: Address) async throws -> [(index: Int, launch: Launch)] {
+        guard !known.isEmpty else { return [] }
+        typealias C = LaunchpadABI.Curve
+        let generation = stack(for: factory).generation
+        let legacy = generation.legacyRecord
+        async let pairsRead = pairInfos(known.map(\.pairToken))
+        let items = known.map { s in
+            [
+                LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address(s.token)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)),
+                LaunchpadABI.call(s.curve, C.price, returns: "uint256"),
+                LaunchpadABI.call(s.curve, C.realQuoteReserve, returns: "uint256"),
+                LaunchpadABI.call(s.curve, C.completed, returns: "bool"),
+                LaunchpadABI.call(s.curve, C.rescued, returns: "bool"),
+                LaunchpadABI.call(s.curve, C.getReserves, returns: "uint256,uint256"),
+            ]
+        }
+        let results = try await multicall.readItems(items, text: [], what: .launch)
+        let pairs = try await pairsRead
+        var records: [LaunchpadABI.LaunchRecord] = []
+        for (kept, item) in zip(known, results) {
+            let record = LaunchpadABI.LaunchRecord(try item[0].get()[0], legacy: legacy)
+            guard record.exists, record.token == kept.token, record.curve == kept.curve, record.pairToken == kept.pairToken, let _ = kept.supplyValue else {
+                forgetStatics(of: factory)
+                throw ChainListUnread(.launch)
+            }
+            records.append(record)
+        }
+        let livePrices = await poolPrices(for: records, pairs: pairs)
+        return try zip(known, zip(records, results)).map { kept, read in
+            let (r, item) = read
+            func value(_ at: Int) throws -> [ABIValue] { try item[at].get() }
+            let launch = try Self.launch(r, text: kept.text, curvePrice: try value(1)[0].uint, realQuoteReserve: try value(2)[0].uint,
+                                         completed: try value(3)[0].bool, rescued: try value(4)[0].bool, launchedAt: kept.launchedAt,
+                                         supply: kept.supplyValue ?? 0, reserves: { try value(5) }, pairs: pairs, live: livePrices[r.token],
+                                         factory: factory, generation: generation)
+            return (kept.index, launch)
+        }
+    }
+
+    /// One launch from its record (`r`), its creator's text as the chain holds it (made safe to show here,
+    /// `ChainText.shown`) and its curve's values: what a launch read in full (`hydrate`) and one kept on the device
+    /// (`hydrateKnown`) are both built by, so they read the same. `reserves` (the curve's `getReserves`) is read only for
+    /// a coin still on its curve.
+    private static func launch(_ r: LaunchpadABI.LaunchRecord, text: LaunchText, curvePrice: BigUInt, realQuoteReserve: BigUInt, completed: Bool, rescued: Bool,
+                               launchedAt: Int, supply: BigUInt, reserves: () throws -> [ABIValue], pairs: [Address: PairInfo],
+                               live: (price: BigUInt, pairPrice: Double?)?, factory: Address, generation: LaunchpadAddresses.Generation) throws -> Launch {
+        let graduated = r.phase == .graduated
+        let price = live?.price ?? curvePrice
+        // The decimal price: the curve's reserves until it graduates, then its pool's — never the curve's last one.
+        let pairPrice = graduated ? live?.pairPrice
+            : pairPerCoin(try reserves(), graduated: false, token: r.token, pairSide: r.pairToken, pairDecimals: (pairs[r.pairToken] ?? .mon).decimals)
+        return Launch(
+            token: r.token, curve: r.curve, deployer: r.deployer, creatorFeeRecipient: r.creatorFeeRecipient, pairToken: r.pairToken,
+            graduationThreshold: r.graduationThreshold, creatorTaxBps: r.creatorTaxBps, poolFeeBps: r.poolFeeBps, tickSpacing: r.tickSpacing,
+            holderFeeSharing: r.holderFeeSharing, graduationVenue: r.graduationVenue, phase: r.phase, sweptQuote: r.sweptQuote, sweptTokens: r.sweptTokens, sweptAt: r.sweptAt, poolId: r.poolId,
+            name: ChainText.shown(text.name), symbol: ChainText.shown(text.symbol), logo: text.logo, description: ChainText.shown(text.description, multiline: true),
+            socials: text.socials,
+            pair: pairs[r.pairToken] ?? .mon,
+            price: price,
+            realQuoteReserve: graduated ? r.sweptQuote : realQuoteReserve,
+            completed: completed,
+            rescued: rescued,
+            launchedAt: launchedAt,
+            supply: supply,
+            marketCap: LaunchpadMath.marketCap(price: price, supply: supply),
+            progressBps: LaunchpadMath.progressBps(phase: r.phase, realQuoteReserve: realQuoteReserve, sweptQuote: r.sweptQuote, threshold: r.graduationThreshold),
+            factory: factory,
+            generation: generation,
+            pairPrice: pairPrice
+        )
     }
 
     /// The calls of `hydrate`'s layout that read the creator's text: name, symbol, and getTokenInfo (logo, description,
     /// links). The others read the protocol's values.
     static let launchTextCalls: Set<Int> = [0, 1, 2]
+
+    // MARK: - Kept on the device
+
+    /// The file `store` keeps settled launches in.
+    static let staticsFile = "launches.json"
+
+    /// What the device keeps of `factory`'s launches, by index in its list; none without a store.
+    private func savedStatics(of factory: Address) -> [Int: LaunchStatics] {
+        loadStatics()
+        return statics[factory] ?? [:]
+    }
+
+    /// Reads `store`'s file once, and again after an erase (its epoch moved), when what memory held goes with it. Nothing
+    /// on a fork (`ChainStore.keepsFacts`), as the Moments keep nothing there: a fork restarted while the app runs can
+    /// record other launches at the kept indices.
+    private func loadStatics() {
+        guard let store, store.keepsFacts else { return }
+        let epoch = store.epoch
+        guard staticsEpoch != epoch else { return }
+        staticsEpoch = epoch
+        statics = [:]
+        for entry in store.load(LaunchStaticsFile.self, from: Self.staticsFile)?.usable ?? [] {
+            statics[entry.factory, default: [:]][entry.index] = entry
+        }
+    }
+
+    /// Keeps `new` and saves the file, unless this device's data was erased since `epoch` (the listing's start). Nothing on
+    /// a fork (`loadStatics`).
+    private func keepStatics(_ new: [LaunchStatics], readSince epoch: Int) {
+        guard let store, store.keepsFacts, !new.isEmpty else { return }
+        loadStatics()
+        guard staticsEpoch == epoch else { return }
+        var changed = false
+        for entry in new where statics[entry.factory]?[entry.index] != entry {
+            statics[entry.factory, default: [:]][entry.index] = entry
+            changed = true
+        }
+        if changed { store.save(LaunchStaticsFile(statics), to: Self.staticsFile, epoch: epoch) }
+    }
+
+    /// Forgets every launch kept of `factory`: its next read reads them in full.
+    private func forgetStatics(of factory: Address) {
+        guard let store, let epoch = staticsEpoch, statics[factory] != nil else { return }
+        statics[factory] = nil
+        store.save(LaunchStaticsFile(statics), to: Self.staticsFile, epoch: epoch)
+    }
 
     /// Live pool prices for graduated launches, keyed by token: as `Launch.price` counts it, and to a Double's precision
     /// (`Launch.pairPrice`). Any failure leaves the curve's final price in `price` and no `pairPrice`. A Uniswap v4 pool's
@@ -717,6 +978,90 @@ public actor LaunchpadService {
         return [.call(TransactionRequest(to: stack(for: launch).hook, data: data), label: L10n.tr("Distribute pool fees"))]
     }
 
+}
+
+/// A launch's creator text as the chain holds it — its token's `name()`, `symbol()` and `getTokenInfo()` logo,
+/// description and links — before it is made safe to show (`ChainText.shown`, which every read applies anew).
+struct LaunchText: Hashable, Sendable {
+    let name: String
+    let symbol: String
+    let logo: String
+    let description: String
+    let socials: Socials
+}
+
+/// What never changes about a settled launch (`ChainSettled`), kept on the device (`ChainStore`) so the shared launch
+/// list reads only what moves (`LaunchpadService.launchListing`): its token at its index in its factory's list (the list
+/// only grows), the curve and pair asset its record names (set at launch; the record's phase, sweep, pool and fee
+/// recipient do change, and are read every time), and what the token and curve hold with no setter — the creator's
+/// text, the supply minted at launch (`LaunchToken` mints once, in its constructor) and the launch time. The text is
+/// kept as read, never as shown, and only when it is short (`ChainSettled.maxKeptText`).
+struct LaunchStatics: Codable, Hashable, Sendable {
+    let factory: Address
+    let index: Int
+    let token: Address
+    let curve: Address
+    let pairToken: Address
+    let name: String
+    let symbol: String
+    let logo: String
+    let description: String
+    /// X (Twitter), Telegram, Discord, website, Farcaster, in `Socials`' order.
+    let socials: [String]
+    let launchedAt: Int
+    /// The supply in wei, in decimal.
+    let supply: String
+
+    init(factory: Address, index: Int, record: LaunchpadABI.LaunchRecord, text: LaunchText, launchedAt: Int, supply: BigUInt) {
+        self.factory = factory
+        self.index = index
+        token = record.token
+        curve = record.curve
+        pairToken = record.pairToken
+        name = text.name
+        symbol = text.symbol
+        logo = text.logo
+        description = text.description
+        socials = [text.socials.twitter, text.socials.telegram, text.socials.discord, text.socials.website, text.socials.farcaster]
+        self.launchedAt = launchedAt
+        self.supply = supply.description
+    }
+
+    var text: LaunchText {
+        let s = socials + Array(repeating: "", count: max(0, 5 - socials.count))
+        return LaunchText(name: name, symbol: symbol, logo: logo, description: description,
+                          socials: Socials(twitter: s[0], telegram: s[1], discord: s[2], website: s[3], farcaster: s[4]))
+    }
+
+    /// The supply, nil when the kept text isn't a number (a damaged file: the launch is then read in full).
+    var supplyValue: BigUInt? { BigUInt(supply, radix: 10) }
+}
+
+/// The file `LaunchpadService` keeps settled launches in (`launches.json`): a file of another version is ignored, and an
+/// entry that can't be read is left out (`ChainStoreEntry`), so those launches are read in full again.
+struct LaunchStaticsFile: Codable {
+    static let currentVersion = 1
+
+    let version: Int
+    let launches: [LaunchStatics]
+
+    init(_ statics: [Address: [Int: LaunchStatics]]) {
+        version = Self.currentVersion
+        launches = statics.values.flatMap(\.values).sorted { ($0.factory.hex, $0.index) < ($1.factory.hex, $1.index) }
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, launches }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        launches = try container.decode([ChainStoreEntry<LaunchStatics>].self, forKey: .launches).compactMap(\.value)
+    }
+
+    /// The launches to use: none from a file of another version, and none whose supply can't be read.
+    var usable: [LaunchStatics] {
+        version == Self.currentVersion ? launches.filter { $0.supplyValue != nil && $0.index >= 0 } : []
+    }
 }
 
 /// What a launch transaction created, from its `TokenLaunched` event.
