@@ -21,6 +21,9 @@ let package = Package(
             .product(name: "BigInt", package: "BigInt"),
             .product(name: "P256K", package: "swift-secp256k1"),
         ], resources: [.process("Resources")]),
-        .testTarget(name: "DyorKitTests", dependencies: ["DyorKit"], resources: [.copy("Fixtures")]),
+        // SE-0418 (on by default in Swift 6): a method of a Sendable stub passed as a `@Sendable` answer, such as
+        // `MomentsChainStub.install(chain.answer)`, is itself `@Sendable`.
+        .testTarget(name: "DyorKitTests", dependencies: ["DyorKit"], resources: [.copy("Fixtures")],
+                    swiftSettings: [.enableUpcomingFeature("InferSendableFromCaptures")]),
     ]
 )

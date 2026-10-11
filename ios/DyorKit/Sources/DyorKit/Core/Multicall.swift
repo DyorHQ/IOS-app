@@ -23,6 +23,13 @@ public struct ContractCall: Sendable {
         returnTypes = try ABIType.parseList(returns)
         self.strings = strings
     }
+
+    /// A read whose signature, arguments and return types are fixed in source: one that fails to encode traps, naming
+    /// `context` and the signature, as `ABI.fixedCalldata` does.
+    static func fixed(to: Address, _ signature: String, _ args: [ABIValue], returns: String, strings: ABI.StringDecoding = .lossy,
+                      context: String) -> ContractCall {
+        do { return try ContractCall(to: to, signature, args, returns: returns, strings: strings) } catch { preconditionFailure("\(context) call \(signature) failed to encode: \(error)") }
+    }
 }
 
 /// Multicall3 `aggregate3`, deployed at the canonical address on Monad mainnet. Batches many reads into one
@@ -51,16 +58,9 @@ public struct Multicall: Sendable {
     /// `returnTypes` as the decoding's error.
     public func read(_ calls: [ContractCall], block: BlockTag = .latest) async throws -> [Result<[ABIValue], Error>] {
         guard !calls.isEmpty else { return [] }
-        let args: ABIValue = .array(calls.map { .tuple([.address($0.to), .bool(true), .bytes($0.data)]) })
-        let data = try ABI.encodeCall(Self.signature, [args])
+        let data = try Self.calldata(calls)
         let raw = try await rpc.ethCall(CallRequest(to: Self.address, data: data), block: block)
-        let decoded = try ABI.decode(raw, Self.returns)[0].elements
-        guard decoded.count == calls.count else { throw NetworkError.malformedResponse }
-        return zip(calls, decoded).map { call, item in
-            // not localized: an RPC message, matched like a node's ("revert", `ERC20.isCallError`)
-            guard item[0].bool else { return .failure(RPCError(code: -32000, message: "Call reverted", data: item[1].bytes.hexString)) }
-            do { return .success(try ABI.decode(item[1].bytes, call.returnTypes, strings: call.strings)) } catch { return .failure(error) }
-        }
+        return try Self.results(raw, for: calls)
     }
 
     /// Like `read`, but throws if any call failed.
@@ -73,21 +73,30 @@ public struct Multicall: Sendable {
     public func read(_ requests: [(calls: [ContractCall], block: UInt64)]) async throws -> [Result<[Result<[ABIValue], Error>], Error>] {
         guard !requests.isEmpty else { return [] }
         let encoded = try requests.map { request -> (CallRequest, BlockTag) in
-            let args: ABIValue = .array(request.calls.map { .tuple([.address($0.to), .bool(true), .bytes($0.data)]) })
-            return (CallRequest(to: Self.address, data: try ABI.encodeCall(Self.signature, [args])), .number(request.block))
+            (CallRequest(to: Self.address, data: try Self.calldata(request.calls)), .number(request.block))
         }
         let answers = try await rpc.ethCalls(encoded)
         guard answers.count == requests.count else { throw NetworkError.malformedResponse }
         return zip(requests, answers).map { request, answer in
-            Result {
-                let decoded = try ABI.decode(try answer.get(), Self.returns)[0].elements
-                guard decoded.count == request.calls.count else { throw NetworkError.malformedResponse }
-                return zip(request.calls, decoded).map { call, item in
-                    // not localized: an RPC message, matched like a node's ("revert", `ERC20.isCallError`)
-                    guard item[0].bool else { return .failure(RPCError(code: -32000, message: "Call reverted", data: item[1].bytes.hexString)) }
-                    do { return .success(try ABI.decode(item[1].bytes, call.returnTypes, strings: call.strings)) } catch { return .failure(error) }
-                }
-            }
+            Result { try Self.results(try answer.get(), for: request.calls) }
+        }
+    }
+
+    /// `aggregate3` calldata for `calls`, each allowed to fail on its own.
+    private static func calldata(_ calls: [ContractCall]) throws -> Data {
+        let args: ABIValue = .array(calls.map { .tuple([.address($0.to), .bool(true), .bytes($0.data)]) })
+        return try ABI.encodeCall(Self.signature, [args])
+    }
+
+    /// `aggregate3`'s answer `raw` as one result per call of `calls`, in order (`read`); throws when it isn't one answer
+    /// per call.
+    private static func results(_ raw: Data, for calls: [ContractCall]) throws -> [Result<[ABIValue], Error>] {
+        let decoded = try ABI.decode(raw, Self.returns)[0].elements
+        guard decoded.count == calls.count else { throw NetworkError.malformedResponse }
+        return zip(calls, decoded).map { call, item in
+            // not localized: an RPC message, matched like a node's ("revert", `ERC20.isCallError`)
+            guard item[0].bool else { return .failure(RPCError(code: -32000, message: "Call reverted", data: item[1].bytes.hexString)) }
+            do { return .success(try ABI.decode(item[1].bytes, call.returnTypes, strings: call.strings)) } catch { return .failure(error) }
         }
     }
 }

@@ -588,15 +588,10 @@ final class HedgeClock: @unchecked Sendable {
     var sleep: @Sendable (Duration) async throws -> Void { { [self] _ in try await wait() } }
 
     private func wait() async throws {
-        lock.lock()
-        let begun = fired
-        waiting += 1
-        lock.unlock()
-        defer { lock.lock(); waiting -= 1; lock.unlock() }
+        let begun = lock.withLock { waiting += 1; return fired }
+        defer { lock.withLock { waiting -= 1 } }
         while true {
-            lock.lock()
-            let now = fired
-            lock.unlock()
+            let now = lock.withLock { fired }
             if now > begun { return }
             try await Task.sleep(for: .milliseconds(2))
         }

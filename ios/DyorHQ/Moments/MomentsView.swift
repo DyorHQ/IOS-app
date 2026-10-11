@@ -211,7 +211,7 @@ struct MomentsView: View {
                     Label(block.message, systemImage: block == .publishingPaused || block == .guardianPaused ? "pause.circle" : "exclamationmark.octagon")
                         .font(.caption).foregroundStyle(Color.attention)
                 } else if let pending = policy.pending, !pending.hasLapsed(at: Date(timeIntervalSince1970: TimeInterval(clock.now))) {
-                    // MO-4: a queued policy can't change a Moment silently. If it's applied before a publish confirms, the
+                    // A queued policy can't change a Moment silently. If it's applied before a publish confirms, the
                     // publish is refused and the creator reviews the new terms; Publish a Moment shows what would change.
                     Label("New terms for new Moments are queued. If they take effect before your publish confirms, nothing is published and you review them again.",
                           systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention)

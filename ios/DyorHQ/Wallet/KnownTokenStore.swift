@@ -31,7 +31,7 @@ enum KnownTokenStore {
 
     /// Tokens found in the wallet's history rather than chosen in the app: anyone can send any token to any wallet
     /// (airdropped spam, a fake "USDC"), so these show as Unverified and stay out of the swap picker's list until the
-    /// user searches for them (security audit 2026-09-26, IOST-12).
+    /// user searches for them.
     private static func unverifiedKey(_ owner: Address) -> String { "knownTokens.unverified.\(owner.hex)" }
 
     static func unverified(owner: Address?) -> Set<Address> {

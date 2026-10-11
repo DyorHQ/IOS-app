@@ -336,7 +336,7 @@ final class RegionMoneyPathTests: XCTestCase {
     /// The through-the-mark guard still reads the typed limit through `perpDouble` (`Amount.fieldNumber`) and still
     /// fires beyond 5% of the mark; nothing formatted for display feeds it.
     func testThroughTheMarkGuardIsWired() throws {
-        let perps = try DocsLinksTests.appSource("Perps/PerpTradeView.swift")
+        let perps = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         XCTAssertTrue(perps.contains("var perpDouble: Double? { Amount.fieldNumber(self) }"))
         XCTAssertTrue(perps.contains("if kind == .limit, let limit = priceText.perpDouble, let reason = Self.throughMarkProblem(price: limit, side: side, mark: mark, market: market) { return reason }"))
         XCTAssertTrue(perps.contains("let above = side == .long && price > mark * 1.05"))

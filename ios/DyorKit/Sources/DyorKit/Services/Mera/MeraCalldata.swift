@@ -1,7 +1,7 @@
 import BigInt
 import Foundation
 
-/* The payloads a passkey session signs without a prompt, read in full (security audit 2026-09-26, IOSK-10). A router
+/* The payloads a passkey session signs without a prompt, read in full. A router
    call was prompt-free on its (to, selector) alone, so whatever its payload did — pay someone else, trade another token,
    run a sweep — went unread. Each decoder here accepts exactly the shape the app builds (`SwapCalldata`,
    `PerplExchange.orderDesc`) in its one canonical ABI encoding, and returns nil for anything else, which asks for Face

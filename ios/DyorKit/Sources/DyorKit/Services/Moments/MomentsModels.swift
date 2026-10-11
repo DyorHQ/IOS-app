@@ -326,7 +326,7 @@ public struct MomentPolicy: Sendable, Hashable {
 /// anyone can apply it (`applyPolicy` is permissionless) at any moment, also between a creator's review and their
 /// publish landing. On v2 the publish carries the hash of the reviewed terms, so it is then refused (`TermsChanged`)
 /// and the creator reviews again: the terms never change silently. A v2 proposal nobody applied within
-/// `MomentsConstants.policyApplyWindowSeconds` lapses (security audit 2026-09-26, MO-4).
+/// `MomentsConstants.policyApplyWindowSeconds` lapses.
 public struct PendingMomentPolicy: Sendable, Hashable {
     public let threshold: BigUInt
     public let minPrice: BigUInt
@@ -740,7 +740,8 @@ public struct CollectQuote: Sendable, Hashable {
 public struct MomentAccountView: Sendable, Hashable {
     public let usdcBalance: BigUInt
     public let monBalance: BigUInt
-    /// USDC → Permit2 allowance (the one-time approval behind signature collects).
+    /// USDC → Permit2 allowance. Still read with the rest of the stake, but nothing in the app uses it: the app collects
+    /// with an exact approval to the collect contract (`collectAllowance`), and the signature collect it served is gone.
     public let permit2Allowance: BigUInt
     /// USDC → collect contract allowance (the plain-approval path).
     public let collectAllowance: BigUInt

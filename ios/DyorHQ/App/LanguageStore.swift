@@ -19,8 +19,6 @@ final class LanguageStore {
     private(set) var locale: Locale
     /// The languages this build ships, in picker order: English, then each language whose translation is in the bundle.
     let available: [AppLanguage]
-    /// Told the language in use after a choice or a reset changes it.
-    @ObservationIgnored var onChange: ((AppLanguage) -> Void)?
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let domain: String
@@ -59,12 +57,10 @@ final class LanguageStore {
 
     private func apply(_ resolution: LanguageResolution) {
         if let write = resolution.write { LanguageResolution.save(write, to: defaults) }
-        let changed = resolution.resolved != resolved
         choice = resolution.choice
         resolved = resolution.resolved
         locale = L10n.locale(for: resolution.resolved, device: .current)
         L10n.locale = locale
-        if changed { onChange?(resolved) }
     }
 
     /// The device's ordered language list (Settings › General › Language & Region). The app's own `AppleLanguages`

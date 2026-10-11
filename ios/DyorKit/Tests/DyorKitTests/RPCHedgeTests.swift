@@ -410,14 +410,14 @@ final class RPCHedgeTests: XCTestCase {
     /// logs endpoint the history reads first, and the backend, each with a request that reads nothing and changes
     /// nothing (`RPCClient.warm`, `SupabaseClient.warm`).
     func testTheAppWarmsItsConnectionsAtMostEvery30Seconds() throws {
-        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let environment = try AppSource.app("App/AppEnvironment.swift")
         XCTAssertTrue(environment.contains("guard now.timeIntervalSince(warmedAt) > 30 else { return }\n        warmedAt = now"), "at most every 30 s")
         XCTAssertTrue(environment.contains("async let app: Void = rpc.warm()"))
         XCTAssertTrue(environment.contains("async let logs: Void = logsClient.warm(first: 1)"))
         XCTAssertTrue(environment.contains("async let social: Void = backend.warm()"))
         XCTAssertEqual(environment.components(separatedBy: "warmConnections()").count - 1, 2, "declared once, and called once, from init")
         XCTAssertTrue(environment.contains("updateGate.onFlags = { [weak self] flags in self?.apply(flags) }\n        // The connections the first screens read over, opened before they ask.\n        warmConnections()"))
-        let root = try DocsLinksTests.appSource("App/RootView.swift")
+        let root = try AppSource.app("App/RootView.swift")
         let active = try XCTUnwrap(root.range(of: "if phase == .active {"))
         let warm = try XCTUnwrap(root.range(of: "env.warmConnections()"), "on every return to the app")
         XCTAssertLessThan(active.lowerBound, warm.lowerBound)
@@ -462,7 +462,7 @@ final class RPCHedgeTests: XCTestCase {
     /// on every load after, its balances never latched as read; each chain's balances show as it answers; a forced load
     /// asked during another runs after it.
     func testTheBridgeReadsAChainReadInPartAgain() throws {
-        let bridge = Self.squeezed(try DocsLinksTests.appSource("Bridge/BridgeModel.swift"))
+        let bridge = AppSource.squeezed(try AppSource.app("Bridge/BridgeModel.swift"))
         XCTAssertFalse(bridge.contains("didLoadBalances"))
         XCTAssertTrue(bridge.contains("return toks.isEmpty || (!force && chainsRead.contains(chain.auroraId)) ? nil : (chain, toks)"))
         XCTAssertTrue(bridge.contains("if read.complete { chainsRead.insert(chain.auroraId) readingChains.remove(chain.auroraId) } else { chainsRead.remove(chain.auroraId) inPart.append((chain, toks)) }"))
@@ -470,11 +470,9 @@ final class RPCHedgeTests: XCTestCase {
         XCTAssertTrue(bridge.contains("for _ in 0 ..< 2 where !plan.isEmpty {"))
         XCTAssertTrue(bridge.contains("guard !loadingBalances else { if force { forceAfterLoad = true }; return }"))
         XCTAssertTrue(bridge.contains("guard env.session.address == owner else { return }"), "never another wallet's balances")
-        let view = Self.squeezed(try DocsLinksTests.appSource("Bridge/BridgeView.swift"))
+        let view = AppSource.squeezed(try AppSource.app("Bridge/BridgeView.swift"))
         XCTAssertTrue(view.contains("if model.readingFromBalance { ProgressView().controlSize(.mini) }"), "the source's balance waits only for its own chain")
     }
-
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 
     /// Waits until `condition` holds, for at most five seconds.
     private func waitUntil(_ condition: @escaping () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {

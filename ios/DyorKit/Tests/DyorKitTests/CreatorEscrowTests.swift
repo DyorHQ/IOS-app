@@ -36,11 +36,7 @@ final class CreatorEscrowTests: XCTestCase {
     /// My Launchpad wires it in: every escrow read for every pair asset, before and whatever the launches read, and an
     /// escrow that can't be read makes the screen say it is incomplete.
     func testMyLaunchpadReadsEveryPairAsset() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let source = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadProfileView.swift"), encoding: .utf8)
+        let source = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         // The escrows are read whatever the launches read, beside the holdings (which need a launch to read): nothing
         // returns early on an empty listing before them.
         let read = try XCTUnwrap(source.range(of: "async let escrowRead = env.launchpad.escrowReads(account: address, extraPairTokens: createdPairs)"))
@@ -102,11 +98,7 @@ final class CreatorEscrowTests: XCTestCase {
     /// My Launchpad keeps an escrow's balances only for the wallet they were read for, never plans Claim All on kept
     /// balances, and says fees couldn't be read (with Retry) rather than "Nothing to claim yet".
     func testMyLaunchpadKeepsFeesForTheSameWalletOnly() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let source = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadProfileView.swift"), encoding: .utf8)
+        let source = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         XCTAssertTrue(source.contains("LaunchpadEscrowRead.keeping(escrowReads, previous: escrowsFor == address ? lastEscrowReads : [])"))
         XCTAssertTrue(source.contains("for holding in escrows where holding.current && !holding.balances.isEmpty"), "Claim All plans only escrows read in this load")
         // And only holder rewards read in this load: its plan, its count, its detail list and what it forgets once settled

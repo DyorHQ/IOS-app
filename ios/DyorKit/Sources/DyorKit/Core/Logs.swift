@@ -282,6 +282,12 @@ public struct Log: Sendable, Hashable, Identifiable {
         guard topics.indices.contains(index + 1), topics[index + 1].count == 32 else { return nil }
         return Address(data: topics[index + 1].suffix(20))
     }
+
+    /// Chain order: by block, then by position in the block. `sorted(by: Log.chainOrder)` is oldest first, and
+    /// `sorted { Log.chainOrder($1, $0) }` newest first.
+    static func chainOrder(_ a: Log, _ b: Log) -> Bool {
+        a.blockNumber == b.blockNumber ? a.logIndex < b.logIndex : a.blockNumber < b.blockNumber
+    }
 }
 
 /// The newest logs of a window (`RPCClient.newestLogs`): every log from `readFrom` to the window's end, read in one piece
@@ -346,7 +352,7 @@ public extension RPCClient {
     /// rather than the host, like the web app's `CHUNK`.
     static func logChunkSize(for url: URL) -> UInt64 {
         let text = url.absoluteString
-        if text.contains("127.0.0.1") || text.contains("localhost") { return 50_000 }
+        if mentionsLocalNode(url) { return 50_000 }
         if text.contains("rpc1") { return 100_000 }
         if text.contains("rpc3") || text.contains("rpc4") { return 1_000 }
         return 100
@@ -497,7 +503,7 @@ public extension RPCClient {
         // Newest first, the ranges' answers arrive newest first: the caller gets them in block order, as the router gives them.
         func inOrder(_ read: (logs: [Log], complete: Bool)) -> (logs: [Log], complete: Bool) {
             guard order == .descending else { return read }
-            return (read.logs.sorted { a, b in a.blockNumber == b.blockNumber ? a.logIndex < b.logIndex : a.blockNumber < b.blockNumber }, read.complete)
+            return (read.logs.sorted(by: Log.chainOrder), read.complete)
         }
         var scan = LogScan(mode: mode, limits: limits)
         // A wallet-scoped filter (a topic beyond the event signature) is cheap for the wide-range endpoints however

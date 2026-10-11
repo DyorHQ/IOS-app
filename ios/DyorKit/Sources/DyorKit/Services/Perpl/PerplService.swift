@@ -22,9 +22,9 @@ public actor PerplService {
         (90, "PUMP", "Pump.fun"),
     ]
 
-    /// Perpl's public REST API. `Perpl.api` (api.perpl.xyz) has no DNS record; the web app proxies
-    /// app.perpl.xyz/api, which is what this defaults to.
-    public static let restBase = URL(string: "https://app.perpl.xyz/api")!
+    /// Perpl's public REST API: app.perpl.xyz/api (`Perpl.api`), which its web app proxies (api.perpl.xyz has no DNS
+    /// record).
+    public static let restBase = Perpl.api
 
     public let rpc: RPCClient
     private let multicall: Multicall
@@ -197,7 +197,7 @@ public actor PerplService {
         let url = apiBase.appending(path: "v1/market-data/\(marketId)/candles/\(resolution)/\(fromMs)-\(toMs)")
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "accept")
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
         let (data, response): (Data, URLResponse)
         do { (data, response) = try await session.data(for: request) } catch { throw NetworkError.transport(error) }
@@ -228,13 +228,6 @@ public actor PerplService {
         let byId = Dictionary(markets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let (rows, next) = try await signedHistory("/v1/trading/position-history", count: count, cursor: cursor, key: key)
         return PerplHistoryPage(items: rows.compactMap { PerplPositionRecord(position: $0, markets: byId) }, next: next)
-    }
-
-    /// One page of the account's history (deposits, withdrawals, settlements, funding payments, liquidations), newest
-    /// first. Funding rows (`kind == .funding`) are the realized funding payments on the account.
-    public func accountHistory(key: PerplApiKey, count: Int = 100, cursor: String? = nil) async throws -> PerplHistoryPage<PerplAccountEvent> {
-        let (rows, next) = try await signedHistory("/v1/trading/account-history", count: count, cursor: cursor, key: key)
-        return PerplHistoryPage(items: rows.compactMap { PerplAccountEvent(event: $0) }, next: next)
     }
 
     /// One page of the account's order history (signed), newest first, as order events: what a reconnect or a relaunch

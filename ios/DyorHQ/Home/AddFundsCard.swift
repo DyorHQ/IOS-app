@@ -221,7 +221,7 @@ final class FundingWatch {
     /// The account's balances over its known tokens (Home's own source), and its nonce once there's anything to send.
     /// Prices and the other holdings come from what Home already loaded.
     private func read(env: AppEnvironment, address: Address, home: HomeModel) async -> FirstFunding.Snapshot? {
-        // Not the Unverified ones (IOST-12): an airdropped fake "USDC" with a seeded pool must never read as funds arriving.
+        // Not the Unverified ones: an airdropped fake "USDC" with a seeded pool must never read as funds arriving.
         let unverified = KnownTokenStore.unverified(owner: address)
         let tokens = KnownTokenStore.universe(owner: address).filter { !unverified.contains($0.address) }
         // The nonce shows a transaction sent from anywhere. An empty account can't send, so it isn't read until funds arrive.

@@ -191,12 +191,9 @@ public struct RetiredMoments: Sendable {
     /// only when it is the Moment's creator), always to this cohort's own contracts.
     static func plan(_ action: RetiredMomentAction, momentId: BigUInt, symbol: String, addresses: MomentsAddresses) -> [TransactionStep] {
         switch action {
-        case .claim:
-            return [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claim, [.uint(momentId)])), label: L10n.string(LocalizedStringResource("Claim \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the symbol of a Moment's coin, whose vested coins are claimed.")))]
-        case .withdrawCreatorProceeds:
-            return [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator proceeds"))]
-        case .withdrawCreatorFees:
-            return [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator fees"))]
+        case .claim: return MomentsService.claimPlan(momentId: momentId, symbol: symbol, addresses: addresses)
+        case .withdrawCreatorProceeds: return MomentsService.withdrawCreatorProceedsPlan(momentId: momentId, addresses: addresses)
+        case .withdrawCreatorFees: return MomentsService.withdrawCreatorFeesPlan(momentId: momentId, addresses: addresses)
         }
     }
 

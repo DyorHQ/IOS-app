@@ -22,7 +22,12 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     }
 
     private func discovery() -> WalletTokenDiscovery {
-        WalletTokenDiscovery(logsRPC: MomentsChainStub.rpc(), multicall: Multicall(rpc: MomentsChainStub.rpc()))
+        WalletTokenDiscovery(multicall: Multicall(rpc: MomentsChainStub.rpc()))
+    }
+
+    /// What the wallet holds among the transfers into it `incoming`, as its history store keeps them, read in full.
+    private func held(_ incoming: [Log], complete: Bool = true) async -> WalletTokenDiscovery.Scan {
+        await discovery().held(wallet: wallet, incoming: incoming, complete: complete)
     }
 
     private func transfer(_ contract: Address, nft: Bool, block: UInt64) -> Log {
@@ -33,8 +38,8 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     }
 
     func testOnlyERC20TransfersAreTakenForTokens() async {
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10), transfer(collection, nft: true, block: 20)])
-        let found = await discovery().heldTokens(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let found = await held([transfer(coin, nft: false, block: 10), transfer(collection, nft: true, block: 20)]).tokens
         XCTAssertEqual(found.map(\.address), [coin], "the collection's edition transfer is not a token transfer")
         XCTAssertEqual(found.first?.symbol, "CN")
         let asked = Set(MomentsChainStub.calls().filter { $0.to == collection }.map(\.selector))
@@ -51,14 +56,14 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     /// — never listed as a token it may not be — and the scan says a token may be missing.
     func testATokenWhoseAmountIsIndexedIsListed() async {
         let logs = [transfer(chain.indexed, nft: true, block: 10), transfer(collection, nft: true, block: 20), transfer(coin, nft: false, block: 30)]
-        MomentsChainStub.install(chain.answer, logs: logs)
-        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let scan = await held(logs)
         XCTAssertEqual(scan.tokens.map(\.address), [chain.indexed, coin])
         XCTAssertEqual(scan.tokens.first?.symbol, "IDX")
         XCTAssertTrue(scan.complete)
 
-        MomentsChainStub.install(chain.answer, logs: logs, breakingSelectors: [ABI.selector("supportsInterface(bytes4)")])
-        let unchecked = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer, breakingSelectors: [ABI.selector("supportsInterface(bytes4)")])
+        let unchecked = await held(logs)
         XCTAssertEqual(unchecked.tokens.map(\.address), [coin], "neither four-topic sender is listed unchecked")
         XCTAssertFalse(unchecked.complete, "and the list says a token may be missing")
     }
@@ -67,8 +72,8 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     /// text, and a token with no readable symbol is listed under its short address.
     func testAHeldTokenIsNeverDroppedForItsMetadata() async {
         let logs = [transfer(chain.bytes32, nft: false, block: 10), transfer(chain.nameless, nft: false, block: 20), transfer(chain.blank, nft: false, block: 30)]
-        MomentsChainStub.install(chain.answer, logs: logs)
-        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let scan = await held(logs)
         XCTAssertEqual(scan.tokens.map(\.address), [chain.bytes32, chain.nameless, chain.blank])
         XCTAssertEqual(scan.tokens.map(\.symbol), ["MKR", chain.nameless.short, chain.blank.short])
         XCTAssertEqual(scan.tokens.map(\.name), ["Maker", "Token with no name", "Blank"])
@@ -85,8 +90,8 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         let saved = L10n.locale
         defer { L10n.locale = saved }
         L10n.locale = Locale(identifier: "fr_FR")
-        MomentsChainStub.install(chain.answer, logs: [transfer(chain.nameless, nft: false, block: 10)])
-        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let scan = await held([transfer(chain.nameless, nft: false, block: 10)])
         let nameless = try XCTUnwrap(scan.tokens.first)
         XCTAssertEqual(Token.unnamedName, "Token with no name", "as every earlier build stored it")
         XCTAssertEqual(nameless.name, Token.unnamedName, "found with the app in French, stored in no language")
@@ -129,34 +134,28 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     /// Send list, Swap's token rows and its picker), so a token stored with no name reads "Token with no name" in the
     /// app's language. A token's stored name is only copied as it is (`name: token.name`), never shown.
     func testEveryScreenShowsATokensNameAsDisplayed() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let read = try NSRegularExpression(pattern: #"(?:\w+\.)*token\.name\b"#)
-        let files = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
         var shown: [String] = []
         var copied = 0
-        for file in files where file.pathExtension == "swift" {
-            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+        for (path, text) in try AppSource.allAppFiles() {
+            let lines = text.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() where !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
                 for match in read.matches(in: line, range: NSRange(line.startIndex..., in: line)) {
                     if (line as NSString).substring(to: match.range.location).hasSuffix("name: ") { copied += 1; continue }
-                    shown.append("\(file.lastPathComponent):\(index + 1): \((line as NSString).substring(with: match.range))")
+                    shown.append("\((path as NSString).lastPathComponent):\(index + 1): \((line as NSString).substring(with: match.range))")
                 }
             }
         }
         XCTAssertEqual(shown, [], "a token's name is shown as `displayName`, in the app's language")
         XCTAssertGreaterThan(copied, 0, "the reader sees the copy into a new Token (Home's discovered tokens)")
 
-        func source(_ path: String) throws -> String { try String(contentsOf: app.appendingPathComponent(path), encoding: .utf8) }
-        let home = try source("Home/HomeView.swift")
+        let home = try AppSource.appFiles(AppSource.homeViewFiles)
         XCTAssertTrue(home.contains("Text(row.token.displayName).font(.caption)"), "Home's row")
         XCTAssertTrue(home.contains(#"LabeledContent("Name", value: row.token.displayName)"#), "the token page")
         XCTAssertTrue(home.contains("? Token(address: token.address, symbol: token.symbol, name: token.name,"), "a discovered token is stored with its name as found")
-        XCTAssertTrue(try source("Portfolio/AssetsModel.swift").contains("(note ?? Text(verbatim: asset.token.displayName))"), "the Portfolio's Assets")
-        XCTAssertTrue(try source("Profile/ProfileView.swift").contains(#""\(asset.token.displayName) · \(asset.token.address.short)" : asset.token.displayName"#), "the Send list")
-        let swap = try source("Swap/SwapView.swift")
+        XCTAssertTrue(try AppSource.app("Portfolio/AssetsModel.swift").contains("(note ?? Text(verbatim: asset.token.displayName))"), "the Portfolio's Assets")
+        XCTAssertTrue(try AppSource.app("Profile/ProfileView.swift").contains(#""\(asset.token.displayName) · \(asset.token.address.short)" : asset.token.displayName"#), "the Send list")
+        let swap = try AppSource.app("Swap/SwapView.swift")
         XCTAssertTrue(swap.contains("Text(token.displayName).font(.footnote)"), "Swap's token rows")
         XCTAssertTrue(swap.contains("Text(verbatim: token.displayName) : Text(\"Past cohort · trading closed\")"), "Swap's picker")
     }
@@ -166,15 +165,15 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     func testMetadataIsReadInBatches() async {
         let many = (1...120).map { i in Address(data: Data(count: 16) + Data([0x00, 0x0e, 0x00, UInt8(i)]))! }
         let logs = many.enumerated().map { i, token in transfer(token, nft: false, block: UInt64(i + 1)) }
-        MomentsChainStub.install(chain.answer(many: Set(many)), logs: logs)
-        let scan = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer(many: Set(many)))
+        let scan = await held(logs)
         XCTAssertEqual(scan.tokens.map(\.address), many)
         XCTAssertTrue(scan.complete)
         let symbolReads = MomentsChainStub.batches().filter { $0.first?.selector == ABI.selector("symbol()").hexString }
         XCTAssertEqual(symbolReads.map(\.count), [150, 150, 60], "three reads of 50 tokens × symbol, name, decimals")
 
-        MomentsChainStub.install(chain.answer(many: Set(many)), logs: logs, breaking: [many[70]])
-        let broken = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer(many: Set(many)), breaking: [many[70]])
+        let broken = await held(logs)
         XCTAssertEqual(broken.tokens.map(\.address), many.filter { $0 != many[70] }, "the breaking token's own balanceOf fails: it holds nothing a send could move")
         XCTAssertTrue(broken.complete)
     }
@@ -191,30 +190,25 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
     }
 
-    /// A scan tells "nothing there" from "couldn't read it": a refused history, chain head or balance read leaves it
-    /// incomplete, so a list can say a token may be missing instead of showing what it found as everything.
+    /// A discovery tells "nothing there" from "couldn't read it": a history not read in full or a refused balance read
+    /// leaves it incomplete, so a list can say a token may be missing instead of showing what it found as everything.
     func testAScanSaysWhenItCouldNotReadEverything() async {
         let found = Token(address: coin, symbol: "CN", name: "Coin", decimals: 18)
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)])
-        let full = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer)
+        let full = await held([transfer(coin, nft: false, block: 10)])
         XCTAssertEqual(full, WalletTokenDiscovery.Scan(tokens: [found], complete: true))
 
-        MomentsChainStub.install(chain.answer)
-        let nothing = await discovery().scan(wallet: wallet, wholeHistory: true)
+        let nothing = await held([])
         XCTAssertEqual(nothing, WalletTokenDiscovery.Scan(tokens: [], complete: true), "an empty history, read in full")
 
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_getLogs"])
-        let noHistory = await discovery().scan(wallet: wallet, wholeHistory: true)
-        XCTAssertEqual(noHistory, WalletTokenDiscovery.Scan(tokens: [], complete: false), "the history refused: nothing found, and not complete")
-        let listed = await discovery().heldTokens(wallet: wallet, wholeHistory: true)
-        XCTAssertTrue(listed.isEmpty, "heldTokens still lists what it found")
+        let noHistory = await held([], complete: false)
+        XCTAssertEqual(noHistory, WalletTokenDiscovery.Scan(tokens: [], complete: false), "the history not read: nothing found, and not complete")
 
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_getBlockByNumber"])
-        let noHead = await discovery().scan(wallet: wallet, wholeHistory: true)
-        XCTAssertEqual(noHead, WalletTokenDiscovery.Scan(tokens: [], complete: false))
+        let partHistory = await held([transfer(coin, nft: false, block: 10)], complete: false)
+        XCTAssertEqual(partHistory, WalletTokenDiscovery.Scan(tokens: [found], complete: false), "what part of the history shows is listed, and not complete")
 
-        MomentsChainStub.install(chain.answer, logs: [transfer(coin, nft: false, block: 10)], refusing: ["eth_call"])
-        let noBalances = await discovery().scan(wallet: wallet, wholeHistory: true)
+        MomentsChainStub.install(chain.answer, refusing: ["eth_call"])
+        let noBalances = await held([transfer(coin, nft: false, block: 10)])
         XCTAssertEqual(noBalances, WalletTokenDiscovery.Scan(tokens: [], complete: false), "the token was seen, its balance couldn't be read")
     }
 
@@ -222,23 +216,19 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     /// collections out and carries whether the scan was complete; the Send list and the Portfolio say when it wasn't, with
     /// Retry.
     func testTheWalletsTokenListLeavesCollectionsOutAndSaysWhenItIsIncomplete() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let source = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
+        let source = try AppSource.app("Wallet/WalletTokens.swift")
         XCTAssertTrue(source.contains("let collections = await env.walletDiscovery.collections(among: held)"))
         XCTAssertTrue(source.contains("tokens: held.filter { !collections.contains($0.address) }"))
         XCTAssertTrue(source.contains("return await env.walletDiscovery.held(wallet: address, incoming: snapshot.transfersIn, complete: snapshot.status(WalletHistoryScans.transfersInId).complete, known: known)"))
         XCTAssertTrue(source.contains("complete: (scan?.complete ?? true) && balancesComplete)"))
-        let profile = try String(contentsOf: app.appendingPathComponent("Profile/ProfileView.swift"), encoding: .utf8)
+        let profile = try AppSource.app("Profile/ProfileView.swift")
         XCTAssertTrue(profile.contains("assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, readingHistory: readingHistory)"))
         XCTAssertTrue(profile.contains("show(ranked, complete: read.complete, readingHistory: false)"))
         XCTAssertTrue(profile.contains("if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }"))
         XCTAssertTrue(profile.contains("readNotice(\"No tokens found, but part of your wallet couldn't be read"), "an incomplete empty read is never \"nothing to send\"")
         // The Portfolio says it too, with Retry, rather than present a part of the wallet as all of it: an empty read that
         // couldn't be read is never "No tokens in this wallet yet".
-        let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
+        let assets = try AppSource.app("Portfolio/AssetsModel.swift")
         XCTAssertTrue(assets.contains("complete = (read?.complete ?? false) && retired.complete"), "a retired cohort that couldn't be read is said too")
         XCTAssertTrue(assets.contains("balancesUnread = read == nil"))
         XCTAssertTrue(assets.contains("case (false, false): return tr(\"Part of your wallet couldn't be read, so a token may be missing from the list and the total.\")"))
@@ -246,7 +236,7 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertTrue(assets.contains("if kind == .assets, !model.loading, let gap = model.readGap {"))
         XCTAssertTrue(assets.contains("Button(\"Retry\", systemImage: \"arrow.clockwise\", action: retry)"))
         XCTAssertTrue(assets.contains("if kind == .assets, model.tokens.isEmpty, model.loading || model.readGap == nil {"))
-        let portfolio = try String(contentsOf: app.appendingPathComponent("Portfolio/PortfolioView.swift"), encoding: .utf8)
+        let portfolio = try AppSource.app("Portfolio/PortfolioView.swift")
         XCTAssertTrue(portfolio.contains("AssetsCard(model: assets) { Task { await assets.load(env: env, address: session.address, force: true) } }"))
     }
 

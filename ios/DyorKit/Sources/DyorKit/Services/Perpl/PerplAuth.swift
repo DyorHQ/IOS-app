@@ -38,9 +38,7 @@ public enum PerplAuth {
     // MARK: Encodings
 
     /// base64url with no padding, as every Perpl signature/nonce uses.
-    public static func base64url(_ data: Data) -> String {
-        data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-    }
+    public static func base64url(_ data: Data) -> String { Base64URL.encode(data) }
 
     public static func sha256hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -81,7 +79,11 @@ public enum PerplAuth {
 /// Runs the two-step enrollment and signs REST requests. The wallet EIP-712 signature is supplied by the caller
 /// (the app asks Privy to `secp256k1Sign` the same digest), so this stays free of any wallet dependency.
 public actor PerplAuthClient {
-    public struct Payload: Sendable {
+    /// `@unchecked`: `typedData` is the server's JSON object from `v1/api-key/payload` (immutable `JSONSerialization`
+    /// output), never mutated after `requestPayload` reads it, and echoed back unchanged to `/enroll` under its `mac`.
+    /// Its type stays `[String: Any]` on purpose: decoding it into a typed model and re-encoding it could change the
+    /// bytes the mac covers.
+    public struct Payload: @unchecked Sendable {
         /// The server's typed data, echoed back unchanged to `/enroll` (its `mac` covers it). Validated, never signed as is.
         public let typedData: [String: Any]
         public let mac: String
@@ -155,7 +157,7 @@ public actor PerplAuthClient {
         request.setValue(timestamp, forHTTPHeaderField: "X-API-Timestamp")
         request.setValue(nonce, forHTTPHeaderField: "X-API-Nonce")
         request.setValue(signature, forHTTPHeaderField: "X-API-Signature")
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw PerplError.contextUnavailable(status: http.statusCode) }
         return data
@@ -166,7 +168,7 @@ public actor PerplAuthClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "accept")
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         // Native apps send no Origin, which Perpl's enrollment endpoints accept (whitelisted-or-absent).
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 25

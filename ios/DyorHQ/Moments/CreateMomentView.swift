@@ -47,7 +47,7 @@ struct CreateMomentView: View {
     /// upload's fingerprint / mirror / preview.
     @State private var lastUploadedURI = ""
     /// Uploaded media whose pin to IPFS failed: publishing waits for a retry, or (a photo) the user's choice of the https
-    /// copy (RI-9).
+    /// copy.
     @State private var unpinned: MediaPins?
     /// The photo goes on-chain as DyorHQ's https copy, by the user's choice, because it could not be pinned.
     @State private var usesMirror = false
@@ -199,7 +199,7 @@ struct CreateMomentView: View {
 
     // MARK: Sections
 
-    /// A policy change queued on the contract (security audit 2026-09-26, MO-4). Once it can be applied, anyone may
+    /// A policy change queued on the contract. Once it can be applied, anyone may
     /// apply it at any moment. The publish carries the hash of the terms reviewed here, so if the new terms take effect
     /// before it confirms, the factory refuses it: nothing is published, and the creator reviews the new terms. They
     /// never change silently. A proposal nobody applied in time has lapsed and is not shown.
@@ -411,7 +411,7 @@ struct CreateMomentView: View {
                 guard let movie = try await item.loadTransferable(type: MovieFile.self) else { imageError = tr("That video could not be read."); return }
                 defer { try? FileManager.default.removeItem(at: movie.url) }
                 // The size comes from the file system, before anything is read: a long 4K clip is gigabytes, and
-                // reading it just to refuse it would exhaust memory (security audit 2026-09-26, RI-5). The file is then
+                // reading it just to refuse it would exhaust memory. The file is then
                 // hashed a chunk at a time and uploaded straight from disk.
                 guard let size = try movie.url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 50 * 1024 * 1024 else { imageError = tr("Videos up to 50 MB."); return }
                 guard let posterImage = try await MovieFile.coverFrame(url: movie.url) else { imageError = tr("Could not read a frame from that video."); return }
@@ -459,7 +459,7 @@ struct CreateMomentView: View {
 
     /// Pins whatever of `pins` isn't pinned yet. The form takes the media only once all of it is on IPFS; a failure
     /// is kept in `unpinned`, with the reason, for the user to retry — nothing falls back to the https mirror on its
-    /// own (security audit 2026-09-26, RI-9).
+    /// own.
     private func pin(_ pins: MediaPins) async {
         var pins = pins
         do {

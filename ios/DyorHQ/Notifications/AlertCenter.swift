@@ -224,7 +224,7 @@ final class AlertCenter {
 
         let changes = positions.update(fresh, stillOpen: Set(account?.positionPerpIds ?? []))
         for ended in changes.ended {
-            // The TP/SL that position leaves behind, in case the stream's own report was missed (security audit GT-2).
+            // The TP/SL that position leaves behind, in case the stream's own report was missed.
             env.perplTrading.positionClosedOnChain(marketId: ended.perpId, isLong: ended.side == .long)
             pendingEndings[ended.perpId] = (ended, now, restingCloseMarkets.contains(ended.perpId))
         }

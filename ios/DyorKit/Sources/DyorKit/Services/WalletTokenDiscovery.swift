@@ -1,30 +1,22 @@
 import BigInt
 import Foundation
 
-/// Discovers every ERC-20 a wallet actually holds by scanning its incoming `Transfer` logs — no indexer and no
-/// curated list needed. This is what surfaces a token received on-chain (a swap on another app, an airdrop, a plain
-/// transfer) that was never added by hand, so it shows in holdings and the swap picker like any curated asset.
+/// Discovers every ERC-20 a wallet actually holds from its incoming `Transfer` logs — no indexer and no curated list
+/// needed. This is what surfaces a token received on-chain (a swap on another app, an airdrop, a plain transfer) that
+/// was never added by hand, so it shows in holdings and the swap picker like any curated asset.
 ///
-/// The scan is address-filter-free — the wallet is a log topic — so ONE pass over the window finds every token that
-/// has paid into the wallet; a `balanceOf` sweep then keeps only what is still held, and metadata resolves each.
+/// The logs are the transfers into the wallet its history store keeps (`WalletHistorySnapshot.transfersIn`), read with no
+/// address filter — the wallet is a log topic — so they name every token that has paid into the wallet; a `balanceOf`
+/// sweep then keeps only what is still held, and metadata resolves each.
 public struct WalletTokenDiscovery: Sendable {
-    private let logsRPC: RPCClient
     private let multicall: Multicall
 
-    public init(logsRPC: RPCClient, multicall: Multicall) {
-        self.logsRPC = logsRPC
+    public init(multicall: Multicall) {
         self.multicall = multicall
     }
 
-    private static let transferSig = "Transfer(address,address,uint256)"
-
-    /// How far back a scan reads unless it reads the whole history: a block budget, 6,480,000 blocks (about 22.7 days at
-    /// Monad's pace), kept as it was when it was called 30 days. Reading a true 30 days would cost about a third more
-    /// log reads for every wallet scan.
-    public static let defaultWindowBlocks: UInt64 = 6_480_000
-
     /// The tokens to show as Unverified once, after an upgrade from builds that stored every token found in the
-    /// wallet's history as if the user had chosen it (security audit 2026-09-26, IOST-12) — discovery skips a token
+    /// wallet's history as if the user had chosen it — discovery skips a token
     /// already stored, so it would never be marked otherwise. That is all of `stored` except native MON and the curated
     /// list, plus those already marked: nothing recorded which of them the user bought in the app, so each is marked,
     /// and a later swap into it clears the mark.
@@ -32,17 +24,10 @@ public struct WalletTokenDiscovery: Sendable {
         alreadyUnverified.union(stored.filter { !$0.isNative && Token.core($0.address) == nil }.map(\.address))
     }
 
-    /// The ERC-20 tokens the wallet currently holds (balance > 0), resolved to `Token` metadata. `windowBlocks` bounds
-    /// how far back the incoming-transfer scan looks; `known` addresses (already-surfaced tokens, native MON) are skipped
-    /// so only NEW tokens are read.
-    public func heldTokens(wallet: Address, windowBlocks: UInt64 = WalletTokenDiscovery.defaultWindowBlocks, known: Set<Address> = [], wholeHistory: Bool = false) async -> [Token] {
-        await scan(wallet: wallet, windowBlocks: windowBlocks, known: known, wholeHistory: wholeHistory).tokens
-    }
-
-    /// What a scan found, and whether every read it needed answered.
+    /// What a discovery found, and whether every read it needed answered.
     public struct Scan: Sendable, Equatable {
         public let tokens: [Token]
-        /// False when the chain head, part of the history, a balance batch or a token's metadata couldn't be read: a
+        /// False when part of the history, a balance batch, an ERC-165 check or a token's metadata couldn't be read: a
         /// token the wallet holds may be missing, which a list must say rather than pass off as everything it holds.
         public let complete: Bool
 
@@ -52,23 +37,10 @@ public struct WalletTokenDiscovery: Sendable {
         }
     }
 
-    /// `heldTokens`, saying whether the scan was complete. `logScan` is how the history meets an endpoint that stops
-    /// answering (`LogScanMode`): patient, as every other log scan, unless the caller says what it couldn't read and offers
-    /// Retry, as the Send sheet and the Portfolio do (`.failFast`).
-    public func scan(wallet: Address, windowBlocks: UInt64 = WalletTokenDiscovery.defaultWindowBlocks, known: Set<Address> = [], wholeHistory: Bool = false,
-                     logScan: LogScanMode = .patient) async -> Scan {
-        guard let anchor = try? await logsRPC.block(.latest) else { return Scan(tokens: [], complete: false) }
-        let latest = anchor.number
-        let from = wholeHistory ? 0 : (latest > windowBlocks ? latest - windowBlocks : 0)
-        let topic = ABI.eventTopic(Self.transferSig)
-        let walletWord = wallet.data.leftPadded(to: 32)
-        // Every ERC-20 that has sent tokens to this wallet in the window; the emitting contract IS the token.
-        let incoming = await logsRPC.chunkedLogsReport(address: nil, topics: [topic, nil, walletWord], fromBlock: from, toBlock: latest, mode: logScan)
-        return await held(wallet: wallet, incoming: incoming.logs, complete: incoming.complete, known: known)
-    }
-
-    /// The tokens the wallet holds among those that ever sent it a `Transfer` (`incoming`, as the history store keeps
-    /// them): balances, ERC-165 and metadata read as `scan` reads them. `complete` is whether the logs cover their window.
+    /// The ERC-20 tokens the wallet holds (balance > 0) among those that ever sent it a `Transfer` (`incoming`, as the
+    /// history store keeps them; the emitting contract IS the token), resolved to `Token` metadata. `known` addresses
+    /// (already-surfaced tokens, native MON) are skipped so only NEW tokens are read. `complete` is whether the logs cover
+    /// their window.
     public func held(wallet: Address, incoming: [Log], complete scanned: Bool, known: Set<Address> = []) async -> Scan {
         var complete = scanned
 
@@ -190,8 +162,8 @@ public struct WalletTokenDiscovery: Sendable {
     }
 
     /// An ERC-20 `Transfer`: three topics (the signature, `from`, `to`) and the amount as 32 bytes of data. An ERC-721
-    /// `Transfer` has the same signature but indexes the token id (four topics, no data), as `SwapHistory` tells them
-    /// apart: its contract is a collection, whose `balanceOf` counts editions, not a token a send can move.
+    /// `Transfer` has the same signature but indexes the token id (four topics, no data): its contract is a collection,
+    /// whose `balanceOf` counts editions, not a token a send can move. `SwapHistoryService` keeps a swap's legs by it too.
     static func isERC20Transfer(_ log: Log) -> Bool { log.topics.count == 3 && log.data.count == 32 }
 
     /// A `Transfer` with its amount indexed too (four topics, no data): an ERC-721 collection's, or a token's that declares

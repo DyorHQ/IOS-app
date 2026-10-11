@@ -203,9 +203,9 @@ public enum ServerHistorySpotCheck {
 /// `historyEpoch`), for the next launch until the flags are read again — so a launch never reads the server against the
 /// owner's switch, nor marks what it takes in with an epoch lower than the one in force — and, per wallet, the day of
 /// its last spot check and how long the server is distrusted for it (`ServerHistorySync.spotCheck`). An erase of this
-/// device's data removes every key with the rest of UserDefaults (`Session.eraseLocalData`), and a wallet's own
-/// before that (`forget(wallet:)`); a wallet's keys are named for it, so nothing of one is read for another. No key
-/// starts with a prefix that marks an install as one from before App Lock's default (`Theme.swift`'s `earlierRun`).
+/// device's data removes every key with the rest of UserDefaults (`Session.eraseLocalData`), and a wallet's own before
+/// that (`forget(wallet:)`); a wallet's keys are named for it, so nothing of one is read for another. No key starts
+/// with a prefix that marks an install as one from before App Lock's default (`AppLockStore.earlierRunPrefixes`).
 /// UserDefaults is thread-safe, hence the unchecked conformance.
 public struct ServerHistoryDefaults: @unchecked Sendable {
     private let defaults: UserDefaults
@@ -277,7 +277,7 @@ public actor ServerHistorySync {
     private let defaults: ServerHistoryDefaults
     private let now: @Sendable () -> Date
     private let random: @Sendable (ClosedRange<UInt64>) -> UInt64
-    private static let log = Logger(subsystem: "fun.dyorhq.app", category: "history")
+    private static let log = Logger(subsystem: AppIdentity.logSubsystem, category: "history")
 
     /// What this session holds of one wallet's reads.
     private struct Watch {

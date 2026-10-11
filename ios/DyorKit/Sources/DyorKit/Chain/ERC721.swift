@@ -48,7 +48,7 @@ public struct NFTAsset: Identifiable, Hashable, Sendable {
 
 /// ERC-721 metadata, reduced to what the app shows. Anyone can airdrop an NFT to a wallet, and its `tokenURI` and
 /// image point wherever its contract says — a tracking server that learns the wallet's IP, or an endless or oversized
-/// response (security audit 2026-09-26, IOST-12). So only content-addressed storage is ever fetched: an on-chain
+/// response. So only content-addressed storage is ever fetched: an on-chain
 /// `data:` document, IPFS (through `ipfsGateway`, whatever gateway the URI names) and Arweave. Anything else is not
 /// fetched at all, and documents are read up to `maxDocumentBytes`.
 public struct NFTMetadata: Sendable {

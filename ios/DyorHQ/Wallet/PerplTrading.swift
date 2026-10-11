@@ -3,7 +3,6 @@ import DyorKit
 import Foundation
 import Observation
 import os
-import Security
 import UIKit
 
 /// Coordinates authenticated Perpl trading: enroll an Ed25519 API key with the wallet's EIP-712 signature (stored
@@ -40,8 +39,8 @@ final class PerplTrading: MeraSessionLifecycle {
     /// socket drops on its own this is the LAST KNOWN list (a trigger may have fired or been cancelled since), and it is
     /// emptied when the session is deliberately closed, the wallet changes or the key is removed.
     private(set) var openOrders: [PerplOpenOrder] = []
-    /// A take-profit / stop-loss fired or failed, or a position was liquidated, since the app opened (security audit
-    /// GT-9) — for the trade screen to show in place, besides the notification.
+    /// A take-profit / stop-loss fired or failed, or a position was liquidated, since the app opened — for the trade
+    /// screen to show in place, besides the notification.
     private(set) var protectionNotice: ProtectionNotice?
     /// Markets the app has seen, for naming and scaling what the trading stream reports (`noteMarkets`).
     private var markets: [Int: PerpMarket] = [:]
@@ -225,7 +224,7 @@ final class PerplTrading: MeraSessionLifecycle {
     var isSignedIn: Bool { client?.signedIn == true }
     var isForwarding: Bool { client?.forwardingEnabled == true || forwardingGrantedOnChain }
     /// `openOrders` is Perpl's current, complete list: the socket is signed in (one-click on or not) and has sent its
-    /// open-orders snapshot. Otherwise the TP/SL on screen can't be verified (security audit GT-3).
+    /// open-orders snapshot. Otherwise the TP/SL on screen can't be verified.
     var ordersAreLive: Bool { client?.signedIn == true && client?.hasOrdersSnapshot == true }
     /// The request an order on the live socket's list belongs to (its own report named it), or nil.
     func requestId(for key: PerplOpenOrder.Key) -> Int? { client?.requestId(for: key) }
@@ -309,7 +308,7 @@ final class PerplTrading: MeraSessionLifecycle {
 
     /// MERA-PLAN §3 `end()`: the socket closes, the keep-alive stops and the key is dropped. The token stays.
     ///
-    /// An order already on the wire keeps its socket until Perpl answers it (security audit GL-1): the session often
+    /// An order already on the wire keeps its socket until Perpl answers it: the session often
     /// ends because the app left the foreground mid-bracket, and closing then fails the unanswered frames — the entry
     /// may be live at Perpl while its stop-loss was never sent. So does an approved operation still running (a bracket,
     /// a cancel-then-place of a TP/SL, a cancel): between its steps nothing is in flight, but closing then would leave
@@ -340,7 +339,7 @@ final class PerplTrading: MeraSessionLifecycle {
     private func drain(_ socket: PerplTradeClient) {
         draining?.disconnect()
         draining = socket
-        // Held so iOS doesn't suspend the app, and freeze the socket, before its answers are in (GL-1).
+        // Held so iOS doesn't suspend the app, and freeze the socket, before its answers are in.
         let background = PerplBackgroundTime("Perpl trading") // not localized: the task's name, never shown
         Task { @MainActor [weak self] in
             defer { background.end() }
@@ -358,7 +357,7 @@ final class PerplTrading: MeraSessionLifecycle {
     }
 
     /// Starts an operation the user approved (a bracket, a TP/SL change, a cancel): it holds background time, and a
-    /// passkey session that ends meanwhile keeps its socket until it is done (`drain`, GL-1). Call the result when it is.
+    /// passkey session that ends meanwhile keeps its socket until it is done (`drain`). Call the result when it is.
     /// `name` names the background task for iOS (not localized: never shown).
     private func operation(_ name: String) -> () -> Void {
         let background = PerplBackgroundTime(name)
@@ -569,7 +568,7 @@ final class PerplTrading: MeraSessionLifecycle {
             Task { await self.reconcileLoadedOrders() }
             self.recheckLeftTriggers()
         }
-        // An order's late result can arrive on any socket that has it, a draining one's included (GL-1).
+        // An order's late result can arrive on any socket that has it, a draining one's included.
         client.onOrderEvents = { [weak self, weak client] _ in
             guard let self, let client else { return }
             self.reevaluate(using: client)
@@ -700,58 +699,13 @@ final class PerplTrading: MeraSessionLifecycle {
         return client
     }
 
-    /// Places the entry order (market/limit) with optional take-profit / stop-loss triggers linked to it. Returns
-    /// the entry's gateway acknowledgement.
-    /// A passkey account's order must fit its live session (`authorize`) or carry a step-up `approval`.
-    func submit(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int = 100,
-                approval: MeraSession.StepUp? = nil) async throws -> PerplOrderAck {
-        try Self.checkTriggers(input: input, takeProfit: takeProfit, stopLoss: stopLoss)
-        let charge = try authorize(input, approval: approval)
-        await ensureConnected()
-        let client: PerplTradeClient
-        do { client = try liveClient() } catch { mera?.refund(charge); throw error }
-        // `lb: 0` (Perpl's own window): the head the frames once carried is no longer read, so nothing is awaited here.
-        if !input.reduceOnly { recentEntries[PerplMarketSide(marketId: input.market.id, isLong: input.side == .long)] = Date() }
-        var frames = [PerplOrders.entry(input, accountId: accountId, head: 0, ttlBlocks: ttlBlocks)]
-        if let takeProfit {
-            frames.append(PerplOrders.takeProfit(side: input.side, price: takeProfit, size: input.size, market: input.market, accountId: accountId, linkedPositionId: nil))
-        }
-        if let stopLoss {
-            frames.append(PerplOrders.stopLoss(side: input.side, price: stopLoss, size: input.size, market: input.market, accountId: accountId, linkedPositionId: nil))
-        }
-        // The entry's id is reserved here, with no `await` before its write (`place` below): the triggers link to it with
-        // `tr` and get their own ids as they are written, so ids rise in write order. `tr`, never a later re-link to the
-        // position (`lp`): see the reasons at the same step in `submitBracket`.
-        let entryRq = client.reserveRequestId()
-        frames[0].requestId = entryRq
-        for index in frames.indices.dropFirst() { frames[index].linkedRequestId = entryRq }
-        let ack: PerplOrderAck
-        do { ack = try await client.place(frames) } catch let error as PerplTradeError where !error.outcomeUnknown { mera?.refund(charge); throw error }
-        if !ack.accepted, !ack.outcomeUnknown { mera?.refund(charge) }
-        return ack
-    }
-
-    /// Cancels open orders or keeper triggers (TP/SL) from the live list, as ONE action: a passkey account's single
-    /// step-up `approval` covers all of them (MERA-PLAN §3 — a cancel always asks). Each cancel is sent whatever the
-    /// others did, and each order's ack is returned by its market and id. An accepted ack means Perpl admitted the
-    /// cancel; the order leaves `openOrders` when the stream confirms it (mt:24).
-    func cancel(orders: [PerplOpenOrder], approval: MeraSession.StepUp? = nil) async throws -> [PerplOpenOrder.Key: PerplOrderAck] {
-        guard !orders.isEmpty else { return [:] }
-        try requireCancelApproval(approval)
-        let done = operation("Perpl cancel")
-        defer { done() }
-        await ensureConnected()
-        let client = try liveClient()
-        return try await sendCancels(orders, on: client).acks
-    }
-
     /// Cancels open orders or keeper triggers (TP/SL) from the live list as ONE action — a passkey account's one step-up
     /// `approval` covers them all (MERA-PLAN §3: a cancel always asks) — and follows each until Perpl's live list confirms
     /// it, on the socket that sent it, for up to `PerplTimeouts.removal`: the order left the list (cancelled, or triggered
     /// or expired first, or already gone), or Perpl refused the cancel and still lists it, or neither in time (not
     /// confirmed: it may still be live). An admitted cancel is never called done before the list shows it.
     ///
-    /// One operation holds background time across the sends and the wait (GL-1), so a sheet closed meanwhile loses
+    /// One operation holds background time across the sends and the wait, so a sheet closed meanwhile loses
     /// nothing: this device's TP/SL records of what left the list go, and the Activity row counts the CONFIRMED cancels
     /// only, here. `onAcks` runs once every cancel is out, with the results the acks already decide (a refused ack).
     /// `check`: the caller's last word on the socket that will send them, after the step-up and before anything is sent
@@ -910,11 +864,11 @@ final class PerplTrading: MeraSessionLifecycle {
         case cancelling, placing
     }
 
-    /// Sets, moves or removes the take-profit / stop-loss of an open position (security audit GT-1). Each new trigger
+    /// Sets, moves or removes the take-profit / stop-loss of an open position. Each new trigger
     /// is linked to the position (`lp`), so Perpl cancels it when the position closes (documented for a close or an
     /// inversion only; any other ending is left to the chain-checked clean-up, which matches by market and side, not by
     /// link — and the ticket's own TP/SL stay `tr`-linked, see `submitBracket`), and closes the position's whole
-    /// size as the stream reports it now — a fixed size, which the sheet says (GT-5). Moving a trigger is
+    /// size as the stream reports it now — a fixed size, which the sheet says. Moving a trigger is
     /// cancel-then-place: the new one is sent only once every trigger it replaces was admitted for cancellation AND
     /// has left Perpl's live list (an admitted cancel can still fail on-chain), so a refused, unanswered or unconfirmed
     /// cancel never leaves two stops behind; if the placement then fails, the outcome says the position is
@@ -946,7 +900,7 @@ final class PerplTrading: MeraSessionLifecycle {
         // The owner's switch, read at the tap: on, a new trigger is "set" only once Perpl's list shows it armed.
         let live = liveOutcomes
         // Cancel-then-place: leaving the app between the two must not freeze or close the socket with the old stop gone
-        // and the new one unsent (GL-1).
+        // and the new one unsent.
         let done = operation("Perpl TP/SL") // not localized: the task's name
         defer { done() }
         await ensureConnected()
@@ -993,7 +947,7 @@ final class PerplTrading: MeraSessionLifecycle {
             outcomes[change.kind] = placed.outcome
             if let rq = placed.admitted { admitted[rq] = change }
         }
-        // 3. GT-1: one wait for every replaced trigger to leave Perpl's live list. A kind whose old trigger is still listed
+        // 3. One wait for every replaced trigger to leave Perpl's live list. A kind whose old trigger is still listed
         // places nothing (that could leave two); the others place their new trigger now.
         let stillListed = await remaining(of: Set(awaitingRemoval.flatMap { $0.replacing.map(\.id) }), from: client)
         for change in awaitingRemoval {
@@ -1083,7 +1037,7 @@ final class PerplTrading: MeraSessionLifecycle {
         let accountId: Int
         let entry: PerplSentRequest
         let entryRq: Int
-        /// Nil: the entry was written and never answered (GL-1): it may be live.
+        /// Nil: the entry was written and never answered: it may be live.
         let entryAck: PerplOrderAck?
         let takeProfit: (rq: Int?, ack: PerplOrderAck)?
         let stopLoss: (rq: Int?, ack: PerplOrderAck)?
@@ -1102,18 +1056,18 @@ final class PerplTrading: MeraSessionLifecycle {
     }
 
     /// Places a bracket (entry + linked TP/SL) and reports whether the entry AND each requested trigger were
-    /// individually accepted — unlike `submit`, which returns only the entry ack. A passkey account's bracket must fit
-    /// its live session (`authorize`) or carry a step-up `approval`. `onChainPositions` / `onChainOrders`: the account's
-    /// positions and orders as the Exchange last reported them, for `checkOpening`. `beforeWrite`: the caller's last check
-    /// on the socket that will write the entry, run right before the write with no `await` after it (it throws to refuse,
-    /// as not sent), and the order to write instead when its terms must be fixed there (`submitClose`'s size).
+    /// individually accepted. A passkey account's bracket must fit its live session (`authorize`) or carry a step-up
+    /// `approval`. `onChainPositions` / `onChainOrders`: the account's positions and orders as the Exchange last
+    /// reported them, for `checkOpening`. `beforeWrite`: the caller's last check on the socket that will write the
+    /// entry, run right before the write with no `await` after it (it throws to refuse, as not sent), and the order to
+    /// write instead when its terms must be fixed there (`submitClose`'s size).
     func submitBracket(input: OrderInput, accountId: Int, takeProfit: Double?, stopLoss: Double?, env: AppEnvironment, ttlBlocks: Int,
                        approval: MeraSession.StepUp? = nil, onChainPositions: [PerpPosition], onChainOrders: [PerpOrder],
                        beforeWrite: @MainActor (PerplTradeClient) throws -> OrderInput? = { _ in nil }) async throws -> BracketResult {
         try Self.checkTriggers(input: input, takeProfit: takeProfit, stopLoss: stopLoss)
         let charge = try authorize(input, approval: approval)
         // The entry and its stop-loss go out one after the other: leaving the app between them must not freeze or close
-        // the socket with the entry live and the stop-loss unsent (GL-1).
+        // the socket with the entry live and the stop-loss unsent.
         let done = operation("Perpl order")
         defer { done() }
         await ensureConnected()
@@ -1150,13 +1104,13 @@ final class PerplTrading: MeraSessionLifecycle {
         // - A trigger's link can't be changed in place (`Change`, t:7, amends price, size and expiry only), and no meaning
         //   is documented for one trigger carrying both `tr` and `lp`. A re-link is therefore a second trigger plus a
         //   cancel of the first: cancel-first leaves the position without its stop until the new one is armed (st 8 can
-        //   be slow or never come), and place-first leaves two live stops until the removal is confirmed, which GT-1
-        //   forbids (a refused, unanswered or unconfirmed cancel must never leave two stops behind). No order meets both.
+        //   be slow or never come), and place-first leaves two live stops until the removal is confirmed, which must
+        //   never happen (a refused, unanswered or unconfirmed cancel must never leave two stops behind). No order meets both.
         // - Place-first also needs two free slots under `max_account_trigger_orders` (16) per bracket, and no doc says
         //   whether a trigger whose cancel is in flight still counts.
         // - Every cancel asks a passkey account for a step-up (MERA-PLAN §3), so an automatic re-link would prompt out of
         //   the blue; and a limit entry has no position until it fills, maybe while the app is closed.
-        // So `tr` linking stays, backed by the chain-checked clean-up (`cancelLeftovers`, GT-2), the reconnect sweep
+        // So `tr` linking stays, backed by the chain-checked clean-up (`cancelLeftovers`), the reconnect sweep
         // (`sweepLeftovers`), the Leftover TP/SL sheet and `checkOpening`'s refusal on leftovers. The position's own TP/SL
         // sheet (`changeTriggers`) links with `lp`, unchanged. Reopen only if Perpl documents `lp` cancellation on
         // liquidation/deleverage/unwind AND an atomic re-link (or `tr` + `lp` on one trigger).
@@ -1202,7 +1156,7 @@ final class PerplTrading: MeraSessionLifecycle {
         return result
     }
 
-    /// Refuses, before anything is charged or sent, triggers that can't do what they say (security audit GT-6, GT-7):
+    /// Refuses, before anything is charged or sent, triggers that can't do what they say:
     /// none on a reduce-only order — its triggers would close the side the account doesn't hold — and each price at
     /// least one tick and on the market's tick grid. The ticket also checks the side and the liquidation price.
     private static func checkTriggers(input: OrderInput, takeProfit: Double?, stopLoss: Double?) throws {
@@ -1218,7 +1172,7 @@ final class PerplTrading: MeraSessionLifecycle {
 
     /// Checks an opening order against Perpl's live lists where it is sent, not only when the ticket was tapped (a
     /// passkey account's stream is down until its session opens, which is after the tap). Refused, before anything is
-    /// sent (security audit GT-2, GT-6):
+    /// sent:
     /// - while TP/SL left from an earlier position on that side of the market are still armed: they would act on the
     ///   position this opens (a leftover stop-loss can close it at once);
     /// - TP/SL on an order that only shrinks the open position on the other side.
@@ -1662,7 +1616,7 @@ final class PerplTrading: MeraSessionLifecycle {
             guard let mera else { throw PerplTradeError.notSignedIn }
             try mera.requireStepUp(approval, for: .unlisted)
         }
-        // 3. One operation from the connect to the last read of the evidence (GL-1).
+        // 3. One operation from the connect to the last read of the evidence.
         let done = operation("Perpl margin") // not localized: the task's name
         defer { done() }
         // From here this request may move the market's collateral, until its result can't change (`marginRequests`). One that
@@ -1929,7 +1883,7 @@ final class PerplTrading: MeraSessionLifecycle {
         }
     }
 
-    // MARK: Protection events (security audit GT-2, GT-9)
+    // MARK: Protection events
 
     /// A fired or failed TP/SL, or a position the protocol closed, as the trade screen shows it.
     struct ProtectionNotice: Equatable, Identifiable {
@@ -1957,7 +1911,7 @@ final class PerplTrading: MeraSessionLifecycle {
 
     func dismissProtectionNotice() { protectionNotice = nil }
 
-    /// The live TP/SL with nothing left to protect (security audit GT-2): no open position on the side they close —
+    /// The live TP/SL with nothing left to protect: no open position on the side they close —
     /// neither on the stream nor in `onChainPositions` — and no entry resting on, or sent in the last minute to, that
     /// side of their market. Empty unless both of the stream's lists are live, so a gap in the data never reads as an
     /// orphan.
@@ -2123,7 +2077,7 @@ final class PerplTrading: MeraSessionLifecycle {
                                        reference: PerpAlertText.reference(perpId: notice.marketId)), owner: owner)
     }
 
-    /// Cancels the TP/SL that were closing `ended`'s side of its market, once it has closed (security audit GT-2).
+    /// Cancels the TP/SL that were closing `ended`'s side of its market, once it has closed.
     /// Perpl drops a position-linked trigger itself, but the ticket's triggers are linked to their entry, and nothing
     /// documents that those go with the position: left armed, a stop-loss would fire against the NEXT position on that
     /// side. Only what is provably orphaned goes: no open position on that side, no resting entry on that side of the
@@ -2262,7 +2216,7 @@ final class PerplTrading: MeraSessionLifecycle {
     func releaseOrderExpectation(_ expectation: OrderExpectation) { releaseFill(expectation.id) }
 
     /// Follows a sent order to Perpl's outcome whether or not its sheet stays open (operation(): background time, and a
-    /// passkey socket's drain waits for it, GL-1). The entry settles the moment it is decided; each TP/SL settles on its
+    /// passkey socket's drain waits for it). The entry settles the moment it is decided; each TP/SL settles on its
     /// own. An entry Perpl never answered is followed too (it may be live), from the socket that sent it: a closed one
     /// answers "connection lost" at once and the order is read from the stream, its history and the chain instead.
     /// Nothing is ever resent. `echoes`: the ids of this device's echoes of its TP/SL (`TriggerStore.record`), the only
@@ -2276,7 +2230,7 @@ final class PerplTrading: MeraSessionLifecycle {
         let id = PerplOrderTracker.activityID(accountId: t.accountId, rq: t.entryRq, sentAt: sentAt)
         let deadline = PerplOutcomeDeadline(ackHead: t.entryAck?.head, ttlBlocks: ttlBlocks, ackAt: t.entryAck?.receivedAt ?? t.entry.writtenAt)
         let expected = PerplPositionEvidence.expectedGrowth(orderSide: input.side, size: input.size, reduceOnly: input.reduceOnly, held: held)
-        // Its triggers went out only after the entry was answered (GL-1): with no answer, they never left the device.
+        // Its triggers went out only after the entry was answered: with no answer, they never left the device.
         let triggersSent = t.entryAck != nil
         func child(_ kind: PerplTriggerKind, _ price: Double?, _ sent: (rq: Int?, ack: PerplOrderAck)?) -> PerplTrackedOrder.Child? {
             guard let price else { return nil }
@@ -2657,7 +2611,7 @@ final class PerplTrading: MeraSessionLifecycle {
         if orders.order(id) == nil { releaseFill(id) } else { orders.setPresented(id, false) }
     }
 
-    /// A wallet-signed order's transaction confirmed (its sheet's `onCompleted`, GL-3): its Activity row says it was sent
+    /// A wallet-signed order's transaction confirmed (its sheet's `onCompleted`): its Activity row says it was sent
     /// and that its result isn't read yet (no volume, no notice), and it is followed — in the store until its receipt is
     /// read (a kill before the read still upgrades the row on the next return), and on the trade screen's status row once
     /// its sheet closes.
@@ -2812,153 +2766,8 @@ final class PerplTrading: MeraSessionLifecycle {
     }
 }
 
-/// Whether the last trading socket of a Perpl account reported one-click trading (order forwarding) on: a public flag,
-/// never a key, in UserDefaults ("perpl.forwarding.v1.<chain>.<account>"). Written from what the socket reports, never from
-/// the on-chain grant. A passkey account whose session is locked sends Close / Add Margin over the trading connection after
-/// its step-up only when it was on (`PerplTrading.apiActionsAfterUnlock`).
-enum PerplForwardingMemory {
-    static func key(chainId: Int, accountId: Int) -> String { "perpl.forwarding.v1.\(chainId).\(accountId)" } // not localized: a storage key
-
-    /// Nil when no socket of the account was ever signed in on this device.
-    static func lastKnown(chainId: Int, accountId: Int, defaults: UserDefaults = .standard) -> Bool? {
-        let key = key(chainId: chainId, accountId: accountId)
-        return defaults.object(forKey: key) == nil ? nil : defaults.bool(forKey: key)
-    }
-
-    static func record(_ forwarding: Bool, chainId: Int, accountId: Int, defaults: UserDefaults = .standard) {
-        defaults.set(forwarding, forKey: key(chainId: chainId, accountId: accountId))
-    }
-}
-
-/// The owner's two Perps kill switches (`RemoteFlags.perpsLiveOutcome`, `.perpsApiActions`) as the last check that read
-/// `app_config` 'ios' found them: two Bools in UserDefaults ("perps.switches.v1"), never a secret. Saved each time a
-/// check reads the row (`AppEnvironment.apply`); a failed check saves nothing and changes nothing (`UpdateGate` fails
-/// open). Read once, when `PerplTrading` starts: before the first check of a launch the app uses the last values read,
-/// so an OFF the owner engaged holds across a relaunch and an offline start until a check reads otherwise. Nothing
-/// stored: both on (`RemoteFlags.on`).
-enum PerpsSwitchStore {
-    struct Switches: Equatable {
-        let perpsLiveOutcome: Bool
-        let perpsApiActions: Bool
-    }
-
-    static let key = "perps.switches.v1" // not localized: a storage key
-    private static let liveOutcomeKey = "perpsLiveOutcome" // not localized: a storage key
-    private static let apiActionsKey = "perpsApiActions" // not localized: a storage key
-
-    /// The last values read on this device; nil before the first check that read the row (or for a value that isn't
-    /// the two Bools).
-    static var last: Switches? { read(from: .standard) }
-
-    static func read(from defaults: UserDefaults) -> Switches? {
-        guard let stored = defaults.dictionary(forKey: key), let live = stored[liveOutcomeKey] as? Bool,
-              let api = stored[apiActionsKey] as? Bool else { return nil }
-        return Switches(perpsLiveOutcome: live, perpsApiActions: api)
-    }
-
-    static func save(_ flags: RemoteFlags, defaults: UserDefaults = .standard) {
-        defaults.set([liveOutcomeKey: flags.perpsLiveOutcome, apiActionsKey: flags.perpsApiActions], forKey: key)
-    }
-}
-
-extension PerplTradeError {
-    /// Refused on the device (the frame wouldn't do what the sheet says): never a reason to stop using the connection.
-    var isInvalidOrder: Bool { if case .invalidOrder = self { return true }; return false }
-}
-
-/// The trading stream's census (`PerplStreamCensus`), merged across sockets and launches, in UserDefaults: counts only,
-/// nothing secret and nothing that names an order or an account. The owner reads it from a TestFlight device's log to
-/// judge the Perps kill switches (live outcome, API actions) on data, and turn either off.
-struct PerplCensusStore {
-    private static let key = "perpl.census.v1" // not localized: a storage key
-    private let defaults: UserDefaults
-
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
-
-    func load() -> PerplStreamCensus {
-        guard let data = defaults.data(forKey: Self.key), let census = try? JSONDecoder().decode(PerplStreamCensus.self, from: data) else { return PerplStreamCensus() }
-        return census
-    }
-
-    func save(_ census: PerplStreamCensus) {
-        guard let data = try? JSONEncoder().encode(census) else { return }
-        defaults.set(data, forKey: Self.key)
-    }
-}
-
-/// What a passkey (Mera) account stores of its Perpl API key: the token, and the nonce of the enrolment that issued it
-/// (`Mera.Purpose.perplTrading(nonce:)`). Neither can sign in to the trading socket without the Ed25519 secret, which
-/// the passkey re-derives at every unlock and is never stored.
-struct PerplToken: Codable, Equatable {
-    let token: String
-    let address: String
-    let scopeMask: Int
-    /// Hex; nil for a token enrolled before enrolments carried a nonce (its key is the purpose's own).
-    let keyNonce: String?
-
-    init(_ key: PerplApiKey, keyNonce: Data?) {
-        token = key.token
-        address = key.address
-        scopeMask = key.scopeMask
-        self.keyNonce = keyNonce?.hexString
-    }
-
-    var keyNonceData: Data? { keyNonce.flatMap { Data(hex: $0) } }
-}
-
-/// Keychain storage for the Perpl API key (opaque token + 32-byte Ed25519 secret), one per wallet address — or, for a
-/// passkey account, its token only (`saveToken`).
-enum PerplKeychain {
-    private static let service = "fun.dyorhq.perpl"
-
-    static func save(_ key: PerplApiKey, address: String) {
-        guard let data = try? JSONEncoder().encode(key) else { return }
-        write(data, address: address)
-    }
-
-    static func load(address: String) -> PerplApiKey? {
-        read(address: address).flatMap { try? JSONDecoder().decode(PerplApiKey.self, from: $0) }
-    }
-
-    /// A passkey account's token. Replaces whatever was stored for the address.
-    static func saveToken(_ token: PerplToken, address: String) {
-        guard let data = try? JSONEncoder().encode(token) else { return }
-        write(data, address: address)
-    }
-
-    /// A passkey account's token. An earlier build stored such an account's whole key; the secret in it is dropped here
-    /// (the token is kept with no nonce, and the passkey re-derives the pre-nonce secret).
-    static func loadToken(address: String) -> PerplToken? {
-        guard let data = read(address: address), let token = try? JSONDecoder().decode(PerplToken.self, from: data) else { return nil }
-        if (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["secret"] != nil { saveToken(token, address: address) }
-        return token
-    }
-
-    private static func write(_ data: Data, address: String) {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: address]
-        SecItemDelete(query as CFDictionary)
-        var add = query
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        add[kSecAttrSynchronizable as String] = false // explicit: keep the Perpl API secret off iCloud Keychain
-        SecItemAdd(add as CFDictionary, nil)
-    }
-
-    private static func read(address: String) -> Data? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: address, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
-        return data
-    }
-
-    static func delete(address: String) {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: address]
-        SecItemDelete(query as CFDictionary)
-    }
-}
-
 /// The background time iOS grants an app that leaves the foreground (about 30 s), held while frames are on their way to
-/// Perpl or their answers are awaited (security audit 2026-09-26, GL-1): a suspended app freezes its socket, which could
+/// Perpl or their answers are awaited: a suspended app freezes its socket, which could
 /// leave an entry live with its stop-loss unsent, or an old stop cancelled with the new one unsent. Always handed back:
 /// by `end` when the work is done, or when the time runs out.
 @MainActor

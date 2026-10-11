@@ -58,7 +58,7 @@ public extension LaunchpadService {
     func holders(token: Address, excluding: Set<Address> = [], launchedAt: Int) async -> HolderCount? {
         guard let anchor = try? await logsRPC.block(.latest) else { return nil }
         let from = Self.launchBlock(launchedAt: launchedAt, anchor: anchor, secondsPerBlock: await clock.secondsPerBlock())
-        let read = await logsRPC.newestLogs(address: token, topics: [ABI.eventTopic("Transfer(address,address,uint256)")], fromBlock: from, toBlock: anchor.number)
+        let read = await logsRPC.newestLogs(address: token, topics: [ERC20.transferTopic], fromBlock: from, toBlock: anchor.number)
         return Self.holders(read, excluding: excluding)
     }
 

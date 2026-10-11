@@ -6,7 +6,7 @@ import XCTest
 /// Build 17: DyorHQ's coins in every screen — their pictures, their labels and the create guard. The rules are tested
 /// here directly (`TokenPickerList`, `CoinIcon`, `SymbolSafety`, `LaunchImage`); the app's wiring of them is read from
 /// its sources (R10: update these with the code they pin). A DyorHQ coin sent to the wallet is labelled for what it is
-/// and is still what IOST-12 protects against: never where a send starts, never in Top Tokens, never funds arriving,
+/// and is still treated as a token sent unasked: never where a send starts, never in Top Tokens, never funds arriving,
 /// never in the picker's main list.
 final class DyorCoinWiringTests: XCTestCase {
     private let creator = Address(literal: "0x6115cAF237026B45B037191B20056d1e4AfAfFa3")
@@ -111,29 +111,20 @@ final class DyorCoinWiringTests: XCTestCase {
 
     // MARK: The app's wiring
 
-    /// The app's sources (ios/DyorHQ), whitespace squeezed to single spaces, or a skip when this checkout has only the
-    /// package.
-    private static func app() throws -> URL {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        return app
+    /// The app's file at `path` under ios/DyorHQ, whitespace squeezed to single spaces, or a skip when this checkout
+    /// has only the package.
+    private static func source(_ path: String) throws -> String {
+        AppSource.squeezed(try AppSource.app(path))
     }
 
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-
-    private static func source(_ path: String) throws -> String {
-        squeezed(try String(contentsOf: try app().appendingPathComponent(path), encoding: .utf8))
+    /// The app file that declares the type `name` (`AppSource.declaration(of:)`), whitespace squeezed to single spaces.
+    private static func source(declaring name: String) throws -> String {
+        AppSource.squeezed(try AppSource.declaration(of: name).text)
     }
 
     /// Every Swift file of the app, by its path under ios/DyorHQ, squeezed.
     private static func sources() throws -> [(path: String, text: String)] {
-        let root = try app()
-        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
-        return try files.filter { $0.pathExtension == "swift" }.map { file in
-            (String(file.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1)), squeezed(try String(contentsOf: file, encoding: .utf8)))
-        }
+        try AppSource.allAppFiles().map { (path: $0.path, text: AppSource.squeezed($0.text)) }
     }
 
     /// The text of `source` from `start` to `end`.
@@ -143,11 +134,16 @@ final class DyorCoinWiringTests: XCTestCase {
         return String(source[from.lowerBound..<to.lowerBound])
     }
 
+    /// The text of `source` from `start` to its end.
+    private static func from(_ source: String, _ start: String) throws -> String {
+        String(source[try XCTUnwrap(source.range(of: start), start).lowerBound...])
+    }
+
     /// Top Tokens and the Add funds card's "funds arriving" go by the token store's Unverified mark alone, which a DyorHQ
     /// label never changes: only the wallet's own coins are taken out of it, as chosen.
     func testAReceivedDyorHQCoinNeverRanksInTopTokensNorCountsAsArrivingFunds() throws {
-        let home = try Self.source("Home/HomeView.swift")
-        let model = try Self.between(home, "final class HomeModel {", "struct TokenDetailView: View {")
+        let home = try Self.source(declaring: "HomeModel")
+        let model = try Self.from(home, "final class HomeModel {")
         let top = try Self.between(model, "func topTokens(_ tab: HomeTokenTab) -> [MarketRow] {", "private var discoveredFor")
         XCTAssertTrue(top.contains("let priced = rows.filter { $0.usd != nil && !unverified.contains($0.id) }"))
         XCTAssertFalse(top.contains("dyorCoins") || top.contains("badge"), "no label decides what ranks")
@@ -176,7 +172,7 @@ final class DyorCoinWiringTests: XCTestCase {
     /// wallet's tokens (whose labels follow as the coins model re-renders the rows), and only the own-coin mark waits for
     /// that proof: the reads, the proof among them, all answer before it.
     func testHomesRowsNeverWaitOnTheRegistrysIngests() throws {
-        let home = try Self.source("Home/HomeView.swift")
+        let home = try Self.source(declaring: "HomeModel")
         let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// One of `load`'s reads, as it answers.")
         let proof = try XCTUnwrap(load.range(of: "group.addTask { await env.dyorCoins.prove(tokens); return .proven }"))
         let rows = try XCTUnwrap(load.range(of: "if stands, balancesIn { publishSpot("))
@@ -194,7 +190,7 @@ final class DyorCoinWiringTests: XCTestCase {
     /// Home marks the coins the registry says this wallet made as chosen through the helper the Portfolio and the Send
     /// sheet use, before it reads the Unverified mark it shows and ranks by.
     func testHomeMarksTheWalletsOwnCoinsThroughTheSharedHelper() throws {
-        let home = try Self.source("Home/HomeView.swift")
+        let home = try Self.source(declaring: "HomeModel")
         let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// The wallet's Moments stakes")
         let own = try XCTUnwrap(load.range(of: "let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)"))
         let mark = try XCTUnwrap(load.range(of: "if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }"))
@@ -247,8 +243,7 @@ final class DyorCoinWiringTests: XCTestCase {
         // The pipeline's erase is synchronous and takes everything: the epoch first (nothing a load under way finishes is
         // kept), memory, the fetched bytes, both kinds of miss, every warm-up (cancelled, queued or under way), and the
         // folder.
-        let pipeline = Self.squeezed(try String(contentsOf: try Self.app().deletingLastPathComponent()
-            .appendingPathComponent("DyorKit/Sources/DyorKit/Core/ImagePipeline.swift"), encoding: .utf8))
+        let pipeline = AppSource.squeezed(try AppSource.kit("Core/ImagePipeline.swift"))
         XCTAssertTrue(pipeline.contains("public func removeAll() { epoch.advance() memory.removeAllObjects() bytes.removeAllObjects() "
             + "misses = RecentMisses() prefetchMisses = RecentMisses() for warming in prefetching.values { warming.task.cancel() } prefetching = [:] "
             + "if let directory = disk.directory { ImageDiskCache.discardFiles(at: directory) } }"))
@@ -259,9 +254,9 @@ final class DyorCoinWiringTests: XCTestCase {
     /// the profile shows; and a picture with no letters to stand in for it waits a moment before its spinner, so one kept
     /// on the phone never flashes one.
     func testPicturesKeptOrJustUploadedPaintWithoutASpinner() throws {
-        let app = Self.squeezed(try Self.source("App/DyorHQApp.swift"))
+        let app = AppSource.squeezed(try Self.source("App/DyorHQApp.swift"))
         XCTAssertTrue(app.contains("Notifications.configure() // The image cache's index is read off the main thread now, before the first screen asks it for a picture. RemoteImageLoader.shared.prepare() return true"))
-        let social = Self.squeezed(try Self.source("Social/SocialSession.swift"))
+        let social = AppSource.squeezed(try Self.source("Social/SocialSession.swift"))
         let upload = try Self.between(social, "func uploadAvatar(jpeg: Data) async throws {", "/// A public DyorHQ profile row.")
         let seeded = try XCTUnwrap(upload.range(of: "if let shown = URL(string: updated.avatar_url ?? cacheBusted) { RemoteImageLoader.shared.seed(jpeg, for: [RemoteImageSource(url: shown)]) }"))
         XCTAssertLessThan(seeded.upperBound, try XCTUnwrap(upload.range(of: "profile = updated")).lowerBound, "seeded before the profile shows the new link")
@@ -270,10 +265,10 @@ final class DyorCoinWiringTests: XCTestCase {
         }
         XCTAssertTrue(try Self.source("Portfolio/AssetsModel.swift").contains("if loading { ImageLoadingSpinner() } else { Image(systemName: \"photo\").foregroundStyle(.secondary) }"))
         for file in try Self.sources() where file.text.contains("RemoteImage(") {
-            XCTAssertFalse(Self.squeezed(file.text).contains("if loading { ProgressView()"), "\(file.path): a spinner at once")
-            XCTAssertFalse(Self.squeezed(file.text).contains("if loading { ZStack { Color(.tertiarySystemFill); ProgressView()"), "\(file.path): a spinner at once")
+            XCTAssertFalse(AppSource.squeezed(file.text).contains("if loading { ProgressView()"), "\(file.path): a spinner at once")
+            XCTAssertFalse(AppSource.squeezed(file.text).contains("if loading { ZStack { Color(.tertiarySystemFill); ProgressView()"), "\(file.path): a spinner at once")
         }
-        let image = Self.squeezed(try Self.source("Design/RemoteImage.swift"))
+        let image = AppSource.squeezed(try Self.source("Design/RemoteImage.swift"))
         XCTAssertTrue(image.contains(".task { if await RemoteImageWait.graceElapses(RemoteImageWait.spinnerDelay) { spinning = true } }"))
         // The first frame: this picture's from memory whatever the view held; the stand-in only for this picture.
         XCTAssertTrue(image.contains("RemoteImageWait.drawn(held: image, heldKey: imageKey, key: key) { RemoteImageLoader.shared.memoryImage(sources, bucket: bucket)?.image }"))
@@ -316,10 +311,10 @@ final class DyorCoinWiringTests: XCTestCase {
         for file in files {
             for read in reads { where_[file.path, default: 0] += file.text.components(separatedBy: read).count - 1 }
         }
-        XCTAssertEqual(where_.filter { $0.value > 0 }.keys.sorted(), ["App/RootView.swift", "Home/HomeView.swift", "Launchpad/LaunchpadView.swift",
+        XCTAssertEqual(where_.filter { $0.value > 0 }.keys.sorted(), ["App/RootView.swift", "Home/HomeModel.swift", "Launchpad/CreateLaunchView.swift",
                                                                      "Moments/CreateMomentView.swift", "Portfolio/AssetsModel.swift", "Wallet/WalletTokens.swift"])
-        let home = try Self.source("Home/HomeView.swift")
-        let homeModel = try Self.between(home, "final class HomeModel {", "struct TokenDetailView: View {")
+        let home = AppSource.squeezed(try AppSource.appFiles(AppSource.homeViewFiles))
+        let homeModel = try Self.from(try Self.source(declaring: "HomeModel"), "final class HomeModel {")
         for read in reads { XCTAssertEqual(home.components(separatedBy: read).count, homeModel.components(separatedBy: read).count, "Home reads only in its model's load: \(read)") }
         let assets = try Self.source("Portfolio/AssetsModel.swift")
         let assetsModel = try Self.between(assets, "final class AssetsModel {", "struct AssetsCard: View {")
@@ -328,7 +323,7 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertTrue(root.contains(".task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }"))
         XCTAssertTrue(model.contains("await registry.refreshIfStale(maxAge: Self.refreshInterval)"))
         XCTAssertTrue(model.contains("static let refreshInterval: TimeInterval = 300"))
-        for path in ["Launchpad/LaunchpadView.swift", "Moments/CreateMomentView.swift"] {
+        for path in ["Launchpad/CreateLaunchView.swift", "Moments/CreateMomentView.swift"] {
             let text = try Self.source(path)
             let settled = try XCTUnwrap(text.range(of: "Task { [coins = env.dyorCoins] in await coins.refresh() }"), path)
             let completed = try XCTUnwrap(text.range(of: "onCompleted: { hash in", options: .backwards, range: text.startIndex..<settled.lowerBound), path)
@@ -396,7 +391,7 @@ final class DyorCoinWiringTests: XCTestCase {
         let ui = try Self.source("Moments/MomentsUI.swift")
         XCTAssertTrue(ui.contains(".overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator) }"), "the card, a column wide")
         XCTAssertTrue(ui.contains("RemoteImageLoader.shared.prefetch(imageSources(provenance: info.provenance, creator: info.moment.creator), bucket: ImageSizeBucket.bucket(points: side), caps: caps)"))
-        let launchpad = try Self.source("Launchpad/LaunchpadView.swift")
+        let launchpad = AppSource.squeezed(try AppSource.appFiles(AppSource.launchpadViewFiles))
         XCTAssertEqual(launchpad.components(separatedBy: "{ LaunchCard(launch: launch) } .buttonStyle(.plain) .onAppear { prefetch(after: launch, in: coins) }").count - 1, 2,
                        "every section's grid")
         XCTAssertEqual(launchpad.components(separatedBy: "{ LaunchCard(launch: launch) }").count - 1, 2)
@@ -413,8 +408,8 @@ final class DyorCoinWiringTests: XCTestCase {
     /// The token page shows the coin's logo at 44 pt, and for a DyorHQ coin where it was launched in place of the
     /// Unverified card; a look-alike keeps its warning, before anything else.
     func testTheTokenPageSaysWhereADyorHQCoinWasLaunched() throws {
-        let home = try Self.source("Home/HomeView.swift")
-        let page = try Self.between(home, "struct TokenDetailView: View {", "struct PriceChart: View {")
+        let home = try Self.source(declaring: "TokenDetailView")
+        let page = try Self.from(home, "struct TokenDetailView: View {")
         XCTAssertTrue(page.contains("TokenLogo(token: row.token, size: 44)"))
         XCTAssertTrue(page.contains("private var badge: TokenBadge { env.dyorCoins.badge(row.token, receivedUnasked: received) }"))
         let imitation = try XCTUnwrap(page.range(of: "if badge.isImitation, let title = badge.title {"))
@@ -429,10 +424,22 @@ final class DyorCoinWiringTests: XCTestCase {
         }
     }
 
+    /// The launch logo's upload reads the signed-in wallet once, as every other upload does: read twice, on two hops to
+    /// the Supabase client, a session that ended in between crashed the launch on a force unwrap instead of saying the
+    /// wallet isn't signed in (`SupabaseError.notSignedIn`, which the create form shows).
+    func testTheLogoUploadReadsTheSignedInWalletOnce() throws {
+        let social = try Self.source("Social/SocialSession.swift")
+        let upload = try Self.between(social, "func uploadLaunchImage(jpeg: Data) async throws -> URL {", "struct MomentUpload: Sendable {")
+        XCTAssertTrue(upload.contains("guard let wallet = await client.signedInWallet else { throw SupabaseError.notSignedIn } let name = UUID().uuidString.lowercased()"))
+        for file in try Self.sources() {
+            XCTAssertFalse(file.text.contains("signedInWallet!"), "\(file.path): the session can end between two reads")
+        }
+    }
+
     /// The create forms say the guard's refusal under the field it is about and keep Review off; a launch's name is held to
     /// 32 characters, a Moment's to 48. The upload is the middle 512-pixel square, under the object name migration 26 pins.
     func testTheCreateFormsSayTheGuard() throws {
-        let launchpad = try Self.source("Launchpad/LaunchpadView.swift")
+        let launchpad = try Self.source("Launchpad/CreateLaunchView.swift")
         let create = try Self.between(launchpad, "struct CreateLaunchView: View {", "private struct LaunchPreviewCard")
         XCTAssertTrue(create.contains("SymbolSafety.createRefusal(name: name.trimmingCharacters(in: .whitespaces), symbol: symbol, maxName: SymbolSafety.maxLaunchNameLength)"))
         XCTAssertTrue(create.contains("private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid && refusal == nil }"))

@@ -196,11 +196,11 @@ enum LaunchpadABI {
     // MARK: Encoding
 
     static func calldata(_ signature: String, _ args: [ABIValue] = []) -> Data {
-        do { return try ABI.encodeCall(signature, args) } catch { preconditionFailure("Launchpad calldata for \(signature) failed to encode: \(error)") }
+        ABI.fixedCalldata(signature, args, context: "Launchpad")
     }
 
     static func call(_ to: Address, _ signature: String, _ args: [ABIValue] = [], returns: String) -> ContractCall {
-        do { return try ContractCall(to: to, signature, args, returns: returns) } catch { preconditionFailure("Launchpad call \(signature) failed to encode: \(error)") }
+        ContractCall.fixed(to: to, signature, args, returns: returns, context: "Launchpad")
     }
 
     static func types(_ list: String) -> [ABIType] {
@@ -279,6 +279,19 @@ enum LaunchpadABI {
 
     /// The `getLaunchedToken` return type for a factory's record layout.
     static func launchedTokenReturns(legacy: Bool) -> String { legacy ? legacyLaunchedTokenTuple : launchedTokenTuple }
+
+    /// `factory`'s `getLaunchedToken(token)`, its record read in that factory's layout (`legacy`: the 16-field one).
+    static func launchRecordCall(_ token: Address, factory: Address, legacy: Bool) -> ContractCall {
+        call(factory, Factory.getLaunchedToken, [.address(token)], returns: launchedTokenReturns(legacy: legacy))
+    }
+
+    /// `stack`'s factory's `getLaunchedToken(token)`, in that stack's record layout.
+    static func launchRecordCall(_ token: Address, stack: LaunchpadAddresses) -> ContractCall {
+        launchRecordCall(token, factory: stack.factory, legacy: stack.generation.legacyRecord)
+    }
+
+    /// `factory`'s `launchCount()`.
+    static func launchCountCall(_ factory: Address) -> ContractCall { call(factory, Factory.launchCount, returns: "uint256") }
 
     struct LaunchConfig {
         let supply: BigUInt

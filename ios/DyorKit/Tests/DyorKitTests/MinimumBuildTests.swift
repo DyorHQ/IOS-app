@@ -1,7 +1,7 @@
 import XCTest
 @testable import DyorKit
 
-/// The minimum supported iOS build (security audit 2026-09-26, GP-2): the public `app_config` row 'ios' the app reads
+/// The minimum supported iOS build: the public `app_config` row 'ios' the app reads
 /// with the publishable key, and how it fails open.
 final class MinimumBuildTests: XCTestCase {
     private let base = "https://fmnjqrguvopusfufmirs.supabase.co"

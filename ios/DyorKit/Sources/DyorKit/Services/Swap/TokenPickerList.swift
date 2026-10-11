@@ -2,7 +2,7 @@ import BigInt
 import Foundation
 
 /// What the token picker lists (Swap's, and Home's search, which shares it): the main list, never a token the wallet was
-/// sent rather than chose (`KnownTokenStore.unverified`, security audit 2026-09-26, IOST-12), and the received tokens a
+/// sent rather than chose (`KnownTokenStore.unverified`), and the received tokens a
 /// search matches, in sections of their own: the DyorHQ coins that show their DyorHQ label (`TokenBadge.isDyorHQ`) under
 /// "DyorHQ coins in your wallet", every other one under "Unverified". A received DyorHQ coin never enters the main list
 /// (owner decision 4): the tokens the wallet holds float to its top, so any coin airdropped to the wallet would come

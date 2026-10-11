@@ -308,10 +308,7 @@ final class ServerHistorySyncTests: XCTestCase {
         XCTAssertEqual(kept.spotCheckedAt(other), day, "another wallet's stays")
         XCTAssertEqual(ServerHistoryDefaults.distrustKey(wallet), "serverHistory.v1.distrustedUntil.\(wallet.hex.lowercased())")
 
-        let theme = try DocsLinksTests.appSource("Design/Theme.swift")
-        let earlierRun = try XCTUnwrap(theme.range(of: "let earlierRun = [")).upperBound
-        let quotesAndSpace = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\""))
-        let prefixes = theme[earlierRun...].prefix { $0 != "]" }.split(separator: ",").map { $0.trimmingCharacters(in: quotesAndSpace) }
+        let prefixes = AppLockStore.earlierRunPrefixes
         XCTAssertTrue(prefixes.contains("settings.") && prefixes.contains("perp."), "\(prefixes)")
         for key in [ServerHistoryDefaults.offKey, ServerHistoryDefaults.epochKey, ServerHistoryDefaults.distrustKey(wallet), ServerHistoryDefaults.checkedKey(wallet)] {
             for prefix in prefixes { XCTAssertFalse(key.hasPrefix(prefix), "\(key) would mark a new install as earlier (\(prefix))") }
@@ -797,7 +794,7 @@ final class ServerHistorySyncTests: XCTestCase {
     /// bounded time; publishes what it took in at once; polls beside the rounds; runs the day's spot check beside them, and
     /// starts the rounds over when it fails; and reads again after a return from the background and an epoch reset.
     func testTheHistoryModelWiresTheServersHistory() throws {
-        let model = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
+        let model = try AppSource.app("Wallet/HistoryModel.swift")
         XCTAssertTrue(model.contains("""
                     if serverReadDue {
                         serverReadDue = false
@@ -847,7 +844,7 @@ final class ServerHistorySyncTests: XCTestCase {
         XCTAssertTrue(model.contains("let rounds = roundsPublished, published = version"))
         XCTAssertTrue(model.contains("guard let self, self.wallet == wallet, roundsPublished == rounds else { return }\n            guard version == published else { rebuild(env: env); return }\n            publish(completed, wallet: wallet, env: env)"))
 
-        let root = try DocsLinksTests.appSource("App/RootView.swift")
+        let root = try AppSource.app("App/RootView.swift")
         let background = try XCTUnwrap(root.range(of: "if phase == .background {"))
         let active = try XCTUnwrap(root.range(of: "if phase == .active {", range: background.upperBound..<root.endIndex))
         XCTAssertTrue(root[background.upperBound..<active.lowerBound].contains("env.history.enteredBackground()"))
@@ -857,12 +854,12 @@ final class ServerHistorySyncTests: XCTestCase {
     /// An erase of this device's data — Delete Account and Forget This Device alike — forgets what the server's history
     /// keeps of the wallet with its history, before UserDefaults is wiped whole.
     func testAnEraseForgetsWhatTheServersHistoryKept() throws {
-        let deletion = try DocsLinksTests.appSource("Profile/AccountDeletion.swift")
+        let deletion = try AppSource.app("Profile/AccountDeletion.swift")
         XCTAssertEqual(deletion.components(separatedBy: "await env.walletHistory.forget(wallet: account.address)\n        await env.serverHistory?.forget(wallet: account.address)\n        await session.eraseLocalData()").count - 1, 1)
         XCTAssertEqual(deletion.components(separatedBy: "await env.walletHistory.forget(wallet: address)\n        await env.serverHistory?.forget(wallet: address)\n        await session.eraseLocalData()").count - 1, 1)
-        let session = try DocsLinksTests.appSource("Wallet/Session.swift")
+        let session = try AppSource.app("Wallet/Session.swift")
         XCTAssertTrue(session.contains("AppLockStore.erase(UserDefaults.standard, domain: bundle, canAuthenticateOwner: BiometricGate.canAuthenticateOwner)"), "every key with the rest")
-        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let environment = try AppSource.app("App/AppEnvironment.swift")
         XCTAssertTrue(environment.contains("let serverHistoryDefaults = ServerHistoryDefaults()"), "the standard defaults, which the erase wipes")
     }
 }

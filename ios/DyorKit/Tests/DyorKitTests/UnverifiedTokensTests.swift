@@ -1,8 +1,7 @@
 import XCTest
 @testable import DyorKit
 
-/// Tokens stored by builds that didn't mark discovered tokens are marked Unverified once, on upgrade (security audit
-/// 2026-09-26, IOST-12).
+/// Tokens stored by builds that didn't mark discovered tokens are marked Unverified once, on upgrade.
 final class UnverifiedTokensTests: XCTestCase {
     func testEveryStoredTokenButNativeAndCuratedIsMarkedOnUpgrade() {
         let fakeUSDC = Token(address: Address(literal: "0x1111111111111111111111111111111111111111"), symbol: "USDC", name: "USD Coin", decimals: 6)

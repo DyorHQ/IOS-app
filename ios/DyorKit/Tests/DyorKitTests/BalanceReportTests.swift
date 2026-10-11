@@ -79,11 +79,7 @@ final class BalanceReportTests: XCTestCase {
     /// The sources wire it in: the wallet's token list reads its balances this way, says when part of them couldn't be
     /// read, and throws only when none could be.
     func testTheWalletsTokenListReadsItsBalancesThisWay() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let source = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
+        let source = try AppSource.app("Wallet/WalletTokens.swift")
         XCTAssertTrue(source.contains("let report = await ERC20.balanceReport(of: universe, owner: address, rpc: env.rpc, multicall: env.multicall)"))
         XCTAssertTrue(source.contains("if report.balances.isEmpty, !report.unread.isEmpty || !report.failed.isEmpty { throw BalancesUnread() }"))
         XCTAssertTrue(source.contains("let balancesComplete = report.unread.isEmpty && report.failed.isDisjoint(with: mustRead)"))

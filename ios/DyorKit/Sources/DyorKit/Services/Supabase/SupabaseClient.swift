@@ -42,7 +42,7 @@ public enum SupabaseError: LocalizedError {
     }
 
     /// Whether `error` only means the backend couldn't be reached or answered with a server error (5xx), as opposed
-    /// to refusing the request: nothing the user typed was judged, so a password is not wrong because of it (GE-6).
+    /// to refusing the request: nothing the user typed was judged, so a password is not wrong because of it.
     public static func isOutage(_ error: Error) -> Bool {
         if case .http(let code, _)? = error as? SupabaseError { return (500...599).contains(code) }
         guard let url = error as? URLError else { return false }
@@ -119,7 +119,7 @@ public actor SupabaseClient {
     public func signOut() { current = nil }
 
     /// Signs out only while the session is the one holding `accessToken`: a sign-out that finishes after a newer
-    /// sign-in has been adopted leaves that one alone (security audit 2026-09-26, RS-6).
+    /// sign-in has been adopted leaves that one alone.
     public func signOut(ifAccessToken accessToken: String) {
         if current?.accessToken == accessToken { current = nil }
     }
@@ -144,7 +144,7 @@ public actor SupabaseClient {
         return created
     }
 
-    /// The exact EIP-4361 (Sign-In with Ethereum) message wallet-auth verifies (security audit 2026-09-26, IOSK-7): bound
+    /// The exact EIP-4361 (Sign-In with Ethereum) message wallet-auth verifies: bound
     /// to DyorHQ's domain and to Monad, around the server's nonce, and valid for ten minutes from `issuedAt` (unix
     /// milliseconds). The server's parse is anchored, so not a byte may differ: `address` is the wallet with its EIP-55
     /// checksum, lines are separated by a single "\n", and there is no trailing newline.
@@ -271,18 +271,11 @@ public actor SupabaseClient {
         return (MinimumBuild.parse(data), RemoteFlags.parse(data))
     }
 
-    /// Calls a Postgres function through PostgREST RPC with the current session (or the publishable key).
-    public func rpc<T: Decodable>(_ function: String, _ arguments: [String: String] = [:], authed: Bool = false) async throws -> T {
-        let body = try JSONSerialization.data(withJSONObject: arguments)
-        let data = try await send(method: "POST", path: "rest/v1/rpc/\(function)", query: [], body: body, prefer: nil, authed: authed)
-        return try decode(data, as: T.self)
-    }
-
-    /// `rpc` for a function whose arguments aren't all text — block numbers, a flag, a null (`history_read`'s
-    /// `p_from_block`, `p_meta_only`) — as JSON values: a whole number goes as digits, never "1.0", so PostgREST hands a
-    /// `bigint` argument its value; and the answer as it came, for the caller to parse (`HistoryServerClient`). The same
-    /// request as `rpc`: the publishable key, or the session when `authed`. Throws `SupabaseError.http` with the status and
-    /// body for anything but a 2xx, and the transport's error when there is no answer.
+    /// Calls a Postgres function through PostgREST RPC, its arguments as JSON values — block numbers, a flag, a null
+    /// (`history_read`'s `p_from_block`, `p_meta_only`): a whole number goes as digits, never "1.0", so PostgREST hands a
+    /// `bigint` argument its value; and the answer as it came, for the caller to parse (`HistoryServerClient`). With the
+    /// publishable key, or the session when `authed`. Throws `SupabaseError.http` with the status and body for anything but
+    /// a 2xx, and the transport's error when there is no answer.
     public func rpcJSON(name: String, body: [String: JSON], authed: Bool = false) async throws -> Data {
         let encoded = try JSONEncoder().encode(body)
         return try await send(method: "POST", path: "rest/v1/rpc/\(name)", query: [], body: encoded, prefer: nil, authed: authed)
@@ -353,7 +346,7 @@ public actor SupabaseClient {
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue(upsert ? "true" : "false", forHTTPHeaderField: "x-upsert")
         if let cacheControl = Self.cacheControl(forBucket: bucket) { request.setValue(cacheControl, forHTTPHeaderField: "Cache-Control") }
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
         return request
     }
@@ -378,7 +371,7 @@ public actor SupabaseClient {
             request.setValue(anonKey, forHTTPHeaderField: "apikey")
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+            request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
             request.timeoutInterval = 30
             return request
         }
@@ -404,13 +397,13 @@ public actor SupabaseClient {
 
     /// How long the app waits for `pin-media`. The function answers within its own 20 s budget (BUDGET_MS in
     /// supabase/functions/pin-media/index.ts) and sends nothing before it answers, so this bounds the whole call and
-    /// leaves room for a cold start and the network (security audit 2026-09-26, RW-9).
+    /// leaves room for a cold start and the network.
     public static let pinMediaTimeout: TimeInterval = 25
 
     /// Pins an already-uploaded public object to IPFS through the `pin-media` Edge Function (Pinata) and returns its
     /// `ipfs://<cid>` URI, for writing on-chain as a Moment's permanent media pointer. Requires a session; throws if
     /// the function is unavailable, busy (`rateLimited`) or doesn't answer in `pinMediaTimeout` — the caller tells the
-    /// user and never writes the https URL on-chain in its place on its own (RI-9).
+    /// user and never writes the https URL on-chain in its place on its own.
     public func pinToIPFS(bucket: String, path: String) async throws -> String {
         guard currentSession != nil else { throw SupabaseError.notSignedIn }
         let body = try JSONSerialization.data(withJSONObject: ["bucket": bucket, "path": path])
@@ -517,7 +510,7 @@ public actor SupabaseClient {
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -550,7 +543,7 @@ public actor SupabaseClient {
             break
         }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if let prefer { request.setValue(prefer, forHTTPHeaderField: "Prefer") }
         request.timeoutInterval = timeout

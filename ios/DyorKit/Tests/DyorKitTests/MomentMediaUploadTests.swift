@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// Moment media goes to a write-once bucket and is pinned before it goes on-chain (security audit 2026-09-26, PR-2,
-/// RI-9, RW-9): uploads never overwrite, an object already there reads as uploaded, and a pin that fails, is refused
+/// Moment media goes to a write-once bucket and is pinned before it goes on-chain: uploads
+/// never overwrite, an object already there reads as uploaded, and a pin that fails, is refused
 /// or times out comes back as an error the app can show.
 final class MomentMediaUploadTests: XCTestCase {
     private let base = URL(string: "https://project.supabase.co")!
@@ -63,7 +63,7 @@ final class MomentMediaUploadTests: XCTestCase {
     func testANewMomentPhotoIsEncodedSmallerOffTheMainThread() throws {
         XCTAssertEqual(MomentsMath.photoMaxPixels, 2048)
         XCTAssertEqual(MomentsMath.photoJPEGQuality, 0.85)
-        let create = try DocsLinksTests.appSource("Moments/CreateMomentView.swift").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let create = AppSource.squeezed(try AppSource.app("Moments/CreateMomentView.swift"))
         let photo = try XCTUnwrap(create.range(of: "let photo = await Task.detached(priority: .userInitiated, operation: { () -> (jpeg: Data, hash: Data, preview: CGImage?)? in"))
         let encode = try XCTUnwrap(create.range(of: "guard let jpeg = UIImage(data: data)?.avatarJPEG(maxDimension: CGFloat(MomentsMath.photoMaxPixels), quality: CGFloat(MomentsMath.photoJPEGQuality))"))
         let hashed = try XCTUnwrap(create.range(of: "return (jpeg, Keccak.hash256(jpeg), preview) }).value else {"))

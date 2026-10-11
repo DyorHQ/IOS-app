@@ -64,9 +64,7 @@ final class HistoryServerClientTests: XCTestCase {
             struct Scan: Decodable { let id: String; let walletTopic: Int; let addresses: [String]; let events: [Event] }
             let scans: [Scan]
         }
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { root.deleteLastPathComponent() }
-        let spec = try JSONDecoder().decode(Spec.self, from: Data(contentsOf: root.appendingPathComponent("supabase/functions/_shared/history-scans.json")))
+        let spec = try JSONDecoder().decode(Spec.self, from: Data(contentsOf: AppSource.root.appendingPathComponent("supabase/functions/_shared/history-scans.json")))
         let app = Dictionary(uniqueKeysWithValues: HistoryDocs.scans().map { ($0.id, $0) })
         XCTAssertEqual(Set(spec.scans.map(\.id)), Set(HistoryServerClient.scanOrder))
         for scan in spec.scans {
@@ -594,7 +592,7 @@ final class HistoryServerClientTests: XCTestCase {
     // MARK: The request
 
     /// `rpcJSON` posts the arguments as JSON — a block number as digits, never "1.0", a flag as a boolean, a null — with the
-    /// publishable key, as `rpc` does, and surfaces a status other than 2xx with its body; the client sends the wallet
+    /// publishable key, and surfaces a status other than 2xx with its body; the client sends the wallet
     /// lowercase and reads through it, a status other than 2xx failing the read open.
     func testTheRequestGoesAsJSONToTheRPC() async throws {
         let base = "https://fmnjqrguvopusfufmirs.supabase.co"

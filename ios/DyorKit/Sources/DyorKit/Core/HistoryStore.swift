@@ -674,7 +674,7 @@ extension HistoryEntry {
                 logs.append(log)
             }
         }
-        logs.sort { a, b in a.blockNumber == b.blockNumber ? a.logIndex < b.logIndex : a.blockNumber < b.blockNumber }
+        logs.sort(by: Log.chainOrder)
     }
 
     /// Drops what lies below `floor`, and the oldest logs past the cap with the coverage they came from: from then on

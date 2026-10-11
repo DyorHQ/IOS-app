@@ -142,7 +142,6 @@ enum MomentsABI {
         static let expired = "Expired(uint256,uint256,uint256,uint256)"
         static let feeTaken = "FeeTaken(uint256,uint256,uint256,uint256,uint256)"
         static let buyback = "Buyback(uint256,uint256,uint256,uint256,uint256,uint128,uint256)"
-        static let transfer = "Transfer(address,address,uint256)"
 
         static let publishedTopic = ABI.eventTopic(published)
         static let collectedTopic = ABI.eventTopic(collected)
@@ -153,7 +152,8 @@ enum MomentsABI {
         static let expiredTopic = ABI.eventTopic(expired)
         static let feeTakenTopic = ABI.eventTopic(feeTaken)
         static let buybackTopic = ABI.eventTopic(buyback)
-        static let transferTopic = ABI.eventTopic(transfer)
+        /// A Moment coin's ERC-20 `Transfer`.
+        static let transferTopic = ERC20.transferTopic
     }
 
     struct PublishedEvent {
@@ -232,11 +232,11 @@ enum MomentsABI {
     // MARK: Encoding helpers
 
     static func calldata(_ signature: String, _ args: [ABIValue] = []) -> Data {
-        do { return try ABI.encodeCall(signature, args) } catch { preconditionFailure("Moments calldata \(signature) failed to encode: \(error)") }
+        ABI.fixedCalldata(signature, args, context: "Moments")
     }
 
     static func call(_ to: Address, _ signature: String, _ args: [ABIValue] = [], returns: String, strings: ABI.StringDecoding = .lossy) -> ContractCall {
-        do { return try ContractCall(to: to, signature, args, returns: returns, strings: strings) } catch { preconditionFailure("Moments call \(signature) failed to encode: \(error)") }
+        ContractCall.fixed(to: to, signature, args, returns: returns, strings: strings, context: "Moments")
     }
 
     static func int(_ value: ABIValue) -> Int { Int(clamping: value.uint) }
@@ -337,9 +337,10 @@ enum MomentsABI {
 
 // MARK: - Permit2 typed data
 
-/// Uniswap Permit2 `SignatureTransfer`: a collect pays USDC with a one-time approval of Permit2 and then one
-/// EIP-712 signature per collect. The digest here matches viem's `hashTypedData` for the same message (pinned in
-/// the tests), which is what the web app signs.
+/// Uniswap Permit2 `SignatureTransfer` typed data for the collect contract's `collectWithPermit2`: one EIP-712 signature
+/// per collect over a Permit2 allowance. The digest here matches viem's `hashTypedData` for the same message (pinned in
+/// the tests). The app doesn't collect this way: it approves the exact USDC a collect pulls
+/// (`MomentsService.collectWithApprovalPlan`).
 public enum Permit2Signature {
     public struct Permit: Sendable, Hashable {
         public let token: Address

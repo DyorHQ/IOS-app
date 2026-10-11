@@ -67,8 +67,8 @@ public enum ImageAttemptResult: Sendable {
 
 /// What a load in flight is allowed to do once every view waiting on it has left (`ImagePipeline`): a download from
 /// DyorHQ's own host or one of the app's gateways already under way finishes into the cache (`markTrusted`), so a card
-/// scrolled away and back doesn't start again from nothing; anything else is cancelled (security audit 2026-09-26,
-/// RI-5). Once abandoned, its race starts nothing new; if that download then fails while a view has come back to the
+/// scrolled away and back doesn't start again from nothing; anything else is cancelled. Once
+/// abandoned, its race starts nothing new; if that download then fails while a view has come back to the
 /// load, the pipeline starts the load again for it (`ImagePipeline`).
 public final class ImageLoadControl: @unchecked Sendable {
     private let lock = NSLock()
@@ -274,7 +274,7 @@ public struct ImageFetcher: Sendable {
     static let otherSession = RemoteMedia.makeSession(storesResponses: false)
 }
 
-/// The one way the app loads an image from a host it doesn't control (security audit 2026-09-26, RI-5): coin logos,
+/// The one way the app loads an image from a host it doesn't control: coin logos,
 /// launch and Moment artwork, avatars, NFT art, news thumbnails. A picture is its ordered sources (`ImageSourcePolicy`:
 /// DyorHQ's bucket and the fixed IPFS gateways for anything a creator wrote; a source with a `keccak` counts only while
 /// its bytes hash to it) and is shown at a size bucket (`ImageSizeBucket`).
@@ -504,7 +504,7 @@ public final class ImagePipeline {
 
     /// What a load asks, best first: each source as it is, preceded — for a load at a `render` size — by Storage's
     /// resized copy of it when it has one. A source with a `keccak` is always asked as it is: resized bytes can't be
-    /// checked against the hash, and a Moment's mirror counts only when its bytes are (security audit 2026-09-26, PR-2).
+    /// checked against the hash, and a Moment's mirror counts only when its bytes are.
     nonisolated static func asks(_ sources: [RemoteImageSource], render: Int?, policy: ImageSourcePolicy) -> [Ask] {
         sources.flatMap { source -> [Ask] in
             let original = Ask(source: source, render: nil, url: source.url)
@@ -658,7 +658,7 @@ public final class ImagePipeline {
 
     /// One view leaves (it was cancelled: scrolled away, or its picture changed). The load goes on for any other still
     /// waiting; the last one out cancels it — unless its bytes are in (decoding finishes into the cache) or a trusted
-    /// download is sending them (`ImageLoadControl.abandonIfTrusted`), which then goes on alone (RI-5: a download from
+    /// download is sending them (`ImageLoadControl.abandonIfTrusted`), which then goes on alone (a download from
     /// any other host never outlives its last view).
     private func leave(_ load: Load, loadKey: String, waiter id: UUID) {
         guard let waiter = load.waiters.removeValue(forKey: id) else { return }
@@ -846,8 +846,8 @@ public final class ImagePipeline {
     /// item on screen). From the phone when it has the picture, else the network, `prefetches` at a time app-wide, and
     /// once at a time per picture; nothing for a picture already in memory at that size and fresh, or one that failed
     /// lately. Only a picture all of whose sources may finish with nobody looking (`ImageSourcePolicy.mayFinishUnwatched`:
-    /// DyorHQ's host and the app's gateways): no other host is asked for a picture nobody is looking at (security audit
-    /// 2026-09-26, RI-5). A view that asks meanwhile joins the load; nothing is shown that a view didn't ask for.
+    /// DyorHQ's host and the app's gateways): no other host is asked for a picture nobody is looking at. A view
+    /// that asks meanwhile joins the load; nothing is shown that a view didn't ask for.
     ///
     /// Only the latest `BoardPrefetch.ahead` asked for are kept: an older one — a row the scroll has passed — is cancelled,
     /// queued or under way (its view, if it is on screen, has its own load), so after a fling the slots go to the rows
@@ -901,8 +901,8 @@ public final class ImagePipeline {
 
     /// Keeps `data` — bytes the app itself just uploaded to DyorHQ's host (a new avatar) — as the picture of `sources`,
     /// fetched now: its views draw it at once, every size decoded from these bytes (`stored`), with no read back from the
-    /// network. Only for unchecked sources on DyorHQ's host (a hash-checked source counts only for bytes that hash to it,
-    /// PR-2), and only bytes a download would pass (`RemoteMedia.inspect` under the full caps).
+    /// network. Only for unchecked sources on DyorHQ's host (a hash-checked source counts only for bytes that hash to it),
+    /// and only bytes a download would pass (`RemoteMedia.inspect` under the full caps).
     public func seed(_ data: Data, for sources: [RemoteImageSource]) {
         guard !sources.isEmpty, sources.allSatisfy({ $0.keccak == nil && policy.isFirstParty($0.url) }), data.count <= RemoteMedia.maxImageBytes,
               (try? RemoteMedia.inspect(data)) != nil else { return }

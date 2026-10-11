@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// NFT metadata and art are read only from content-addressed storage, within a size cap (security audit 2026-09-26,
-/// IOST-12): an airdropped NFT can't make the app call a host of its choosing.
+/// NFT metadata and art are read only from content-addressed storage, within a size cap: an
+/// airdropped NFT can't make the app call a host of its choosing.
 final class NFTMetadataTests: XCTestCase {
     private let cid = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
 

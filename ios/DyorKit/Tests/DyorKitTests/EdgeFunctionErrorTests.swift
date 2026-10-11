@@ -7,9 +7,7 @@ import XCTest
 final class EdgeFunctionErrorTests: XCTestCase {
     /// A function's source (supabase/functions/<name>/index.ts).
     static func function(_ name: String) throws -> String {
-        var repo = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { repo.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios → repo
-        let file = repo.appendingPathComponent("supabase/functions/\(name)/index.ts")
+        let file = AppSource.root.appendingPathComponent("supabase/functions/\(name)/index.ts")
         guard FileManager.default.fileExists(atPath: file.path) else { throw XCTSkip("supabase/functions is not in this checkout") }
         return try String(contentsOf: file, encoding: .utf8)
     }

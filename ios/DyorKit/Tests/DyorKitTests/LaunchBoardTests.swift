@@ -210,11 +210,7 @@ final class LaunchBoardTests: XCTestCase {
     /// on a failed read), and an Explore card inviting a launch when nothing is on the live curve; a card and a page carry
     /// "Retired launchpad" only for a sell-only coin, and the old copy that sent holders to the board is gone.
     func testTheBoardHidesSellOnlyCoinsAndShowsTheirHolders() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let source = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadView.swift"), encoding: .utf8)
+        let source = try AppSource.appFiles(AppSource.launchpadViewFiles)
 
         // The holder section: after the public sections, searched, counted in the empty check.
         let refund = try XCTUnwrap(source.range(of: "section(title: \"Refund & Migrating\""))
@@ -233,8 +229,9 @@ final class LaunchBoardTests: XCTestCase {
         let model = try XCTUnwrap(source.range(of: "final class LaunchpadModel {"))
         let modelEnd = try XCTUnwrap(source.range(of: "struct LaunchDetailView: View {", range: model.upperBound..<source.endIndex))
         let modelSource = String(source[model.upperBound..<modelEnd.lowerBound])
-        // Then, with nothing on the board, the board saved for that same account (`restoreSaved`).
-        let cleared = try XCTUnwrap(modelSource.range(of: "if account != loadedFor {\n            heldSellOnly = []\n            heldSellOnlySavedAt = nil\n            loadedFor = account\n        }"))
+        // Then, with nothing on the board, the board saved for that same account (`restoreSaved`). The terms go with the
+        // coins: they say whether the account may launch.
+        let cleared = try XCTUnwrap(modelSource.range(of: "if account != loadedFor {\n            heldSellOnly = []\n            heldSellOnlySavedAt = nil\n            protocolInfo = nil\n            loadedFor = account\n        }"))
         let restored = try XCTUnwrap(modelSource.range(of: "restoreSaved(env: env, account: account)", range: cleared.upperBound..<modelSource.endIndex))
         XCTAssertLessThan(cleared.upperBound, restored.lowerBound, "another account's coins go first")
         let read = try XCTUnwrap(modelSource.range(of: "let listing = await env.launchpad.launchListing(limit: 60)\n        launches = listing.keeping(launches)"))
@@ -285,6 +282,31 @@ final class LaunchBoardTests: XCTestCase {
         XCTAssertFalse(source.contains("can be sold here, but not bought"))
         XCTAssertFalse(source.contains("CurveRoute.launchTab"))
         XCTAssertFalse(source.contains("struct LaunchRow"))
+    }
+
+    /// One failed read never empties what the Launch tab already showed. The board's terms stay for the Create form open
+    /// over it (`launchPlan` reads the fee, the terms hash and the blocker again before anything is signed), taken only
+    /// for the account they were read for and cleared with it. The coin page keeps the pair's last good dollar price, and
+    /// its chart, whose axis reads "$", is drawn in dollars only: a USD-stable pair at $1 by definition, read or not, any
+    /// other pair asset once its price was read, never in the pair asset under a "$" axis. The wallet's balances and
+    /// claims are the exception: a failed read hides them, since a trade or claim since may have changed them, and Your
+    /// Holdings, Max, the balance check and the claims act on them.
+    func testTheBoardAndTheCoinPageKeepTheirLastGoodReads() throws {
+        let source = AppSource.squeezed(try AppSource.appFiles(AppSource.launchpadViewFiles))
+        let model = try XCTUnwrap(source.range(of: "final class LaunchpadModel {"))
+        let page = try XCTUnwrap(source.range(of: "struct LaunchDetailView: View {", range: model.upperBound..<source.endIndex))
+        let board = String(source[model.upperBound..<page.lowerBound]), coin = String(source[page.upperBound...])
+        XCTAssertTrue(board.contains("let read = try await info if account == loadedFor { protocolInfo = read } } catch {"))
+        XCTAssertFalse(board.contains("protocolInfo = try? await info"), "a failed read emptied the Create form")
+        XCTAssertEqual(board.components(separatedBy: "protocolInfo = ").count - 1, 2, "cleared with the account, and set by a read for it")
+        XCTAssertTrue(coin.contains("if let address = session.address { account = try? await env.launchpad.accountView(launch, account: address) }"),
+                      "a failed read hides balances and claims a trade or claim may have changed")
+        XCTAssertEqual(coin.components(separatedBy: "env.launchpad.accountView(").count - 1, 1, "one read of the wallet's view, which a failure clears")
+        XCTAssertTrue(coin.contains("if let usd = await pu { pairUSD = usd }"))
+        XCTAssertTrue(coin.contains("if let unit = pairUSD ?? PriceService.definedPrices(for: [pairToken])[pairToken.address]?.usd { priceSeries = Self.priceSeries(trades: trades, launch: launch, unit: unit) }"))
+        for cleared in ["pairUSD = await pu", "unit: pairUSD ?? 1"] {
+            XCTAssertFalse(coin.contains(cleared), cleared)
+        }
     }
 }
 

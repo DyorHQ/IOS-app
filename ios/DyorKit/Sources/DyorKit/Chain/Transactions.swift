@@ -138,7 +138,7 @@ public struct TransactionSender: Sendable {
         async let fees = feeQuote()
         let gasLimit = Self.gasLimit(estimate: try await estimate)
         let (maxFee, tip, baseFee) = try await fees
-        // The RPC set every one of these: refuse, never clamp, a fee outside the chain's bounds (IOST-1).
+        // The RPC set every one of these: refuse, never clamp, a fee outside the chain's bounds.
         if let violation = NetworkFeeLimits.violation(gasLimit: gasLimit, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip, baseFee: baseFee, chainId: chainId) {
             throw TransactionError.rejected(NetworkFeeLimits.refusal(violation, gasLimit: gasLimit, maxFeePerGas: maxFee, chainId: chainId))
         }
@@ -220,7 +220,7 @@ public struct TransactionSender: Sendable {
     /// The transaction `step` sends from `owner` now, or nil when it has nothing to send: an approval the allowance
     /// already covers (a Permit2 one for at least another minute), or a call step without a request. An exact approval
     /// is sent even when a standing, effectively unlimited allowance covers it — one an earlier build or another app
-    /// left — so that allowance is replaced by the exact amount instead of staying unseen (IOST-14).
+    /// left — so that allowance is replaced by the exact amount instead of staying unseen.
     func request(for step: TransactionStep, owner: Address) async throws -> TransactionRequest? {
         switch step.kind {
         case .approve(let token, let spender, let amount):
@@ -298,7 +298,7 @@ public struct TransactionSender: Sendable {
         }
     }
 
-    /// A broadcast with no answer (PR-4). The same bytes go out again — the same transaction, never a replacement, so
+    /// A broadcast with no answer. The same bytes go out again — the same transaction, never a replacement, so
     /// it can only land once — and the hash is looked up between tries. Anything short of the network taking it or
     /// having it is `possiblySent`: the caller follows the hash and never signs this step again, since a new signature
     /// would carry the next nonce and could land the step twice.
@@ -321,7 +321,7 @@ public struct TransactionSender: Sendable {
         return false
     }
 
-    /// A node's answer that this very transaction is invalid — so no node holds it, and it can't land as signed (PR-4):
+    /// A node's answer that this very transaction is invalid — so no node holds it, and it can't land as signed:
     /// the balance can't pay for it, its gas or fee fields are out of bounds, its nonce is used, it is signed for another
     /// chain. Deliberately narrow: an error that isn't about the transaction (a gateway's "internal error" or "upstream
     /// request timeout", the client's own "Missing response", throttling) may come from a path where a node took it.

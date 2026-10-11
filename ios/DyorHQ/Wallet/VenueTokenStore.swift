@@ -7,6 +7,7 @@ import Foundation
 /// and saves it past each segment read in full.
 enum VenueTokenStore {
     private static let key = "venueTokens.v1"
+    /// When the list was last saved: still written with each save, though nothing reads it now.
     private static let stampKey = "venueTokens.v1.updatedAt"
     /// The checkpoint (`VenueTokensService.refresh`). Build 16's, `venueTokens.v1.lastBlock`, moved on past ranges its
     /// scan had left unread, so this one starts at 0: every install reads the whole history once more, in the background,
@@ -17,18 +18,12 @@ enum VenueTokenStore {
     /// What runs dropped (`VenueTokenList.encode(dropped:)`), saved with the checkpoint, so a segment left short is read on
     /// at the next launch without reading it again. Not a `venueTokens.` key either.
     private static let droppedKey = "venueScan.v2.dropped"
-    private static let ttl: TimeInterval = 86_400
 
     /// The list as saved (a JSON array of `Token`), the last block every venue has been read up to in full, so the next
     /// refresh only reads on from there (0 = never read → full history), and what runs dropped.
     static func read() -> VenueTokenList.Stored {
         VenueTokenList.Stored(list: UserDefaults.standard.data(forKey: key), checkpoint: UInt64(UserDefaults.standard.string(forKey: blockKey) ?? "") ?? 0,
                               dropped: UserDefaults.standard.data(forKey: droppedKey))
-    }
-
-    /// True when the cache is older than a day, so the caller scans the new tail.
-    static func isStale() -> Bool {
-        Date().timeIntervalSince1970 - UserDefaults.standard.double(forKey: stampKey) > ttl
     }
 
     /// Saves the list, and its checkpoint only once the list reads back as written: UserDefaults refuses a value past its

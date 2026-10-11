@@ -215,8 +215,7 @@ final class PerplTriggerTests: XCTestCase {
         let outcome = await wait.value
         XCTAssertEqual(outcome, .unconfirmed(.connectionLost))
         XCTAssertFalse(demo.hasRequestsInFlight)
-        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/DyorKit/Services/Perpl/PerplTradeClient.swift"), encoding: .utf8)
+        let source = try AppSource.kit("Services/Perpl/PerplTradeClient.swift")
         XCTAssertTrue(source.contains("precondition(!isDebugScripted, \"a scripted demo client never connects\")"))
         XCTAssertTrue(source.contains("URL(string: \"wss://perps-demo.invalid\")!"))
     }
@@ -282,7 +281,7 @@ final class PerplTriggerTests: XCTestCase {
         XCTAssertEqual(PerplTriggerCleanup.siblings(of: closed, orders: [firing, longSL], positions: []).map(\.oid), [1])
     }
 
-    // MARK: Security audit review (GT-1, GT-2, GT-3, GT-6, GT-9)
+    // MARK: Security audit review
 
     func testRestingEntryExemptsOnlyItsOwnSide() {
         let longSL = order(oid: 1, type: 3)                              // CloseLong stop on BTC, no BTC long open

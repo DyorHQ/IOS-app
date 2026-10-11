@@ -79,9 +79,7 @@ final class MeraTests: XCTestCase {
     func testRelyingPartyMatchesTheEntitlement() throws {
         XCTAssertEqual(Mera.relyingParty, "accounts.dyorhq.fun")
         XCTAssertEqual(MomentLink.host, "dyorhq.fun")
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        guard let spec = try? String(contentsOf: ios.appendingPathComponent("project.yml"), encoding: .utf8) else {
+        guard let spec = try? AppSource.repo("ios/project.yml") else {
             throw XCTSkip("ios/project.yml is not in this checkout")
         }
         let settings = spec.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
@@ -95,7 +93,7 @@ final class MeraTests: XCTestCase {
         XCTAssertEqual(items, ["webcredentials:\(Mera.relyingParty)", "applinks:\(MomentLink.host)"])
         XCTAssertFalse(settings.contains { $0.contains("mode=developer") })
         // XcodeGen writes the entitlements file from project.yml; the checked-in copy must be regenerated to match.
-        let entitlements = try String(contentsOf: ios.appendingPathComponent("DyorHQ/DyorHQ.entitlements"), encoding: .utf8)
+        let entitlements = try AppSource.repo("ios/DyorHQ/DyorHQ.entitlements")
         XCTAssertTrue(entitlements.contains("<string>webcredentials:\(Mera.relyingParty)</string>"))
         XCTAssertTrue(entitlements.contains("<string>applinks:\(MomentLink.host)</string>"))
         XCTAssertEqual(entitlements.components(separatedBy: "<string>webcredentials:").count, 2)

@@ -10,7 +10,7 @@ import Foundation
    or a symbol that isn't display-safe (`SymbolSafety`) keeps its warning whatever made it.
 
    `DyorCoinRegistry` holds them (read from the factories, kept in `DyorCoinStore`); `TokenBadge` and `CoinIcon` decide
-   what a screen shows for a token from its entry. Nothing here changes which tokens are Unverified (IOST-12): a DyorHQ
+   what a screen shows for a token from its entry. Nothing here changes which tokens are Unverified: a DyorHQ
    coin sent to a wallet unasked stays out of a send's default, Top Tokens, "funds arriving" and the picker's list. */
 
 /// One DyorHQ coin as its factory recorded it. Every field is fixed on chain once the coin exists (a launch token has

@@ -3,7 +3,7 @@ import XCTest
 @testable import DyorKit
 
 /// A feed that failed is shown as missing and asked again next time, never cached as fresh; the feeds that answered are
-/// kept for two minutes and not asked again meanwhile (security audit 2026-09-26, RS-10).
+/// kept for two minutes and not asked again meanwhile.
 final class NewsCacheTests: XCTestCase {
     private let a = NewsSource(name: "A", feed: URL(string: "https://a.example/rss")!)
     private let b = NewsSource(name: "B", feed: URL(string: "https://b.example/rss")!)

@@ -32,29 +32,11 @@ struct BridgeView: View {
                 if session.isStubAccount {
                     ContentUnavailableView(Mera.Stub.unavailableTitle, systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("This test passkey signs on the local Monad fork only. Bridging needs a real passkey on a device."))
-                } else if !model.isConfigured {
-                    ContentUnavailableView {
-                        Label("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted")
-                    } description: {
-                        Paragraph("Cross-chain bridging isn't configured in this build yet.")
-                    }
-                } else if model.needsUnlock {
-                    unlockPrompt
                 } else {
-                    form
+                    content
                 }
                 #else
-                if !model.isConfigured {
-                    ContentUnavailableView {
-                        Label("Bridge unavailable", systemImage: "point.3.connected.trianglepath.dotted")
-                    } description: {
-                        Paragraph("Cross-chain bridging isn't configured in this build yet.")
-                    }
-                } else if model.needsUnlock {
-                    unlockPrompt
-                } else {
-                    form
-                }
+                content
                 #endif
             }
             .navigationTitle(tr("Bridge"))
@@ -76,6 +58,15 @@ struct BridgeView: View {
         .sheet(isPresented: $pickingFromToken) { tokenPicker(for: model.fromChain, isFrom: true) }
         .sheet(isPresented: $pickingToToken) { tokenPicker(for: model.toChain, isFrom: false) }
         .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
+    }
+
+    /// The screen: the unlock prompt while a locked passkey account can't load the routes, else the form.
+    @ViewBuilder private var content: some View {
+        if model.needsUnlock {
+            unlockPrompt
+        } else {
+            form
+        }
     }
 
     /// A locked passkey account: one tap opens its session (the passkey prompt the person asked for), then the routes load.
@@ -297,7 +288,7 @@ struct BridgeView: View {
                 Divider()
                 summaryRow("Minimum received", model.minReceivedText ?? "—")
                 summaryRow("Total fee", model.feeText ?? "—")
-                // The source chain's own network fee for the deposit, which the bridge's fee doesn't include (IOST-1).
+                // The source chain's own network fee for the deposit, which the bridge's fee doesn't include.
                 if let fee = model.networkFee { summaryRow("Max network fee", fee.summary) }
                 summaryRow("Slippage", model.slippageText)
                 if let secs = quote.timeEstimate, secs > 0 { summaryRow("Estimated time", "≈ \(RelativeTime.seconds(Int(secs)))") }

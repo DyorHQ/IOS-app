@@ -24,7 +24,9 @@ final class ManualScanTests: XCTestCase {
         let (mh, momentsComplete) = await moments.history(account: wallet)
         print("MOMENTS collects", mh.collects.count, "claims", mh.claims.count, "publishes", mh.publishes.count, "complete", momentsComplete, "in", Date().timeIntervalSince(t2), "s")
         let t3 = Date()
-        let tokens = await WalletTokenDiscovery(logsRPC: logsRPC, multicall: multicall).heldTokens(wallet: wallet, wholeHistory: true)
+        let incoming = await logsRPC.chunkedLogsReport(address: nil, topics: [ABI.eventTopic("Transfer(address,address,uint256)"), nil, wallet.data.leftPadded(to: 32)],
+                                                       fromBlock: 0, toBlock: head)
+        let tokens = await WalletTokenDiscovery(multicall: multicall).held(wallet: wallet, incoming: incoming.logs, complete: incoming.complete).tokens
         print("TOKENS", tokens.map(\.symbol), "in", Date().timeIntervalSince(t3), "s")
     }
 }

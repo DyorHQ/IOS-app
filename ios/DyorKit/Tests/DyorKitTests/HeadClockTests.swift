@@ -24,11 +24,10 @@ final class HeadClockTests: XCTestCase {
         var reads: Int { lock.lock(); defer { lock.unlock() }; return count }
         func mine() { lock.lock(); number += 1; lock.unlock() }
         func read() async throws -> BlockHeader {
-            lock.lock(); count += 1; let failing = failing, delay = delay; lock.unlock()
+            let (failing, delay) = lock.withLock { count += 1; return (self.failing, self.delay) }
             if delay > .zero { try? await Task.sleep(for: delay) }
             if failing { throw URLError(.timedOut) }
-            lock.lock(); defer { lock.unlock() }
-            return BlockHeader(number: number, timestamp: 1_800_000_000 + Int(number))
+            return lock.withLock { BlockHeader(number: number, timestamp: 1_800_000_000 + Int(number)) }
         }
     }
 
@@ -195,16 +194,16 @@ final class HeadClockTests: XCTestCase {
     /// The app's one clock, and with it its one head, is the one prices and the wallet's history take; the head a round
     /// reads to is read anew on it, the logs endpoints' own only when it can't be read.
     func testTheAppSharesOneHead() throws {
-        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let environment = try AppSource.app("App/AppEnvironment.swift")
         XCTAssertEqual(environment.components(separatedBy: "BlockClock(").count - 1, 1, "one clock")
         XCTAssertEqual(environment.components(separatedBy: "HeadClock(").count - 1, 0, "its head, never another")
         XCTAssertTrue(environment.contains("prices = PriceService(rpc: rpc, registry: registry, clock: clock,"))
         XCTAssertTrue(environment.contains("chainCache.invalidate()\n        clock.head.forget()"), "an invalidation forgets the shared head with the shared reads")
         XCTAssertTrue(environment.contains("walletHistory = WalletHistoryService(store: historyStore, swapHistory: swapHistory, clock: clock,"))
-        let history = try String(contentsOf: Self.kit("Services/WalletHistory.swift"), encoding: .utf8)
+        let history = try AppSource.kit("Services/WalletHistory.swift")
         XCTAssertTrue(history.contains("let latest = await roundHead()"))
         XCTAssertTrue(history.contains("if let head = try? await clock.head.latest(maxAge: 0) { return head }\n        return await store.latest()"))
-        let prices = try String(contentsOf: Self.kit("Services/Prices/PriceService.swift"), encoding: .utf8)
+        let prices = try AppSource.kit("Services/Prices/PriceService.swift")
         XCTAssertFalse(prices.contains("rpc.block(.latest)"), "every head from the shared one")
         XCTAssertEqual(prices.components(separatedBy: "clock.head.latest()").count - 1, 2, "the day-ago block and a chart")
     }
@@ -216,10 +215,5 @@ final class HeadClockTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail("condition never held", file: file, line: line)
-    }
-
-    private static func kit(_ path: String) -> URL {
-        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/DyorKit").appendingPathComponent(path)
     }
 }

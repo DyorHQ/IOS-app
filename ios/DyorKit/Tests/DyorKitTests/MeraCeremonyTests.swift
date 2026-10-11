@@ -101,8 +101,10 @@ final class MeraCeremonyTests: XCTestCase {
     @MainActor
     func testGateBusyStateIsObservable() async throws {
         let gate = Mera.Ceremony.Gate()
-        var changes = 0
-        func track() { withObservationTracking { _ = gate.isBusy } onChange: { changes += 1 } }
+        // `onChange` is a `@Sendable` closure, so the count lives in the shared lock-guarded `Tally`.
+        let tally = Tally()
+        var changes: Int { tally.value }
+        func track() { withObservationTracking { _ = gate.isBusy } onChange: { tally.add() } }
         track()
         var release: CheckedContinuation<Void, Never>?
         let first = Task { @MainActor in

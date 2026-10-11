@@ -50,28 +50,20 @@ enum PerplExchange {
     // MARK: Calls
 
     /// Signatures and argument shapes are fixed at compile time, so an encoding failure is a programming error
-    /// rather than something the app can recover from at run time.
+    /// rather than something the app can recover from at run time (`ABI.fixedCalldata`).
     static func calldata(_ signature: String, _ args: [ABIValue]) -> Data {
-        do {
-            return try ABI.encodeCall(signature, args)
-        } catch {
-            preconditionFailure("Perpl calldata for \(signature): \(error)")
-        }
+        ABI.fixedCalldata(signature, args, context: "Perpl")
     }
 
     static func read(_ signature: String, _ args: [ABIValue], returns: String) -> ContractCall {
-        do {
-            return try ContractCall(to: address, signature, args, returns: returns)
-        } catch {
-            preconditionFailure("Perpl read \(signature): \(error)")
-        }
+        ContractCall.fixed(to: address, signature, args, returns: returns, context: "Perpl")
     }
 
     static func execOrdersCalldata(_ descs: [[ABIValue]], revertOnFail: Bool) -> Data {
         calldata(Signature.execOrders, [.array(descs.map { .tuple($0) }), .bool(revertOnFail)])
     }
 
-    /// Only Perpl's own `AccountNotFound(address)` revert means "no account" (RI-4). A revert with another error, or a
+    /// Only Perpl's own `AccountNotFound(address)` revert means "no account". A revert with another error, or a
     /// bare "execution reverted" from a node that drops the revert data, is a failed read: taken as "no account", it
     /// would plan a second `createAccount` (and a MON → AUSD swap ahead of it) for an account that exists.
     static func isAccountNotFound(_ error: RPCError) -> Bool {

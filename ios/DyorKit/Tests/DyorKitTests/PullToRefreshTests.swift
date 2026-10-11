@@ -8,14 +8,9 @@ import XCTest
 final class PullToRefreshTests: XCTestCase {
     /// Every app source, its comments left out.
     private func appSources() throws -> [(file: String, code: [Character])] {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let files = try XCTUnwrap(FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)).compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
-        return try files.map { file in
-            let code = String(TradeStringsTests.uncommented(Array(try String(contentsOf: file, encoding: .utf8))))
-            return (file.lastPathComponent, Array(code))
+        try AppSource.allAppFiles().map { file in
+            let code = String(TradeStringsTests.uncommented(Array(file.text)))
+            return ((file.path as NSString).lastPathComponent, Array(code))
         }
     }
 
@@ -52,7 +47,7 @@ final class PullToRefreshTests: XCTestCase {
         // The Retries that read the history on kick it: Recent Activity's, then reads the screen again; My Launchpad's
         // after reading the screen again, so the round reads a head at or after the block its balances were read at,
         // which each holding's profit and loss waits for (`WalletHistorySnapshot.fillsCoverage`). Its pull likewise.
-        let profile = try DocsLinksTests.appSource("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
         XCTAssertTrue(profile.contains("""
                     Task {
                         await model.load(env: env, address: session.address)
@@ -66,10 +61,10 @@ final class PullToRefreshTests: XCTestCase {
                         env.history.kick(env: env)
                     }
         """))
-        XCTAssertTrue(try DocsLinksTests.appSource("Profile/RecentActivityView.swift").contains(
+        XCTAssertTrue(try AppSource.app("Profile/RecentActivityView.swift").contains(
             #"Button("Retry") { env.history.kick(env: env); Task { await model.load(env: env, address: session.address) } }"#))
 
-        let model = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
+        let model = try AppSource.app("Wallet/HistoryModel.swift")
         XCTAssertTrue(model.contains("""
             func kick(env: AppEnvironment) {
                 guard let wallet else { return }
@@ -87,7 +82,7 @@ final class PullToRefreshTests: XCTestCase {
     /// kicking it. My Launchpad kicks it too once its balances are read at a block the history's head hasn't reached, so a
     /// holding's profit and loss and the Activity tab wait for one short round, not a top-up's 90 seconds.
     func testTradesClaimsAndBalancesKickTheHistory() throws {
-        let launchpad = try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift")
+        let launchpad = try AppSource.appFiles(AppSource.launchpadViewFiles)
         let buy = try XCTUnwrap(launchpad.range(of: "ConfirmationSheet(title: \"Buy \\(launch.symbol)\""))
         let buyIntent = try XCTUnwrap(launchpad.range(of: "}, intent: .launchpadBuy(", range: buy.upperBound..<launchpad.endIndex))
         XCTAssertTrue(launchpad[buy.upperBound..<buyIntent.lowerBound].contains("env.history.kick(env: env)"), "a curve buy")
@@ -95,7 +90,7 @@ final class PullToRefreshTests: XCTestCase {
         let sellIntent = try XCTUnwrap(launchpad.range(of: "}, intent: .launchpadSell(", range: sell.upperBound..<launchpad.endIndex))
         XCTAssertTrue(launchpad[sell.upperBound..<sellIntent.lowerBound].contains("env.history.kick(env: env)"), "a curve sell")
 
-        let profile = try DocsLinksTests.appSource("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         let sheets = try XCTUnwrap(profile.range(of: "@ViewBuilder private func claimSheet(for target: ClaimTarget) -> some View {"))
         let rows = try XCTUnwrap(profile.range(of: "// MARK: - Rows", range: sheets.upperBound..<profile.endIndex))
         XCTAssertEqual(profile[sheets.upperBound..<rows.lowerBound].components(separatedBy: "env.history.kick(env: env)").count - 1, 3, "each claim: creator fees, rewards, Claim All")
@@ -110,7 +105,7 @@ final class PullToRefreshTests: XCTestCase {
     /// come from DyorKit (`HistoryCadence`), whose `freshFor` — how long a scan counts as up to now — outlasts them both:
     /// a longer pause would otherwise flip every final figure back to "Reading" between top-ups.
     func testTheRoundsKeepTheirCadenceAndGuards() throws {
-        let model = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
+        let model = try AppSource.app("Wallet/HistoryModel.swift")
         XCTAssertTrue(model.contains("let widened = floors.contains { id, floor in lastFloors[id].map { floor < $0 } ?? false }"))
         XCTAssertTrue(model.contains("(!widened && round.progress <= lastProgress)"))
         XCTAssertTrue(model.contains("if snapshot.curves != curves { rebuild(env: env) }"))
@@ -135,16 +130,16 @@ final class PullToRefreshTests: XCTestCase {
             XCTAssertEqual(body.dropFirst().first, "env.invalidateChainReads()", "\(pull.file): first, before any read")
         }
         XCTAssertEqual(Set(pulls.filter { $0.body.contains("env.invalidateChainReads()") }.map(\.file)), sharing)
-        XCTAssertTrue(try DocsLinksTests.appSource("Portfolio/PortfolioView.swift").contains("if force {\n            env.invalidateChainReads()"), "the Portfolio's, through its reload")
+        XCTAssertTrue(try AppSource.app("Portfolio/PortfolioView.swift").contains("if force {\n            env.invalidateChainReads()"), "the Portfolio's, through its reload")
 
-        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let environment = try AppSource.app("App/AppEnvironment.swift")
         XCTAssertTrue(environment.contains("let chainCache = ChainCache()"))
         XCTAssertTrue(environment.contains("chainStore = isFork ? ChainStore(directory: nil) : ChainStore.applicationSupport()"), "a fork keeps nothing on disk")
         XCTAssertTrue(environment.contains("func invalidateChainReads() {\n        chainCache.invalidate()\n        clock.head.forget()\n    }"),
                       "the shared reads, and the shared head they are measured from (`HeadClock.forget`)")
         XCTAssertEqual(environment.components(separatedBy: "cache: chainCache, store: chainStore").count - 1, 4, "prices, the launchpad, Moments, past cohorts")
 
-        let sheet = try DocsLinksTests.appSource("Wallet/TransactionRun.swift")
+        let sheet = try AppSource.app("Wallet/TransactionRun.swift")
         XCTAssertTrue(sheet.contains("""
                     completed = true
                     // The plan changed what is on chain (a buy, a sell, a launch, a collect, a claim, a swap): every read the
@@ -153,7 +148,7 @@ final class PullToRefreshTests: XCTestCase {
                     onCompleted?(hash)
         """))
 
-        let session = try DocsLinksTests.appSource("Wallet/Session.swift")
+        let session = try AppSource.app("Wallet/Session.swift")
         let erase = try XCTUnwrap(session.range(of: "func eraseLocalData() async {"))
         let signedOut = try XCTUnwrap(session.range(of: "state = .signedOut", range: erase.upperBound ..< session.endIndex))
         let wipe = session[erase.upperBound ..< signedOut.lowerBound]
@@ -175,7 +170,7 @@ final class PullToRefreshTests: XCTestCase {
         XCTAssertTrue(home.contains("}.value"))
         XCTAssertEqual(home.components(separatedBy: "await ").count - 1, 2, "the pull waits for the task, and the task for both reads together")
 
-        let portfolio = try DocsLinksTests.appSource("Portfolio/PortfolioView.swift")
+        let portfolio = try AppSource.app("Portfolio/PortfolioView.swift")
         XCTAssertTrue(portfolio.contains(".refreshable { await reload(force: true) }"))
         XCTAssertTrue(portfolio.contains("""
             private func reload(force: Bool) async {

@@ -6,7 +6,8 @@ import Observation
 
 /// The wallet's money history across every section of DyorHQ — Spot swaps, Perps, Launch and Moments — reduced to
 /// volume, fees paid, P&L, claimed fees and trade counts, for any reporting period. Sources:
-///  · Spot: the wallet's swaps reconstructed from ERC-20 `Transfer` logs (rpc1, up to 90 days).
+///  · Spot: the wallet's swaps reconstructed from its ERC-20 `Transfer` logs in the history store (`HistoryModel`):
+///    30 days, or back to the wallet's first transaction once that is known.
 ///  · Perps: Perpl's authenticated fill and position history (exact notional, fees and realized P&L).
 ///  · Launch: the wallet's own `CurveBuy` / `CurveSell` fills (exact fee + tax), the creator fees the escrows paid straight
 ///    to it, and escrow / holder-reward claims.
@@ -84,14 +85,12 @@ final class PortfolioModel {
     private(set) var perpsNote: String?
     private(set) var loadedFor: Address?
     /// The wallet the latest load is for. A load started for another (a refresh or a reload that outlived an account
-    /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back (RS-10).
+    /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back.
     private var loadingFor: Address?
     /// The on-chain history as the history model has it (`applyHistory`): how far each period's figures have been read
-    /// (`historyFilling`, `historyProgress`), whether the chain could be reached, and the day the transfer history
-    /// reaches back to.
+    /// (`historyFilling`, `historyProgress`), and whether the chain could be reached.
     private var history = WalletHistorySnapshot.empty
     private(set) var historyUnreachable = false
-    private(set) var historySince: Date?
     private var historyVersion = -1
 
     /// What each period's figures were when last final for the wallet (`SavedFigures`, `SavedScreens.Screen.portfolio`):
@@ -266,14 +265,18 @@ final class PortfolioModel {
         return .spot
     }
 
-    /// The transactions of the wallet's curve fills: a curve buy or sell moves the coin and the pair asset in the same
-    /// transaction, so the transfer history reads it as a swap too. The fill is the record; the swap is left out.
-    private var fillTransactions: Set<Data> { Set(launchHistory.fills.map(\.hash)) }
+    /// The wallet's swaps, less those that are curve fills: a curve buy or sell moves the coin and the pair asset in the
+    /// same transaction, so the transfer history reads it as a swap too. The fill is the record; the swap is left out.
+    /// Kept rather than computed on every read (the Spot, Launch and Moments figures, through `spotStats`, and the
+    /// activity list read it, several times per redraw), and rebuilt after each change to `swaps` or `launchHistory`
+    /// (`rebuildSwapsLessFills`). Observed: the screens showing those figures read this, not `swaps`, so they redraw when
+    /// it changes.
+    private var swapsLessFills: [SwapRecord] = []
 
-    /// The wallet's swaps, less those that are curve fills.
-    private var swapsLessFills: [SwapRecord] {
-        let fills = fillTransactions
-        return fills.isEmpty ? swaps : swaps.filter { !fills.contains($0.hash) }
+    /// Rebuilds `swapsLessFills` from `swaps` and the transactions of the wallet's curve fills (`launchHistory`).
+    private func rebuildSwapsLessFills() {
+        let fillTransactions = Set(launchHistory.fills.map(\.hash))
+        swapsLessFills = fillTransactions.isEmpty ? swaps : swaps.filter { !fillTransactions.contains($0.hash) }
     }
 
     private func units(_ token: Address, _ raw: BigUInt) -> Double {
@@ -437,8 +440,8 @@ final class PortfolioModel {
         loadEpoch = env.savedScreens.epoch
         loading = true
         defer { loading = false }
-        // Nothing is published until every read is back, and a failed read never replaces what the last good one showed
-        // (security audit 2026-09-26, RS-10): the history comes from the store, which only ever grows, and a load for a
+        // Nothing is published until every read is back, and a failed read never replaces what the last good one showed:
+        // the history comes from the store, which only ever grows, and a load for a
         // wallet that is no longer the latest one asked for publishes nothing, so what is kept is always this wallet's.
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
@@ -523,7 +526,7 @@ final class PortfolioModel {
 
     /// Takes in what was saved for `address` before Home's first frame (`HomeView`'s `onAppear`), while nothing of it is on
     /// hand — no load for it has landed or begun, and its saved figures weren't taken in — after another wallet's figures
-    /// go (RS-10): a small file on the device, read on the spot (`restoreSaved`). So Total Volume opens on the figure saved
+    /// go: a small file on the device, read on the spot (`restoreSaved`). So Total Volume opens on the figure saved
     /// for the wallet, said to be ("Updated 3 hr ago"), rather than on a placeholder until the load's task starts; the load
     /// takes it in again as it begins.
     func showSaved(env: AppEnvironment, address: Address?) {
@@ -541,11 +544,9 @@ final class PortfolioModel {
         history = snapshot
         swaps = snapshot.swaps
         launchHistory = snapshot.launch
+        rebuildSwapsLessFills()
         momentsHistory = snapshot.moments
         historyUnreachable = snapshot.unreachable
-        if let anchor = snapshot.anchor, let floor = snapshot.status(WalletHistoryScans.transfersInId).floor {
-            historySince = BlockClock.time(of: floor, anchor: anchor, secondsPerBlock: BlockClock.fallbackSecondsPerBlock)
-        }
         // A period the history has now read in full is final: saved, for the next time the wallet opens.
         if !force, hasLoaded, loadedFor == address { saveFigures() }
     }
@@ -619,10 +620,11 @@ final class PortfolioModel {
         loadingFor = nil
         swaps = []; fills = []; closed = []
         launchHistory = .empty; momentsHistory = .empty
+        rebuildSwapsLessFills()
         launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsByKey = [:]
         tokens = [:]; prices = [:]
         hasLoaded = false; landedWhole = false; updatedAt = nil; loadedFor = nil; perpsNote = nil; saved = nil; lastSaved = nil; savedFor = nil
-        history = .empty; historyUnreachable = false; historySince = nil; historyVersion = -1
+        history = .empty; historyUnreachable = false; historyVersion = -1
     }
 
     /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events. Without

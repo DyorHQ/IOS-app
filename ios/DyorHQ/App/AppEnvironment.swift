@@ -11,8 +11,8 @@ final class AppEnvironment {
     let multicall: Multicall
     let sender: TransactionSender
     /// Monad's pace, measured once a session (`BlockClock`): the one clock every service that shows or claims a time
-    /// reads — prices (the 24h change and charts), the launchpad, Moments (live and retired), swap history and token
-    /// activity — so the session measures it once.
+    /// reads — prices (the 24h change and charts), the launchpad, Moments (live and retired) and swap history — so the
+    /// session measures it once.
     let clock: BlockClock
     /// The chain reads several screens make at about the same time, made once and shared (`ChainCache`): the launch list,
     /// the Moments lists (live and retired) and prices, each kept a few seconds. A transaction of the user's that settled
@@ -44,7 +44,6 @@ final class AppEnvironment {
     /// Moment names → share-link slugs, across every cohort (`MomentLink`, `MomentSlug`).
     let momentDirectory: MomentDirectory
     let news: NewsService
-    let activity: TokenActivityService
     let swapHistory: SwapHistoryService
     let walletDiscovery: WalletTokenDiscovery
     /// Where every `eth_getLogs` goes on mainnet: across the public endpoints, in ranges each answers, through one gate
@@ -85,7 +84,7 @@ final class AppEnvironment {
     /// The app's language, decided before any screen: English on an install's first launch, then what the user chose
     /// (`LanguageStore`).
     let language = LanguageStore()
-    /// The minimum supported build: below it, "Update required" replaces the app (GP-2).
+    /// The minimum supported build: below it, "Update required" replaces the app.
     let updateGate = UpdateGate()
     /// Authenticated Perpl trading. A passkey account's trading key lives and dies with its session (`session.mera`).
     let perplTrading: PerplTrading
@@ -126,8 +125,7 @@ final class AppEnvironment {
         let isFork = host == "127.0.0.1" || host == "localhost"
         chainStore = isFork ? ChainStore(directory: nil) : ChainStore.applicationSupport()
         // A saved screen is shown only by the build that saved it (its version and build number).
-        let info = Bundle.main.infoDictionary
-        let build = "\(info?["CFBundleShortVersionString"] as? String ?? "")-\(info?["CFBundleVersion"] as? String ?? "")"
+        let build = "\(AppInfo.version)-\(AppInfo.build)"
         savedScreens = isFork ? SavedScreens(directory: nil, build: build) : SavedScreens.applicationSupport(build: build)
         // History reads go across the public endpoints, in ranges each answers, through one gate (`LogsRouter`): one
         // client for every reader. A local fork keeps its own logs, so a development build pointed at 127.0.0.1 scans the
@@ -138,12 +136,12 @@ final class AppEnvironment {
         // State at past blocks (a wallet's nonce at a block, for its first transaction): only the endpoints that answer
         // it, failing over among them; rpc.monad.xyz (the primary client) and rpc3 refuse old blocks.
         let archiveClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(urls: LogsEndpoints.archive)
-        activity = TokenActivityService(rpc: logsClient, clock: clock)
         // A swap's transaction facts (its record, its receipt, the wallet's balance and nonce at its block) are state at
         // past blocks too: read on the archive endpoints only.
         swapHistory = SwapHistoryService(rpc: logsClient, clock: clock, archive: archiveClient)
-        // Wallet discovery reads balances/metadata on the primary multicall.
-        walletDiscovery = WalletTokenDiscovery(logsRPC: logsClient, multicall: multicall)
+        // The wallet's tokens from the transfers into it its history store holds (`WalletHistorySnapshot.transfersIn`), with
+        // no scan of their own: balances and metadata on the primary multicall.
+        walletDiscovery = WalletTokenDiscovery(multicall: multicall)
         // The wallet's NFTs from the transfers into it its history store holds (`WalletHistorySnapshot.transfersIn`), with
         // no scan of their own: ownership and metadata on the primary multicall.
         nftDiscovery = WalletNFTDiscovery(multicall: multicall)

@@ -166,7 +166,8 @@ struct UniswapVenue: Sendable {
         if viaNative { pairs += [TokenPair.unordered(cIn, Monad.native), TokenPair.unordered(Monad.native, cOut)] }
         if cIn != usdc { pairs.append(TokenPair.unordered(cIn, usdc)) }
         if cOut != usdc { pairs.append(TokenPair.unordered(usdc, cOut)) }
-        async let liveRead = livePools(pairs)
+        let probed = pairs
+        async let liveRead = livePools(probed)
         async let launchRead = launchpadKeys([cIn, cOut])
         async let momentRead = momentsKeys([cIn, cOut])
         let (live, launchKeys, momentKeys) = try await (liveRead, launchRead, momentRead)

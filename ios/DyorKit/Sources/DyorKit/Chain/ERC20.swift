@@ -3,6 +3,10 @@ import Foundation
 
 /// ERC-20 calldata builders and reads.
 public enum ERC20 {
+    /// Topic 0 of a `Transfer(address,address,uint256)` log. ERC-721 shares the signature but indexes the token id (four
+    /// topics, no data), so a log's shape tells the two apart (`WalletTokenDiscovery.isERC20Transfer`).
+    static let transferTopic = ABI.eventTopic("Transfer(address,address,uint256)")
+
     public static func balanceOf(_ token: Address, _ owner: Address) throws -> ContractCall {
         try ContractCall(to: token, "balanceOf(address)", [.address(owner)], returns: "uint256")
     }
@@ -36,12 +40,6 @@ public enum ERC20 {
         return Token(address: token, symbol: symbol, name: name, decimals: decimals)
     }
 
-    /// Resolves symbol/name/decimals for many tokens at once, batching the reads through the multicall (50 tokens =
-    /// 150 reads per round trip). Drops only tokens with no readable symbol; name/decimals fall back like `metadata`.
-    public static func metadataBatch(_ addresses: [Address], multicall: Multicall) async -> [Token] {
-        await metadataReport(addresses, multicall: multicall).tokens
-    }
-
     /// What `metadataReport` read of a list of addresses, each in the order given.
     public struct MetadataReport: Sendable, Equatable {
         /// The tokens with a readable symbol.
@@ -62,8 +60,9 @@ public enum ERC20 {
         }
     }
 
-    /// `metadataBatch`, saying what wasn't read (`MetadataReport`). Tokens are read 50 a request, so no one token can keep
-    /// the others from being read:
+    /// Resolves symbol/name/decimals for many tokens at once through the multicall, and says what wasn't read
+    /// (`MetadataReport`). Drops only tokens with no readable symbol; name/decimals fall back like `metadata`. Tokens are
+    /// read 50 a request (150 reads), so no one token can keep the others from being read:
     ///
     /// - A token whose `symbol()` answered with what isn't a symbol (an account with no code answers nothing; a contract
     ///   may answer any bytes) isn't read on its own: a call that returned wasn't starved of gas. It is read once more,

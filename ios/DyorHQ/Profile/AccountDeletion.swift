@@ -11,7 +11,7 @@ enum AccountDeletion {
     enum Failure: LocalizedError {
         case backendSignInNeeded(String)
         case privyNotConfigured
-        /// An Email & Password account's email sign-in at Privy couldn't be deleted; nothing was deleted yet (SB-7).
+        /// An Email & Password account's email sign-in at Privy couldn't be deleted; nothing was deleted yet.
         case emailSignInNotDeleted(String)
 
         /// The failure in the app's language; `why` is already in it (the app's text, or a server's known message).
@@ -30,7 +30,7 @@ enum AccountDeletion {
     /// Runs the whole deletion. Server data first (authorized by the wallet's own signature), then the Privy
     /// account, then this device. A failure before the server data is deleted throws with nothing changed, so a retry
     /// is safe. Once it is deleted, this device signs out whatever happens next, so no later launch can recreate the
-    /// profile (security audit 2026-09-26, RI-8); a Privy account that couldn't be deleted is reported afterwards
+    /// profile; a Privy account that couldn't be deleted is reported afterwards
     /// (`Session.deletionNotice`). A passkey account goes through `deletePasskeyAccount`, which also removes the passkey.
     @MainActor
     static func run(session: Session, social: SocialSession, env: AppEnvironment) async throws {
@@ -44,7 +44,7 @@ enum AccountDeletion {
 
         if account.canSign {
             // Profile work still running — a stored token's restore, a sign-in's follow-up — is waited out before and
-            // after the sign-in, so a late upsert can't recreate a row deleted below (RS-8).
+            // after the sign-in, so a late upsert can't recreate a row deleted below.
             await social.settle()
             if !social.isSignedIn { await social.signIn(session: session) }
             guard social.isSignedIn else { throw Failure.backendSignInNeeded(social.error ?? tr("the signature was cancelled")) }
@@ -82,7 +82,7 @@ enum AccountDeletion {
         session.deletionNotice = notice
     }
 
-    /// An Email & Password account's email sign-in at Privy (SB-7): its sign-up verified the email with a Privy one-time
+    /// An Email & Password account's email sign-in at Privy: its sign-up verified the email with a Privy one-time
     /// code, which created a Privy user, and the app keeps no Privy session to delete it with. delete-account deletes it
     /// by the email this wallet is bound to, authorised by the wallet's own backend session, so this runs before the
     /// binding is deleted. The server keeps the Privy user when it is also another way into DyorHQ. A failure of the
@@ -185,7 +185,7 @@ enum AccountDeletion {
     }
 
     /// The wallet's server data, in this order, for every account type. The profile row goes last, so once it is gone
-    /// every row is (RI-8): a failure before it leaves the profile, and a retry deletes the rest again (each delete of a
+    /// every row is: a failure before it leaves the profile, and a retry deletes the rest again (each delete of a
     /// row already gone is a no-op, and the email sign-in step reads the missing binding as nothing to delete).
     @MainActor
     private static func deleteServerRows(wallet: String, social: SocialSession) async throws {
@@ -366,7 +366,7 @@ struct DeleteAccountView: View {
 
     private func deleteAccount() async {
         // Deleting destroys a Privy embedded wallet or the only copy of an imported key, so with App Lock on it asks
-        // for the device owner first, like key export (audit F5). A passkey account's own ceremony already asks.
+        // for the device owner first, like key export. A passkey account's own ceremony already asks.
         if !isPasskey, session.canSign, settings.appLockApplies(to: session.account),
            !(await BiometricGate.authenticate(reason: "Delete your DyorHQ account")) { return }
         deleting = true
@@ -391,7 +391,7 @@ struct DeleteAccountView: View {
 }
 
 /// Shown in place of onboarding (RootView) after a deletion that finished on this device but left something to do
-/// (`Session.deletionNotice`, RI-8): the Privy account that couldn't be deleted, and how to finish.
+/// (`Session.deletionNotice`): the Privy account that couldn't be deleted, and how to finish.
 struct DeletionNoticeView: View {
     let message: String
     let onClose: () -> Void

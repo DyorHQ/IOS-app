@@ -21,7 +21,7 @@ public struct PerplTrackedOrder: Sendable, Equatable, Codable, Identifiable {
         public let accepted: Bool
         /// Its frame went out and was never answered: it may be live.
         public let unknown: Bool
-        /// Never sent: Perpl never answered the entry, so its triggers stayed on the device (GL-1). Nothing about it can
+        /// Never sent: Perpl never answered the entry, so its triggers stayed on the device. Nothing about it can
         /// be Perpl's refusal.
         public let notSent: Bool
         /// The id of this device's echo of it (`TriggerStore`), when one was written: the only echo its order may remove.
@@ -198,7 +198,7 @@ public enum PerplTrackerEffect: Sendable, Equatable {
     case noteAnnounced(growth: Double)
     case releaseExpectation, refund, voidUserClose, reload, wakeWatcher
     /// `TriggerStore.remove(ids:)`: this order's own echo of a take-profit or stop-loss that will never be live — never
-    /// another order's echo of the same kind on that side (both stay live on Perpl, GT-1).
+    /// another order's echo of the same kind on that side (both stay live on Perpl).
     case removeTriggerEcho(PerplTriggerKind, echo: UUID)
 }
 

@@ -72,7 +72,7 @@ struct ManageWalletsView: View {
             }
             Section("Network") {
                 LabeledContent("Chain", value: tr("Monad mainnet"))
-                LabeledContent("Chain ID", value: "143")
+                LabeledContent("Chain ID", value: String(Monad.chainId))
                 LabeledContent("RPC", value: env.config.rpcURL.host() ?? "—")
             }
         }
@@ -158,7 +158,7 @@ struct SecurityView: View {
 }
 
 /// Notification preferences. Turning them on requests the system permission. Every notification is made on the
-/// device while DyorHQ runs — there is no push server — and the copy says so (security audit 2026-09-26, GL-4): alerts
+/// device while DyorHQ runs — there is no push server — and the copy says so: alerts
 /// arrive while DyorHQ is open, on any screen (`AlertCenter`), and never while it is closed.
 struct NotificationsView: View {
     @Environment(AppSettings.self) private var settings
@@ -324,7 +324,7 @@ struct PerplTradingView: View {
                 .confirmationDialog("Remove the API key?", isPresented: $confirmRemoveKey, titleVisibility: .visible) {
                     Button("Remove API Key", role: .destructive) { if let address = session.address { trading.forget(address: address) } }
                 } message: {
-                    // Removing the key cancels nothing (security audit GT-3): say what stays armed where the app can't see it.
+                    // Removing the key cancels nothing: say what stays armed where the app can't see it.
                     if liveTriggerCount > 0 {
                         Text("You have \(liveTriggerCount) take-profit/stop-loss orders live on Perpl. Removing the key doesn't cancel them: they stay armed, and this device can't show or cancel them until you connect again.")
                     } else {

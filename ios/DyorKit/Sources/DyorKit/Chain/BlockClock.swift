@@ -8,10 +8,9 @@ import Foundation
 ///
 /// Every time the app shows or claims goes through a clock: the 24h change and its day-ago block (`block(at:)`, which
 /// reads the estimated block's timestamp and corrects the estimate once), a chart's span and its labels, the history
-/// filters (24H, 7D, 30D) and every time estimated from a block number (`time(of:anchor:secondsPerBlock:)`). Scan windows
-/// that are really block budgets keep their block counts, under names that say so
-/// (`WalletTokenDiscovery.defaultWindowBlocks`, `TokenActivityService.defaultLookbackBlocks`,
-/// `SwapHistoryService.Window.allBlocks`); a coin's holders are read from its launch (`LaunchpadService.launchBlock`).
+/// filters (24H, 7D, 30D) and every time estimated from a block number (`time(of:anchor:secondsPerBlock:)`). No live scan
+/// reads by a history filter's window: `SwapHistoryService.Window.allBlocks` only keeps the block budget "All" stood
+/// for, which BlockClockTests pins. A coin's holders are read from its launch (`LaunchpadService.launchBlock`).
 public actor BlockClock {
     /// The rate used until a measurement answers, and whenever one fails: Monad's average over a million blocks
     /// (measured 2026-09-29).
@@ -37,7 +36,7 @@ public actor BlockClock {
 
     /// A clock for the chain `rpc` reads. `now` is the device clock, only used to space out retries and to age a head.
     /// `head`: where the latest header comes from (nil: a `HeadClock` of `rpc`).
-    public init(rpc: RPCClient, sampleBlocks: UInt64 = BlockClock.sampleBlocks, now: @escaping @Sendable () -> Date = Date.init, head: HeadClock? = nil) {
+    public init(rpc: RPCClient, sampleBlocks: UInt64 = BlockClock.sampleBlocks, now: @escaping @Sendable () -> Date = { Date() }, head: HeadClock? = nil) {
         self.rpc = rpc
         self.head = head ?? HeadClock(rpc: rpc, now: now)
         self.sampleBlocks = max(1, sampleBlocks)
@@ -49,7 +48,7 @@ public actor BlockClock {
         self.rpc = rpc
         head = HeadClock(rpc: rpc)
         sampleBlocks = Self.sampleBlocks
-        now = Date.init
+        now = { Date() }
         measured = secondsPerBlock
     }
 

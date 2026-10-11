@@ -57,7 +57,7 @@ struct RecoveryPhraseView: View {
         .navigationBarTitleDisplayMode(.inline)
         .background { ScreenCaptureObserver { captured = $0 } }
         // The words hide themselves a minute after the reveal (or the last Keep Showing), with a spoken warning twenty
-        // seconds before for VoiceOver, and a spoken note when they go (AI-11).
+        // seconds before for VoiceOver, and a spoken note when they go.
         .task(id: hidesAt) {
             guard let hidesAt else { return }
             let warnAt = hidesAt.addingTimeInterval(-Self.warning)
@@ -234,7 +234,7 @@ struct RecoveryPhraseView: View {
         }
     }
 
-    /// Another full minute on screen from now, for anyone still writing (AI-11).
+    /// Another full minute on screen from now, for anyone still writing.
     private func keepShowing() {
         guard case .shown(let words, let quiz, _) = stage else { return }
         stage = .shown(words: words, quiz: quiz, hidesAt: Date().addingTimeInterval(Mera.RecoveryPhrase.visibleFor))

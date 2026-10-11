@@ -32,7 +32,7 @@ struct RootView: View {
                     OnboardingView()
                 }
             case .signedIn:
-                // A build below the minimum shows balances and export only: nothing that signs is reachable (GP-2).
+                // A build below the minimum shows balances and export only: nothing that signs is reachable.
                 if let required = env.updateGate.required {
                     UpdateRequiredView(minimum: required)
                 } else {
@@ -78,7 +78,7 @@ struct RootView: View {
         // ceremony's system sheet and App Lock's Face ID or passcode prompt (`BiometricGate`) make the scene .inactive,
         // and the cover must not blank the app — the sheet being confirmed — behind them. The cover is a window of its
         // own above every other, so it also hides a sheet or full-screen cover (Export Wallet, the recovery phrase),
-        // which an overlay on this view never reached (IOSK-13).
+        // which an overlay on this view never reached.
         .onChange(of: privacyCovered, initial: true) { _, covered in PrivacyShield.update(covered: covered) }
         .task { session.start(); settings.appearance.apply() }
         .task { await env.updateGate.check(client: env.social.client) }
@@ -86,7 +86,7 @@ struct RootView: View {
             // A passkey (Mera) signing session must not outlive the user leaving the app: whoever picks the phone up
             // next has to present the passkey again. Ending it also closes a passkey account's Perpl socket and drops
             // its trading key. An approved plan or order still running keeps it until it finishes, within the
-            // background time iOS grants (GL-1).
+            // background time iOS grants.
             if phase == .background {
                 session.mera.endWhenIdle()
                 // iOS may suspend the app now: the next activation is a return to it (`LogScanClock`).
@@ -105,10 +105,10 @@ struct RootView: View {
                 // Back from the background: price alerts and open positions are checked at once (a Face ID or passkey
                 // prompt, which only makes the scene inactive, changes nothing).
                 env.alerts.enteredForeground()
-                // The minimum supported build, at most every ten minutes (GP-2).
+                // The minimum supported build, at most every ten minutes.
                 Task { await env.updateGate.check(client: env.social.client) }
-                // Transactions sent before the app left the foreground: settle their pending rows (GL-2), and pick up
-                // the bridges iOS suspended (GL-5).
+                // Transactions sent before the app left the foreground: settle their pending rows, and pick up
+                // the bridges iOS suspended.
                 Task { await PendingActivity.recheck(owner: session.address, rpc: env.rpc) }
                 env.bridgeTracker.resume()
                 // The wallet's history: rounds of reading that had stopped short start again.
@@ -143,10 +143,10 @@ struct RootView: View {
             env.launchpadProfile.follow(session.address)
             // So does the Portfolio, Total Volume's figures and those saved for the wallet among them.
             env.portfolio.follow(session.address)
-            // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest (RS-2).
+            // Bridges are tracked for the account that sent them only: a sign-out or switch stops the rest.
             env.bridgeTracker.bind(owner: session.address)
             // Perpl trading and the notification center follow the account at once, not after the backend sign-in's
-            // round-trip below, so nothing meanwhile trades for or is filed under the previous account (RS-9).
+            // round-trip below, so nothing meanwhile trades for or is filed under the previous account.
             env.perplTrading.refresh(account: session.account)
             // Its wallet-signed Perps orders an earlier run never read the receipt of (a kill right after it confirmed).
             Task { await env.perplTrading.redecodeOnChainOrders() }
@@ -159,8 +159,7 @@ struct RootView: View {
             // recorded — and restored on a fresh device — without a separate step. Not a passkey account restored
             // locked at launch: that signature would be a passkey prompt nobody asked for. `signInWithMera` starts its
             // sign-in while its session is live (this joins it), and the background signer never prompts. A stored
-            // token `bind` is restoring is this launch's sign-in: this joins it too, and signs only if it didn't restore
-            // (RS-3).
+            // token `bind` is restoring is this launch's sign-in: this joins it too, and signs only if it didn't restore.
             if session.canSignWithoutPrompt, !env.social.isSignedIn, let address = session.address, let wallet = session.backgroundWallet {
                 await env.social.signIn(address: address, wallet: wallet)
             }
@@ -168,7 +167,7 @@ struct RootView: View {
             // alerts actually reach the lock screen). notificationsEnabled defaults on, but the Settings toggle only
             // requests when flipped — so a user who never opened Settings was never prompted.
             if session.canSign, settings.notificationsEnabled { await Notifications.requestAuthorizationIfUndetermined() }
-            // Transactions sent in an earlier run of the app whose confirmation it never saw (GL-2).
+            // Transactions sent in an earlier run of the app whose confirmation it never saw.
             await PendingActivity.recheck(owner: session.address, rpc: env.rpc)
         }
         // Whenever the account's backend session opens — whoever signed in (the rebind above, the reconnect below,
@@ -266,8 +265,8 @@ extension RootView {
 }
 
 /// The privacy cover's window: above every other window of the scene, so it hides the tabs and whatever is presented
-/// over them — sheets, full-screen covers, alerts — from the snapshot iOS takes when the app leaves the foreground
-/// (IOSK-13). Shown while `update(covered: true)`, gone the moment the app is active again. It never becomes the key
+/// over them — sheets, full-screen covers, alerts — from the snapshot iOS takes when the app leaves the foreground.
+/// Shown while `update(covered: true)`, gone the moment the app is active again. It never becomes the key
 /// window, so a keyboard or a focused field underneath is left as it was.
 @MainActor
 enum PrivacyShield {

@@ -17,11 +17,8 @@ final class TokenLogoAssetTests: XCTestCase {
 
     /// The logo folder, or a skip when this checkout has only the package.
     static func logoFolder() throws -> URL {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        return app.appendingPathComponent("Resources/TokenLogos")
+        try AppSource.requireApp()
+        return AppSource.appFolder.appendingPathComponent("Resources/TokenLogos")
     }
 
     /// The folder's file names as stored. A device looks a logo up by exact case, while this Mac's disk ignores case, so

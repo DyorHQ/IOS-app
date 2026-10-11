@@ -182,7 +182,7 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(Amount.parse("1.2.3", decimals: 6))
     }
 
-    /// Perps prices, sizes and triggers (audit F4): a pasted "66,000" is 66000 in en_US, never 66, while the decimal
+    /// Perps prices, sizes and triggers: a pasted "66,000" is 66000 in en_US, never 66, while the decimal
     /// comma still works where the locale uses it and "0,5" is one half everywhere.
     func testFieldNumberCommaGrouping() {
         let enUS = ",", deDE = ".", frFR = "\u{202F}"
@@ -281,7 +281,7 @@ final class CoreTests: XCTestCase {
     }
 }
 
-/// Recipient text as people paste it (security audit 2026-09-26, GR-4): invisible characters and surrounding
+/// Recipient text as people paste it: invisible characters and surrounding
 /// whitespace are removed, and what is still wrong is named precisely.
 final class AddressInputTests: XCTestCase {
     private let plain = "0x2222222222222222222222222222222222222222"

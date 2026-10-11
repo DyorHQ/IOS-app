@@ -83,7 +83,7 @@ struct SideMenuView: View {
     }
 
     private var footer: some View {
-        Paragraph("DyorHQ \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · Monad mainnet")
+        Paragraph("DyorHQ \(AppInfo.version) · Monad mainnet")
             .font(.caption)
             .foregroundStyle(.tertiary)
             .padding(.top, 8)

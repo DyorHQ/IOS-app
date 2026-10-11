@@ -457,7 +457,7 @@ public final class PerplTradeClient {
     public var onPositionEnded: (@MainActor (PerplLivePosition) -> Void)?
     private var announcedTriggers: Set<String> = []
     private var endedPositions: Set<Int> = []
-    /// Order requests between their first frame and their last ack (`place`, `placeAll`, `sendEach`).
+    /// Order requests between their first frame and their last ack (`placeAll`, `sendEach`).
     private var requestsInFlight = 0
     /// Fired on the main actor whenever account state (id / forwardingEnabled / lfr) changes — from the initial
     /// snapshot or a later AccountUpdate — so the owner can re-derive its status the moment forwarding turns on.
@@ -632,21 +632,6 @@ public final class PerplTradeClient {
         releaseWaiters()
     }
 
-    /// Places the frames in order (entry first, then triggers), returning the entry's ack. Triggers are sent
-    /// best-effort after the entry is accepted.
-    public func place(_ frames: [PerplOrderFrame]) async throws -> PerplOrderAck {
-        try admit(frames)
-        requestsInFlight += 1
-        defer { requestsInFlight -= 1 }
-        var firstAck: PerplOrderAck?
-        for frame in frames {
-            let ack = try await send(frame)
-            if firstAck == nil { firstAck = ack }
-            if !ack.accepted { break }
-        }
-        return firstAck ?? PerplOrderAck(code: -1, error: "No frames") // not localized: an ack's error, as Perpl's own are
-    }
-
     /// Places the frames in order and returns EVERY frame's ack (stopping after the first rejection). Lets a caller
     /// verify that a linked take-profit / stop-loss actually landed, not just the entry — critical for a bracket that
     /// must never leave a position unprotected.
@@ -668,7 +653,7 @@ public final class PerplTradeClient {
                 acks.append(Self.unanswered(error, fallback: L10n.tr("Perpl did not confirm this trigger."), requestId: rq))
                 continue
             case .failure(let error):
-                // The entry itself: the caller's catch (GL-1). It knows the entry's id from its reservation.
+                // The entry itself: the caller's catch. It knows the entry's id from its reservation.
                 throw error
             }
             acks.append(ack)
@@ -720,7 +705,7 @@ public final class PerplTradeClient {
 
     // MARK: Outcomes
 
-    /// Perpl's outcome for `rq` on THIS socket (a drained passkey socket still answers, GL-1). Returns when decided
+    /// Perpl's outcome for `rq` on THIS socket (a drained passkey socket still answers). Returns when decided
     /// (never on a provisional failure); at the deadline returns `outcome(final: continuityHeld(since: sent.writtenAt))`,
     /// else `.unconfirmed(.timedOut)`; when the socket closes, `.unconfirmed(.connectionLost)`. Counted in
     /// `hasRequestsInFlight` while it waits. Never throws, never resends.
@@ -907,7 +892,7 @@ public final class PerplTradeClient {
     /// Writes one frame and waits for its ack. Its request id is assigned here, as it is written, so ids rise strictly in
     /// write order (Perpl refuses an id below the last one it accepted): a reserved id is used only while it is still
     /// above every id written; otherwise nothing is written and the frame is refused (never sent: the caller refunds).
-    private func send(_ frame: PerplOrderFrame, written: (Int) -> Void = { _ in }) async throws -> PerplOrderAck {
+    private func send(_ frame: PerplOrderFrame, written: (Int) -> Void) async throws -> PerplOrderAck {
         // The socket closed between frames: this one never leaves the device (rather than waiting 8 s on a socket that
         // no longer exists and reporting an outcome that isn't in doubt).
         guard signedIn, task != nil || transport != nil else { throw PerplTradeError.notSignedIn }
@@ -1304,7 +1289,7 @@ public final class PerplTradeClient {
     /// DEBUG builds only: which fields each inbound order / fill / position update carried, and its status codes. Ids are
     /// private; nothing outbound (the sign-in frame carries a signature) is ever logged.
     private static func debugLog(mt: Int, _ items: [[String: Any]]) {
-        let logger = Logger(subsystem: "fun.dyorhq.app", category: "perpl") // not localized: a log category
+        let logger = Logger(subsystem: AppIdentity.logSubsystem, category: "perpl") // not localized: a log category
         for item in items {
             let fields = item.keys.sorted().joined(separator: ",")
             let st = intValue(item["st"]).map(String.init) ?? "-", sr = intValue(item["sr"]).map(String.init) ?? "-"

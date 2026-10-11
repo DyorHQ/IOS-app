@@ -9,31 +9,12 @@ import XCTest
 /// dates and the chart's dates follow the app's language; and the strings that must stay English (what a server
 /// reparses, what is matched against input, identifiers) are left as they are.
 final class PerpsWalletStringsTests: XCTestCase {
-    private static func ios() throws -> URL {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        guard FileManager.default.fileExists(atPath: ios.appendingPathComponent("DyorHQ").path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        return ios
-    }
-
-    private static func source(_ path: String) throws -> String {
-        try String(contentsOf: try ios().appendingPathComponent(path), encoding: .utf8)
-    }
-
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-
     /// The Swift files of the Perps and Wallet folders, by their path under ios/DyorHQ. The Simulator's stub passkey
     /// provider is left out: it compiles only into DEBUG Simulator builds, and its messages are for developers.
     private static func scopedSources() throws -> [(path: String, text: String)] {
-        let app = try ios().appendingPathComponent("DyorHQ")
-        var out: [(String, String)] = []
-        for folder in ["Perps", "Wallet"] {
-            let files = FileManager.default.enumerator(at: app.appendingPathComponent(folder), includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
-            for file in files where file.pathExtension == "swift" && file.lastPathComponent != "StubPasskeyAuthenticator.swift" {
-                out.append((String(file.path.dropFirst(app.path.count + 1)), try String(contentsOf: file, encoding: .utf8)))
-            }
+        try AppSource.allAppFiles().filter { file in
+            ["Perps", "Wallet"].contains { file.path.hasPrefix($0 + "/") } && (file.path as NSString).lastPathComponent != "StubPasskeyAuthenticator.swift"
         }
-        return out.sorted { $0.0 < $1.0 }
     }
 
     /// One string literal on a line: what it says outside its interpolations, how deep it sits inside other literals'
@@ -189,26 +170,26 @@ final class PerpsWalletStringsTests: XCTestCase {
             XCTAssertNil(shown.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)), "\(path): a raw value shown as text")
             XCTAssertFalse(text.contains(".capitalized"), path)
         }
-        let trade = try Self.source("DyorHQ/Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         XCTAssertTrue(trade.contains("ForEach(ChartDataTab.allCases) { $0.title.tag($0) }"))
         // The bottom tabs (Positions / Orders / Assets / Trade History): the shown title and the reserved selected width are
         // both the written key (p4 spec E).
         XCTAssertTrue(trade.contains("tab.title.font(.subheadline.weight(active ? .semibold : .regular))"))
         XCTAssertTrue(trade.contains("tab.title.font(.subheadline.weight(.semibold)).hidden()"))
         XCTAssertTrue(trade.contains("priceType.title.font("))
-        XCTAssertTrue(try Self.source("DyorHQ/Perps/PerpsPortfolioView.swift").contains("ForEach(HistoryTab.allCases) { $0.title.tag($0) }"))
+        XCTAssertTrue(try AppSource.app("Perps/PerpsPortfolioView.swift").contains("ForEach(HistoryTab.allCases) { $0.title.tag($0) }"))
     }
 
     /// Durations are in the app language's own units, and every date written as a `String` is in the app's language
     /// (`L10n.locale`), not the device's.
     func testDurationsAndDatesFollowTheAppLanguage() throws {
-        let scope = Self.squeezed(try Self.source("DyorHQ/Wallet/Mera/SessionScopeViews.swift"))
+        let scope = AppSource.squeezed(try AppSource.app("Wallet/Mera/SessionScopeViews.swift"))
         XCTAssertTrue(scope.contains("Duration.seconds(Int(left.rounded(.up))).formatted(.units(allowed: [.seconds], width: .narrow).locale(L10n.locale))"))
         XCTAssertTrue(scope.contains("Duration.seconds(Int((left / 60).rounded(.up)) * 60).formatted(.units(allowed: [.minutes], width: .narrow).locale(L10n.locale))"))
         XCTAssertTrue(scope.contains("return Duration.seconds(minutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .wide).locale(L10n.locale))"))
         XCTAssertFalse(scope.contains("? \"1 hour\" :"), "no English-only length")
         XCTAssertFalse(scope.contains(")) minutes\""))
-        let phrase = try Self.source("DyorHQ/Wallet/Mera/RecoveryPhraseView.swift")
+        let phrase = try AppSource.app("Wallet/Mera/RecoveryPhraseView.swift")
         XCTAssertTrue(phrase.contains("Duration.seconds(seconds).formatted(.units(allowed: [.seconds], width: .narrow).locale(L10n.locale))"))
         XCTAssertTrue(phrase.contains("Text(\"Hides in \\(Self.seconds("))
         for (path, text) in try Self.scopedSources() {
@@ -229,13 +210,13 @@ final class PerpsWalletStringsTests: XCTestCase {
     /// The Perps chart's dates follow the app's language: the app sends its locale (and the legend's labels) to the page,
     /// which writes its time scale and crosshair dates in it. Prices keep the app's one style.
     func testTheChartDatesFollowTheAppLanguage() throws {
-        let chart = Self.squeezed(try Self.source("DyorHQ/Perps/TradingViewChart.swift"))
+        let chart = AppSource.squeezed(try AppSource.app("Perps/TradingViewChart.swift"))
         XCTAssertTrue(chart.contains("@Environment(\\.locale) private var locale"))
         XCTAssertTrue(chart.contains("language: ChartLanguage(locale)"))
         XCTAssertTrue(chart.contains("self.locale = locale.identifier(.bcp47)"))
         XCTAssertTrue(chart.contains("if pendingScheme != lastScheme || pendingLanguage != lastLanguage {"), "re-sent when the language changes")
         XCTAssertTrue(chart.contains("config[\"locale\"] = language.locale"))
-        let page = try Self.source("DyorHQ/Resources/Web/chart.html")
+        let page = try AppSource.app("Resources/Web/chart.html")
         XCTAssertTrue(page.contains("if (p.locale) chart.applyOptions({ localization: { locale: p.locale, priceFormatter: (v) => formatPrice(v) } });"))
         XCTAssertTrue(page.contains("palette = Object.assign(palette, p.palette || {});"))
         XCTAssertTrue(page.contains("escapeHTML(legendLabels.o)"))
@@ -246,12 +227,12 @@ final class PerpsWalletStringsTests: XCTestCase {
     /// A sign-in method's name inside a sentence is a key per method, written as the side menu shows it (lowercase in
     /// English), and Apple's and Google's names are their titles, never translated nor lowercased.
     func testASignInMethodHasItsOwnNameForASentence() throws {
-        let code = try Self.source("DyorHQ/Wallet/Session.swift")
-        let session = Self.squeezed(code)
+        let code = try AppSource.app("Wallet/Session.swift")
+        let session = AppSource.squeezed(code)
         let start = try XCTUnwrap(code.range(of: "var nameInSentence: String {"))
         let chars = Array(code)
         let open = code.distance(from: code.startIndex, to: start.upperBound) - 1
-        let body = Self.squeezed(String(chars[open...(try XCTUnwrap(TradeStringsTests.closing(chars, open)))]))
+        let body = AppSource.squeezed(String(chars[open...(try XCTUnwrap(TradeStringsTests.closing(chars, open)))]))
         XCTAssertTrue(body.contains("case .apple, .google, .watchOnly: return title"))
         for (method, key, english) in [("email", "email", "email"), ("emailPassword", "emailPassword", "email & password"),
                                        ("passkey", "privyPasskey", "passkey (Privy)"), ("meraPasskey", "passkey", "passkey"),
@@ -268,17 +249,17 @@ final class PerpsWalletStringsTests: XCTestCase {
     /// What a server reparses, what is matched against what someone types, and the values a page or the store reads
     /// stay English, never translated.
     func testTheEnglishMatchersAreUntouched() throws {
-        let session = try Self.source("DyorHQ/Wallet/Session.swift")
+        let session = try AppSource.app("Wallet/Session.swift")
         XCTAssertTrue(session.contains("return \"DyorHQ Email Rebind\\n\\nEmail: \\(email)\\nAddress: \\(address.checksummed.lowercased())\\nIssued At: \\(issued)\""))
         XCTAssertTrue(session.contains("trimmed.lowercased().hasSuffix(\"@privaterelay.appleid.com\")"))
         XCTAssertTrue(session.contains("oAuth.login(with: provider, appUrlScheme: \"dyorhq\")"))
-        let password = try Self.source("DyorHQ/Wallet/PasswordWallet.swift")
+        let password = try AppSource.app("Wallet/PasswordWallet.swift")
         XCTAssertTrue(password.contains("for weak in [\"password\", \"dyorhq\", \"qwerty\", \"letmein\", \"monad\", \"crypto\", \"wallet\"] where lower.contains(weak) {"))
-        let export = try Self.source("DyorHQ/Wallet/WalletExportView.swift")
+        let export = try AppSource.app("Wallet/WalletExportView.swift")
         XCTAssertTrue(export.contains("if result == \"success\" { dismiss() }"))
         XCTAssertTrue(export.contains("guard message.name == \"exportResult\" else { return }"))
         XCTAssertTrue(export.contains("json[\"status\"] as? String"))
-        let log = try Self.source("DyorHQ/Wallet/ActivityLog.swift")
+        let log = try AppSource.app("Wallet/ActivityLog.swift")
         for status in ["pendingStatus = \"pending\"", "confirmedStatus = \"confirmed\"", "revertedStatus = \"reverted\"", "notFoundStatus = \"notFound\""] {
             XCTAssertTrue(log.contains(status), status)
         }
@@ -295,19 +276,19 @@ final class PerpsWalletStringsTests: XCTestCase {
     /// The Perps order's notification names its side in the app's language; Activity rows and notifications are written
     /// in the language in use when they are recorded.
     func testRecordsAndNotificationsAreWrittenInTheAppLanguage() throws {
-        let trade = try Self.source("DyorHQ/Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         XCTAssertFalse(trade.contains("side: input.side == .long ? \"Long\" : \"Short\""))
-        XCTAssertTrue(Self.squeezed(trade).contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side: side, market: \"\\(market.asset)-PERP\", perpId: market.id)"))
+        XCTAssertTrue(AppSource.squeezed(trade).contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side: side, market: \"\\(market.asset)-PERP\", perpId: market.id)"))
         // The live outcome's notice names the side the same way, from the order the tracker follows.
-        let tracker = Self.squeezed(try Self.source("DyorHQ/Wallet/PerplOrderTracker.swift"))
+        let tracker = AppSource.squeezed(try AppSource.app("Wallet/PerplOrderTracker.swift"))
         XCTAssertTrue(tracker.contains("Notifications.perpOrder(notice, side: sideName, market: \"\\(asset)-PERP\", perpId: marketId, owner: owner, deliver: deliverBanner)"))
         XCTAssertTrue(tracker.contains(#"let sideName = order.side == .long ? tr(LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]")) : tr(LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]"))"#))
         XCTAssertTrue(tracker.contains(#"let title = order.side == .long ? tr("Long \(perp)") : tr("Short \(perp)")"#), "the Activity row's title, as the sheets write it")
-        let notifications = try Self.source("DyorHQ/Wallet/Notifications.swift")
+        let notifications = try AppSource.app("Wallet/Notifications.swift")
         XCTAssertTrue(notifications.contains("post(kind: .swap, title: tr(\"Swap complete\"), body: tr(\"Swapped \\(paid) → \\(got)\"), route: .trade)"))
         XCTAssertTrue(notifications.contains("title: tr(\"Bridge complete\")"))
         XCTAssertTrue(notifications.contains("title: tr(\"Price alert: \\(symbol)\")"))
-        let run = try Self.source("DyorHQ/Wallet/TransactionRun.swift")
+        let run = try AppSource.app("Wallet/TransactionRun.swift")
         XCTAssertTrue(run.contains("static var notSent: String { tr(\"Not sent. Nothing left your account.\") }"))
         XCTAssertTrue(run.contains("return tr(\"Up to \\(fee) + \\(unestimated) more steps\")"), "one plural key, not an English-only \"1 more step\"")
     }
@@ -317,7 +298,7 @@ final class PerpsWalletStringsTests: XCTestCase {
     /// resting close order are keys of their own. "Market" is the order type; the review row naming the market traded is
     /// a key of its own.
     func testAWordWithTwoMeaningsIsTwoKeys() throws {
-        let trade = Self.squeezed(try Self.source("DyorHQ/Perps/PerpTradeView.swift"))
+        let trade = AppSource.squeezed(try AppSource.appFiles(AppSource.perpTradeViewFiles))
         XCTAssertTrue(trade.contains(#"Button(action: onClose) { Text(verbatim: tr(LocalizedStringResource("position.close", defaultValue: "Close", comment: "Closes the open position (a verb), a button on the position. [tight]"))) }"#))
         XCTAssertTrue(trade.contains(#"order.reduceOnly ? tr(LocalizedStringResource("chartLine.close", defaultValue: "Close", comment: "#))
         XCTAssertEqual(trade.components(separatedBy: ##"DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: "##).count - 1, 3)
@@ -405,7 +386,8 @@ final class PerpsWalletStringsTests: XCTestCase {
     /// The app's catalog gives every plural key English forms that read right for a count of one ("Up to %@ + %lld more
     /// step"), not the plural as written ("1 more steps"): `checkEnglishPlurals`.
     func testThePluralKeysHaveEnglishPluralForms() throws {
-        let url = try Self.ios().appendingPathComponent("DyorHQ/Resources/Localizable.xcstrings")
+        try AppSource.requireApp()
+        let url = AppSource.appFolder.appendingPathComponent("Resources/Localizable.xcstrings")
         try Self.checkEnglishPlurals(Self.pluralKeys, catalog: Data(contentsOf: url))
     }
 

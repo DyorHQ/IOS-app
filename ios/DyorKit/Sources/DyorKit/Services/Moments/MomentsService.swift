@@ -1,17 +1,8 @@
 import BigInt
 import Foundation
 
-/// A wallet that can sign a raw 32-byte digest — what a Permit2 collect needs. Both the Privy embedded wallet and an
-/// imported local wallet provide it in the app.
-public protocol MomentsPermitSigner: Sendable {
-    var address: Address { get }
-    /// Returns the 65-byte `[r ‖ s ‖ v]` signature as `0x`-hex with `v` as 27/28.
-    func signDigest(_ digest: Data) async throws -> String
-}
-
 /// The Moments client: every read comes straight from the contracts through Multicall3, every write is a
-/// `TransactionStep` plan for `TransactionSender`. A port of the web app's `moments/reads.ts` + `actions.ts`; the
-/// derivations are identical so both clients agree to the wei.
+/// `TransactionStep` plan for `TransactionSender`. Ported from the former web app's `moments/reads.ts` + `actions.ts`.
 public actor MomentsService {
     public let rpc: RPCClient
     /// Where event history is read; a local fork keeps logs on the same node.
@@ -40,8 +31,7 @@ public actor MomentsService {
                 cache: ChainCache? = nil, store: ChainStore? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
         self.rpc = rpc
         self.addresses = addresses
-        let text = rpc.url.absoluteString
-        let local = text.contains("127.0.0.1") || text.contains("localhost")
+        let local = RPCClient.mentionsLocalNode(rpc.url)
         self.logsRPC = logsRPC ?? (local ? rpc : RPCClient(url: LaunchpadService.defaultLogsRPC))
         self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
@@ -79,7 +69,7 @@ public actor MomentsService {
     ///
     /// With the app's shared reads (`cache`) the terms are read at most once a minute (`ChainCache.TTL.terms`): the board
     /// polls every 20 s, and their values change only through a proposal queued for 48 hours. A publish stays bound to the
-    /// terms its review showed (`publishPlan`'s `termsHash`, MO-4), so terms read a minute ago can never publish under
+    /// terms its review showed (`publishPlan`'s `termsHash`), so terms read a minute ago can never publish under
     /// others. A pull to refresh and a settled transaction read them again (`ChainCache.invalidate`); a read that fails is
     /// never kept.
     public func policy() async throws -> MomentPolicy? {
@@ -309,12 +299,6 @@ public actor MomentsService {
         }
     }
 
-    /// The Moment id of a coin, 0 when the address is not a Moment coin.
-    public func momentId(coin: Address) async throws -> BigUInt {
-        guard isDeployed else { return 0 }
-        return try await multicall.readAll([MomentsABI.call(addresses.factory, MomentsABI.Factory.momentIdByCoin, [.address(coin)], returns: "uint256")])[0][0].uint
-    }
-
     /// Moment ids for many token addresses at once (only the ones that are Moment coins are returned).
     public func momentIds(coins: [Address]) async throws -> [Address: BigUInt] {
         guard isDeployed, !coins.isEmpty else { return [:] }
@@ -498,24 +482,8 @@ public actor MomentsService {
         return [.call(TransactionRequest(to: addresses.factory, data: data), label: L10n.tr("Publish \(input.symbol)"))]
     }
 
-    /// Collects `quantity` editions with a Permit2 signature: Permit2 is approved once for USDC (unlimited, the
-    /// canonical pattern; the step is skipped when the allowance already covers it), then the collect itself
-    /// carries a signed transfer for up to `price × quantity`. The contract only ever pulls the quoted gross.
-    public func collectPlan(momentId: BigUInt, quantity: Int, price: BigUInt, signer: any MomentsPermitSigner, symbol: String) async throws -> [TransactionStep] {
-        guard isDeployed else { throw MomentsError.notDeployed }
-        let maxGross = price * BigUInt(quantity)
-        let permit = Permit2Signature.Permit(token: addresses.usdc, amount: maxGross, nonce: Permit2Signature.randomNonce(), deadline: BigUInt(Int(Date().timeIntervalSince1970) + 30 * 60))
-        let digest = try Permit2Signature.digest(permit: permit, spender: addresses.collect, permit2: addresses.permit2, chainId: Monad.chainId)
-        guard let signature = Data(hex: try await signer.signDigest(digest)), signature.count == 65 else { throw TransactionError.rejected(L10n.tr("The wallet returned an unreadable signature.")) }
-        let data = MomentsABI.calldata(MomentsABI.Collect.collectWithPermit2, [.uint(momentId), .uint(quantity), MomentsABI.permit(token: permit.token, amount: permit.amount, nonce: permit.nonce, deadline: permit.deadline), .bytes(signature)])
-        let maxUint = (BigUInt(1) << 256) - 1
-        return [
-            .approve(token: addresses.usdc, spender: addresses.permit2, amount: maxUint, label: L10n.tr("Approve USDC for Permit2")),
-            .call(TransactionRequest(to: addresses.collect, data: data), label: L10n.string(LocalizedStringResource("Collect \(quantity) editions of \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The values are the number of editions collected and the Moment's symbol."))),
-        ]
-    }
-
-    /// The plain-approval path: an exact USDC approval of the collect contract, then `collect`.
+    /// Collects `quantity` editions: an exact USDC approval of the collect contract for `gross`, then `collect`. The
+    /// contract pulls at most the quoted gross, which the approval covers.
     public func collectWithApprovalPlan(momentId: BigUInt, quantity: Int, gross: BigUInt, symbol: String) -> [TransactionStep] {
         let data = MomentsABI.calldata(MomentsABI.Collect.collect, [.uint(momentId), .uint(quantity)])
         return [
@@ -525,6 +493,11 @@ public actor MomentsService {
     }
 
     public func claimPlan(momentId: BigUInt, symbol: String) -> [TransactionStep] {
+        Self.claimPlan(momentId: momentId, symbol: symbol, addresses: addresses)
+    }
+
+    /// `claimPlan` against `addresses`' vesting contract: the live cohort's, or a retired one's (`RetiredMoments.plan`).
+    static func claimPlan(momentId: BigUInt, symbol: String, addresses: MomentsAddresses) -> [TransactionStep] {
         [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claim, [.uint(momentId)])), label: L10n.string(LocalizedStringResource("Claim \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the symbol of a Moment's coin, whose vested coins are claimed.")))]
     }
 
@@ -533,6 +506,11 @@ public actor MomentsService {
     }
 
     public func withdrawCreatorProceedsPlan(momentId: BigUInt) -> [TransactionStep] {
+        Self.withdrawCreatorProceedsPlan(momentId: momentId, addresses: addresses)
+    }
+
+    /// `withdrawCreatorProceedsPlan` against `addresses`' collect contract: the live cohort's, or a retired one's.
+    static func withdrawCreatorProceedsPlan(momentId: BigUInt, addresses: MomentsAddresses) -> [TransactionStep] {
         [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator proceeds"))]
     }
 
@@ -545,6 +523,11 @@ public actor MomentsService {
     }
 
     public func withdrawCreatorFeesPlan(momentId: BigUInt) -> [TransactionStep] {
+        Self.withdrawCreatorFeesPlan(momentId: momentId, addresses: addresses)
+    }
+
+    /// `withdrawCreatorFeesPlan` against `addresses`' hook: the live cohort's, or a retired one's.
+    static func withdrawCreatorFeesPlan(momentId: BigUInt, addresses: MomentsAddresses) -> [TransactionStep] {
         [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator fees"))]
     }
 
@@ -743,7 +726,7 @@ public actor MomentsService {
             var sqrtPrice = record.sqrtPriceX96
             var liveRead = false
             if let priceReads, case .success(let values) = priceReads[i] {
-                let live = BigUInt(values[0].bytes) & ((BigUInt(1) << 160) - 1)
+                let live = BigUInt(values[0].bytes) & SwapCalldata.maxUint160
                 if live > 0 { sqrtPrice = live; liveRead = true }
             }
             out[id] = MomentPool(

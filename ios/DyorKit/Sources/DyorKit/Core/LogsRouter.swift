@@ -820,8 +820,7 @@ public actor LogsRouter {
             }
         }
 
-        return LogsRead(logs: logs.sorted { a, b in a.blockNumber == b.blockNumber ? a.logIndex < b.logIndex : a.blockNumber < b.blockNumber },
-                        covered: LogsRead.merge(covered), requests: requests)
+        return LogsRead(logs: logs.sorted(by: Log.chainOrder), covered: LogsRead.merge(covered), requests: requests)
     }
 
     /// The first endpoint not resting — of those that refuse a range past their head only, when `refusingOnly` (all that

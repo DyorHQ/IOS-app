@@ -185,10 +185,7 @@ public enum LaunchpadCurve {
         let stacks = stacks.filter(\.isDeployed)
         let queries = tokens.filter { !$0.isZero }.flatMap { token in stacks.map { (token: token, stack: $0) } }
         guard !queries.isEmpty else { return [:] }
-        let results = try await multicall.read(queries.map {
-            LaunchpadABI.call($0.stack.factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0.token)],
-                              returns: LaunchpadABI.launchedTokenReturns(legacy: $0.stack.generation.legacyRecord))
-        })
+        let results = try await multicall.read(queries.map { LaunchpadABI.launchRecordCall($0.token, stack: $0.stack) })
         return try curveRecords(queries: queries, results: results)
     }
 

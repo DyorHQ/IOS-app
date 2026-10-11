@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// What the app mirrors to its backend waits on the device until an upload succeeds, within bounds (security audit
-/// 2026-09-26, RS-4), and a whole list is mirrored by upsert-then-prune (RS-7).
+/// What the app mirrors to its backend waits on the device until an upload succeeds, within bounds, and
+/// a whole list is mirrored by upsert-then-prune.
 final class BackendMirrorTests: XCTestCase {
     private struct Row: Codable, Sendable, Equatable { let value: Int }
 

@@ -1,10 +1,10 @@
 import DyorKit
 import SwiftUI
 
-/// Sets, moves or removes an open position's take-profit and stop-loss on Perpl (security audit GT-1). A new trigger is
+/// Sets, moves or removes an open position's take-profit and stop-loss on Perpl. A new trigger is
 /// linked to the position (`lp`), so Perpl cancels it when the position closes, and closes the position's whole size as
 /// the trading stream reports it now. That size is fixed — it won't follow the position if it grows or shrinks later —
-/// and the sheet says so (GT-5). Moving a trigger cancels the old one first, then places the new one once Perpl's list
+/// and the sheet says so. Moving a trigger cancels the old one first, then places the new one once Perpl's list
 /// confirms the cancel; every step's outcome is shown, and a gap it leaves is said plainly.
 struct PositionTriggersSheet: View {
     let market: PerpMarket
@@ -224,8 +224,8 @@ struct PositionTriggersSheet: View {
                 case .placed, .placementUnknown, .placementNotConfirmed:
                     if !change.replacing.isEmpty { TriggerStore.remove(perpId: market.id, kind: kind, positionLong: isLong, owner: session.address) }
                     // One that went unanswered, or that Perpl admitted but didn't list in time, may be live too, so this
-                    // device keeps a record of it as well — shown as unverified until Perpl's list confirms or drops it
-                    // (GT-3), as the order sheet does.
+                    // device keeps a record of it as well — shown as unverified until Perpl's list confirms or drops it,
+                    // as the order sheet does.
                     if let price = change.price {
                         TriggerStore.record([PlacedTrigger(perpId: market.id, symbol: market.asset, kind: kind, price: price, size: size, positionLong: isLong)], owner: session.address)
                         if outcome == .placed { summary.append(PositionText.trigger(change.kind == .takeProfit, at: price)) }
@@ -316,7 +316,7 @@ struct PositionTriggersSheet: View {
 }
 
 /// Cancels keeper triggers (TP/SL) on Perpl: one the user picked from the Orders list, or the ones left over on a
-/// market with no position for them to close (security audit GT-1, GT-2). Every row stays where it is and says, as it
+/// market with no position for them to close. Every row stays where it is and says, as it
 /// happens, what Perpl did with its cancel: cancelling, then cancelled once it has left Perpl's live list — or still
 /// live (Perpl refused the cancel), already gone, triggered or expired first, or not confirmed in time. Nothing reads as
 /// cancelled before Perpl's list shows it. Once the cancels are out the sheet can be closed: PerplTrading finishes the

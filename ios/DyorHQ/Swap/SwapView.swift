@@ -192,7 +192,7 @@ struct SwapView: View {
     /// and the history.
     private var actionSection: some View {
         Section {
-            // Disabled while the balance can't cover the input: the title says why (UI-4). A watched address can't sign, so
+            // Disabled while the balance can't cover the input: the title says why. A watched address can't sign, so
             // it can't review one either: its quotes still show, and the footer says why, as on the Launch page.
             PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient || !session.canSign) { reviewing = model.review }
                 .listRowInsets(EdgeInsets())
@@ -351,7 +351,7 @@ struct SwapView: View {
             model.amountText = ""
             Task { await model.refreshBalances(env: env, address: session.address) }
         }, onCompleted: { hash in
-            // At settlement, not on Done (GL-3). Record the swap so it shows in Swap History and Recent Activity with
+            // At settlement, not on Done. Record the swap so it shows in Swap History and Recent Activity with
             // its exact legs (including a native MON leg, which an on-chain Transfer scan can't recover): the ones
             // reviewed and signed.
             let text = "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals, compact: true)) \(review.tokenIn.symbol) → \(NumberStyle.units(review.quote.amountOut, decimals: review.tokenOut.decimals, compact: true)) \(review.tokenOut.symbol)"
@@ -361,7 +361,7 @@ struct SwapView: View {
             // just acquired, and the one paid with (a partial swap leaves a balance still worth showing).
             KnownTokenStore.add(review.tokenOut, owner: session.address)
             KnownTokenStore.add(review.tokenIn, owner: session.address)
-            // Bought here on purpose: no longer an unverified token that merely arrived in the wallet (IOST-12).
+            // Bought here on purpose: no longer an unverified token that merely arrived in the wallet.
             KnownTokenStore.markChosen(review.tokenOut.address, owner: session.address)
             if settings.notificationsEnabled, settings.notifyFills {
                 Notifications.swapped(review.amountIn, review.tokenIn, review.quote.amountOut, review.tokenOut)
@@ -608,7 +608,7 @@ final class SwapModel {
 
     /// Debounced by the caller's `.task(id:)`: the task is cancelled and restarted on every keystroke.
     /// `exactApprovals`: every account's plans approve exactly the input (`SwapRequest.exactApprovals`) — an ERC-20
-    /// into Uniswap v4 costs one approval more per swap, and no unlimited Permit2 allowance is left standing (IOST-14).
+    /// into Uniswap v4 costs one approval more per swap, and no unlimited Permit2 allowance is left standing.
     ///
     /// A first round for what is on screen shows each venue's quote as it arrives (`SwapEngine.quoteUpdates`): the best
     /// so far, and the venues still asked. Review waits for the final answer (`selectedQuote`). The re-quote every 15 s
@@ -806,7 +806,7 @@ struct TokenPickerSheet: View {
     /// it only opens a token's page, which shows such a coin as "Past cohort · trading closed" with no swap.
     var tradableOnly = true
     /// Tokens found in the wallet rather than chosen (`KnownTokenStore.unverified`): left out of the list, and shown —
-    /// marked — only when a search matches them (security audit 2026-09-26, IOST-12): a DyorHQ coin with its DyorHQ label
+    /// marked — only when a search matches them: a DyorHQ coin with its DyorHQ label
     /// in a section of its own, every other one as Unverified (`TokenPickerList`).
     var unverified: Set<Address> = []
     let onPick: (Token) -> Void

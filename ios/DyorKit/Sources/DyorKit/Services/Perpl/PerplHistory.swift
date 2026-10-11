@@ -1,6 +1,6 @@
 import Foundation
 
-/* Authenticated Perpl trading history (fills, position history, account events). These endpoints are the only
+/* Authenticated Perpl trading history (fills, position history). These endpoints are the only
    source for cumulative volume, realized P&L and a trade log — the on-chain Exchange keeps only live state. Every
    call is Ed25519-signed with the account's API key; see PerplAuth.signedGet and PerplFoundation/api-docs. Prices
    and sizes arrive as integers scaled by the market's decimals, and money amounts as decimal strings in collateral

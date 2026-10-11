@@ -425,7 +425,7 @@ extension Mera {
         ///   markets and aren't bounded here.)
         /// - `.recipient`: a Kuru Flow swap paying its output to another address, whatever the intent, or a launchpad
         ///   trade the sheet declared doing so. DyorHQ never builds either.
-        /// - `.fee`: a Kuru Flow swap whose fee tuple takes basis points. The quote client blocks one too (IOST-7).
+        /// - `.fee`: a Kuru Flow swap whose fee tuple takes basis points. The quote client blocks one too.
         /// - `.differentToken`: a Kuru Flow swap the sheet declared, trading tokens other than the ones shown.
         /// - `.graduateFallback`: the launchpad's `graduateFallback`, to any contract. The app never sends it, on any stack.
         /// - `.retiredLaunchpad`: a buy on a retired launchpad (`retiredLaunchpadRefusal`), whatever the sheet declared;
@@ -549,7 +549,7 @@ extension Mera {
             func allow(_ ok: Bool) -> Verdict { ok ? .allowed : .ask(.notAllowlisted) }
             switch part.kind {
             case .swap(.uniswap):
-                // Read in full (`MeraCalldata`): a payload that isn't exactly the swap the app builds asks (IOSK-10).
+                // Read in full (`MeraCalldata`): a payload that isn't exactly the swap the app builds asks.
                 if call.to == Uniswap.universalRouter { return checkSwap(universalRouterSwap(call.data, value: call.value), part: part) }
                 if call.to == Uniswap.swapRouter02 { return checkSwap(swapRouter02Swap(call.data, account: context.account, value: call.value), part: part) }
                 return .ask(.notAllowlisted)
@@ -685,8 +685,4 @@ extension Mera {
             static let perplExecOrders = ABI.selector(PerplExchange.Signature.execOrders)
         }
     }
-}
-
-private extension Character {
-    var isASCIIDigit: Bool { isASCII && isNumber }
 }

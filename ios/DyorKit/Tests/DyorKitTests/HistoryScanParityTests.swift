@@ -17,9 +17,7 @@ final class HistoryScanParityTests: XCTestCase {
     }
 
     private func spec() throws -> Spec {
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { root.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios → the repository
-        let file = root.appendingPathComponent("supabase/functions/_shared/history-scans.json")
+        let file = AppSource.root.appendingPathComponent("supabase/functions/_shared/history-scans.json")
         // supabase/ is always in this repository: a missing file is a rename or a move, and must fail, never skip.
         guard FileManager.default.fileExists(atPath: file.path) else {
             XCTFail("\(file.path) is missing: the server's scan definitions moved; update this test with them")

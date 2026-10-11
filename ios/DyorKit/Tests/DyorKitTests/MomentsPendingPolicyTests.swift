@@ -4,7 +4,7 @@ import XCTest
 @testable import DyorKit
 
 /// A policy proposed but not applied yet is read and compared with the live one, so the app can warn that a publish
-/// may land under it (security audit 2026-09-26, MO-4).
+/// may land under it.
 final class MomentsPendingPolicyTests: XCTestCase {
     private let platform = Address(literal: "0x00000000000000000000000000000000000000a1")
     private let treasury = Address(literal: "0x00000000000000000000000000000000000000b2")

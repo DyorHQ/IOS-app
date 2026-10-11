@@ -2,7 +2,7 @@ import BigInt
 import XCTest
 @testable import DyorKit
 
-/// Network fee ceilings for every wallet (security audit 2026-09-26, IOST-1): the RPC sets the gas limit, base fee and
+/// Network fee ceilings for every wallet: the RPC sets the gas limit, base fee and
 /// tip, so `prepare` refuses — never clamps — a fee out of bounds, before any wallet is asked to sign.
 final class NetworkFeeLimitsTests: XCTestCase {
     private let gwei = BigUInt(1_000_000_000)

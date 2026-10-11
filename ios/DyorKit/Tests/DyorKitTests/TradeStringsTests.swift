@@ -13,7 +13,7 @@ final class TradeStringsTests: XCTestCase {
     /// Every Swift file of the five folders, without its comments.
     private static func sources() throws -> [(path: String, code: [Character])] {
         let all = try FormattedTextIsolationTests.appSources().filter { source in folders.contains { source.path.hasPrefix($0) } }
-        XCTAssertEqual(all.count, 16, "the five folders' files")
+        XCTAssertEqual(all.count, 25, "the five folders' files")
         return all.map { ($0.path, uncommented(Array($0.text))) }
     }
 
@@ -148,7 +148,7 @@ final class TradeStringsTests: XCTestCase {
             ("Bridge/BridgeModel.swift", "extension AuroraSwapStatus", 6),
         ]
         for (file, declaration, cases) in labels {
-            let code = String(Self.uncommented(Array(try DocsLinksTests.appSource(file))))
+            let code = String(Self.uncommented(Array(try AppSource.app(file))))
             let start = try XCTUnwrap(code.range(of: declaration), "\(file): \(declaration)")
             let open = try XCTUnwrap(code[start.upperBound...].firstIndex(of: "{"))
             let chars = Array(code)
@@ -170,15 +170,15 @@ final class TradeStringsTests: XCTestCase {
             XCTAssertNil(text.range(of: #"== 1 \? ""#, options: .regularExpression), "\(path): a plural chosen by hand")
             XCTAssertFalse(text.contains("rawValue.capitalized"), "\(path): a label derived from a raw value")
         }
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.declaration(of: "MomentHoldingRow").text
         XCTAssertTrue(home.contains(#"tr("\(row.nftBalance) editions")"#))
-        let portfolio = try DocsLinksTests.appSource("Portfolio/PortfolioView.swift")
+        let portfolio = try AppSource.app("Portfolio/PortfolioView.swift")
         XCTAssertTrue(portfolio.contains(#"Text("\(stats.trades) trades in the period")"#))
-        let past = try DocsLinksTests.appSource("Portfolio/PastCohortsCard.swift")
+        let past = try AppSource.app("Portfolio/PastCohortsCard.swift")
         XCTAssertTrue(past.contains(#"tr("\(position.row.nftBalance) editions")"#))
-        let history = try DocsLinksTests.appSource("Portfolio/PortfolioModel.swift")
+        let history = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(history.contains(#"tr("\(c.editions) editions · \("#))
-        let profile = try DocsLinksTests.appSource("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
         XCTAssertTrue(profile.contains(#"tr("\(model.claimAllCount) claims · fees and rewards")"#))
     }
 
@@ -198,7 +198,7 @@ final class TradeStringsTests: XCTestCase {
         XCTAssertEqual(Self.pluralForms(in: [direct]).one, ["%lld edition"])
         XCTAssertEqual(Self.pluralForms(in: [direct]).other, ["%lld editions"])
         XCTAssertEqual(Self.pluralForms(in: [substituted]).one, ["%arg claim"])
-        let data = Data(try DocsLinksTests.appSource("Resources/Localizable.xcstrings").utf8)
+        let data = Data(try AppSource.app("Resources/Localizable.xcstrings").utf8)
         let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let strings = try XCTUnwrap(catalog["strings"] as? [String: Any])
         try XCTSkipIf(strings.isEmpty, "catalog step pending: give \(plurals.map(\.0)) English one and other forms")
@@ -231,11 +231,11 @@ final class TradeStringsTests: XCTestCase {
     /// places: a past cohort Moment's "Closed" (collecting is closed) is not the Perps tab of closed positions, and My
     /// Launchpad's "View" (the name of its switch, a noun) is not the explorer link's verb.
     func testAWordWithTwoMeaningsIsTwoKeys() throws {
-        let past = try DocsLinksTests.appSource("Portfolio/PastCohortsCard.swift")
+        let past = try AppSource.app("Portfolio/PastCohortsCard.swift")
         XCTAssertTrue(past.contains(#"Text(verbatim: tr(LocalizedStringResource("pastCohort.closed", defaultValue: "Closed", comment: "#))
         XCTAssertTrue(past.contains(#"(info.graduated ? Text("Graduated") : info.state == .expired ? Text("Expired")"#), "each status is a key")
         XCTAssertFalse(past.contains(#""Closed")"#))
-        let profile = try DocsLinksTests.appSource("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         XCTAssertTrue(profile.contains(#"Picker(tr(LocalizedStringResource("myLaunchpad.view", defaultValue: "View", comment: "#))
         XCTAssertFalse(profile.contains(#"Picker("View""#))
     }
@@ -244,7 +244,7 @@ final class TradeStringsTests: XCTestCase {
     /// tabs' and the menu's names: four share the card's width, so a language whose Launch tab is a long word keeps the
     /// switch short. The split names each category as the switch does. English reads Spot, Perps, Launch and Moments.
     func testHomesCategoriesAreKeysOfTheirOwn() throws {
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.appFiles(AppSource.homeViewFiles)
         for (key, english) in [("spot", "Spot"), ("perps", "Perps"), ("launch", "Launch"), ("moments", "Moments")] {
             XCTAssertTrue(home.contains(#"tr(LocalizedStringResource("homeCategory.\#(key)", defaultValue: "\#(english)", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split."#), key)
         }
@@ -262,7 +262,7 @@ final class TradeStringsTests: XCTestCase {
     /// Aurora's errors are matched on its own English text, whatever the app's language; the amounts in them are then
     /// written in the token's units.
     func testServerMatchersStayEnglish() throws {
-        let bridge = try DocsLinksTests.appSource("Bridge/BridgeModel.swift")
+        let bridge = try AppSource.app("Bridge/BridgeModel.swift")
         XCTAssertTrue(bridge.contains(#"message.lowercased().contains("at least") || message.lowercased().contains("too low"),"#))
         XCTAssertTrue(bridge.contains("// not localized: Aurora's own English error text"))
     }
@@ -281,7 +281,7 @@ final class TradeStringsTests: XCTestCase {
             }
         }
         XCTAssertEqual(agos, 3, "Launch trades, My Launchpad activity and Swap history")
-        XCTAssertNil(try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift").range(of: "enum RelativeTime"), "one RelativeTime, DyorKit's")
+        XCTAssertNil(try AppSource.appFiles(AppSource.launchpadViewFiles).range(of: "enum RelativeTime"), "one RelativeTime, DyorKit's")
     }
 
     // MARK: A small reader of Swift source (single-line string literals), enough for these files

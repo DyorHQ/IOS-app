@@ -11,28 +11,6 @@ import SwiftUI
 /// is, so a literal never picks it; and no literal passed to a helper is a key with nothing to translate ("%@ %@",
 /// "%@ AUSD"): those go as `verbatim:`.
 final class LocalizableHelpersTests: XCTestCase {
-    private static func ios() throws -> URL {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        guard FileManager.default.fileExists(atPath: ios.appendingPathComponent("DyorHQ").path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        return ios
-    }
-
-    private static func source(_ path: String) throws -> String {
-        try String(contentsOf: try ios().appendingPathComponent(path), encoding: .utf8)
-    }
-
-    /// Every Swift file of the app, by its path under ios/DyorHQ.
-    private static func appSources() throws -> [(path: String, text: String)] {
-        let app = try ios().appendingPathComponent("DyorHQ")
-        let files = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
-        return try files.filter { $0.pathExtension == "swift" }.map {
-            (String($0.path.dropFirst(app.path.count + 1)), try String(contentsOf: $0, encoding: .utf8))
-        }.sorted { $0.path < $1.path }
-    }
-
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-
     /// The declarations from `struct <name>` to its `var body`: the stored properties and the initializers.
     private static func members(of name: String, in text: String) throws -> String {
         let from = try XCTUnwrap(text.range(of: "struct \(name)"), name).upperBound
@@ -42,7 +20,7 @@ final class LocalizableHelpersTests: XCTestCase {
 
     /// The shared helpers every screen uses take their text localized, with a `String` path kept for run-time text.
     func testSharedHelpersTakeLocalizedText() throws {
-        let components = Self.squeezed(try Self.source("DyorHQ/Design/Components.swift"))
+        let components = AppSource.squeezed(try AppSource.app("Design/Components.swift"))
         for signature in [
             "init(title: LocalizedStringKey, text: Binding<String>, token: Token?, onMax: (() -> Void)? = nil)", // AmountField
             "init(title: LocalizedStringKey, address: Address)", // AddressRow
@@ -62,8 +40,8 @@ final class LocalizableHelpersTests: XCTestCase {
         XCTAssertTrue(components.contains("case .localized(let resource): Paragraph(resource)"))
         XCTAssertTrue(components.contains("case .verbatim(let text): Paragraph(verbatim: text)"))
 
-        let profile = try Self.source("DyorHQ/Profile/ProfileView.swift")
-        XCTAssertTrue(Self.squeezed(profile).contains("init(_ title: LocalizedStringKey, symbol: String, tint: Color = .accent)"), "SettingsRow")
+        let profile = try AppSource.app("Profile/ProfileView.swift")
+        XCTAssertTrue(AppSource.squeezed(profile).contains("init(_ title: LocalizedStringKey, symbol: String, tint: Color = .accent)"), "SettingsRow")
 
         // No shared helper keeps its text as a `String`, which `Text` would show without looking it up.
         let shared = [("AmountField: View", components), ("AddressRow: View", components), ("InlineError: View", components),
@@ -77,7 +55,7 @@ final class LocalizableHelpersTests: XCTestCase {
 
         // ConfirmationSheet: both titles are resources, resolved in the app's language for the navigation title, the
         // confirm button and the App Lock reason (a `String` iOS shows itself).
-        let sheet = try Self.source("DyorHQ/Wallet/TransactionRun.swift")
+        let sheet = try AppSource.app("Wallet/TransactionRun.swift")
         let sheetMembers = try Self.members(of: "ConfirmationSheet<Details: View>: View", in: sheet)
         XCTAssertTrue(sheetMembers.contains("let title: LocalizedStringResource"))
         XCTAssertTrue(sheetMembers.contains("let confirmTitle: LocalizedStringResource"))
@@ -89,17 +67,17 @@ final class LocalizableHelpersTests: XCTestCase {
         // helper that puts its key title into a sentence wraps it in Text first; a label made only of other text joins the
         // Texts as they are (HelpRow's title and description: "%@. %@" would be a key with nothing to translate); an
         // amount with its symbol is verbatim.
-        let help = try Self.source("DyorHQ/Support/GetHelpView.swift")
+        let help = try AppSource.app("Support/GetHelpView.swift")
         XCTAssertTrue(help.contains(".accessibilityLabel(title + Text(verbatim: \". \") + detail)"), "HelpRow's VoiceOver label")
-        XCTAssertTrue(try Self.source("DyorHQ/Perps/PerpTradeView.swift").contains(
+        XCTAssertTrue(try AppSource.appFiles(AppSource.perpTradeViewFiles).contains(
             ".accessibilityLabel(Text(\"\\(Text(side)) \\(NumberStyle.number(level.price)), total \\(NumberStyle.number(level.total, compact: true)) \\(symbol)\"))"),
             "the order book row's VoiceOver label")
         XCTAssertTrue(components.contains("Text(verbatim: \"\\(NumberStyle.units(amount, decimals: token.decimals, compact: compact)) \\(token.symbol)\")"), "AmountText")
 
         // The trigger sheet's title and note are written where the request is made, as resources.
-        let trade = try Self.source("DyorHQ/Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         XCTAssertTrue(trade.contains("let title: LocalizedStringResource\n    let note: LocalizedStringResource?"), "TriggerCancelRequest")
-        let triggers = try Self.source("DyorHQ/Perps/PerpTriggerSheets.swift")
+        let triggers = try AppSource.app("Perps/PerpTriggerSheets.swift")
         XCTAssertTrue(triggers.contains(".navigationTitle(tr(title))"))
         XCTAssertTrue(triggers.contains("if let note { Text(verbatim: tr(note)) }"))
     }
@@ -107,7 +85,7 @@ final class LocalizableHelpersTests: XCTestCase {
     /// A helper's `String` overload is disfavored, so a literal still picks the key, and it shows its text as it is.
     func testEveryStringOverloadIsDisfavoredAndShownAsItIs() throws {
         var overloads = 0
-        for (path, text) in try Self.appSources() {
+        for (path, text) in try AppSource.allAppFiles() {
             let lines = text.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() where line.contains("<S: StringProtocol>(") && (line.contains("init<S") || line.contains("func ")) {
                 overloads += 1
@@ -132,7 +110,7 @@ final class LocalizableHelpersTests: XCTestCase {
         let runTime: Set<String> = [
             "Launchpad/LaunchpadProfileView.swift claimRow caption", // the claimable's own caption, from the model
             "Perps/PerpTradeView.swift stepperField placeholder", // the mark price, a number
-            "Perps/PerpTradeView.swift optionRow title", // the size unit's symbol: the market's asset or AUSD
+            "Perps/PerpPickerSheets.swift optionRow title", // the size unit's symbol: the market's asset or AUSD
             "Portfolio/AssetsModel.swift tokenRow note", // the run-time overload: a curve route's note from DyorKit
             "Profile/AccountDeletion.swift DeletionNoticeView message", // the deletion's notice, worded by the Session
         ]
@@ -142,7 +120,7 @@ final class LocalizableHelpersTests: XCTestCase {
         let view = try NSRegularExpression(pattern: #"^(?:private |fileprivate )?struct (\w+)(<[^>]*>)?: View[ ,{]"#, options: .anchorsMatchLines)
         let stored = try NSRegularExpression(pattern: #"^    (?:private )?(?:let|var) "# + textName + #": String\??\s*(=.*)?$"#, options: .anchorsMatchLines)
         var found: Set<String> = []
-        for (path, text) in try Self.appSources() {
+        for (path, text) in try AppSource.allAppFiles() {
             for line in text.components(separatedBy: "\n") {
                 let range = NSRange(line.startIndex..., in: line)
                 guard let match = helper.firstMatch(in: line, range: range),
@@ -190,7 +168,7 @@ final class LocalizableHelpersTests: XCTestCase {
         var checked = 0
         var verbatim = 0
         var placeholderOnly: [String] = []
-        for (path, text) in try Self.appSources() {
+        for (path, text) in try AppSource.allAppFiles() {
             for (name, arguments) in Self.calls(in: Array(text), named: Set(localized.keys)) {
                 guard let parameters = localized[name] else { continue }
                 var position = 0

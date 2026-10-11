@@ -79,7 +79,7 @@ actor KuruFlowClient {
         // enforce at least the minimum the requested slippage allows on the quoted output — the one the sheet shows. A
         // spoofed API that inflated `output` to win the best-price race then only builds a swap that reverts.
         // The app never asks for an integrator or referral fee either, so a fee tuple with any basis points is a skim the
-        // API slipped in (`KuruFlowSwap.takesNoFee`, the web's `kuruFeeAllowed`; IOST-7).
+        // API slipped in (`KuruFlowSwap.takesNoFee`, the web's `kuruFeeAllowed`).
         let slippage = min(10_000, max(1, req.slippageBps)) // as sent
         guard let swap = KuruFlowSwap(calldata: calldata), (swap.recipient ?? user) == user,
               swap.tokenIn == (req.tokenIn.isNative ? Address.zero : req.tokenIn.address),
@@ -263,7 +263,7 @@ public struct KuruFlowSwap: Sendable, Equatable {
     /// Who receives the output: nil for the variant that pays `msg.sender`, i.e. the account that signs the call.
     public let recipient: Address?
 
-    /// Whether the fee tuple is one the wallet signs, as the web's `kuruFeeAllowed` rules (IOST-7): no basis points on
+    /// Whether the fee tuple is one the wallet signs, as the web's `kuruFeeAllowed` rules: no basis points on
     /// either side. The app never asks Kuru for an integrator or referral fee (the quote request carries no referrer
     /// fields), so any is a skim a spoofed or compromised API slipped in; the entrypoint enforces the minimum net of fees,
     /// so it could take at most the slippage tolerance, but it is refused outright. The recipient and referrer addresses

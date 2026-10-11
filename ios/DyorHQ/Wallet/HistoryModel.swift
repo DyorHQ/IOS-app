@@ -23,8 +23,6 @@ final class HistoryModel {
     private(set) var wallet: Address?
     /// Moves whenever `snapshot` changes, for models that rebuild from it.
     private(set) var version = 0
-    /// A round is reading now.
-    private(set) var refreshing = false
     /// The rounds of reading, nil once they ended (no wallet).
     @ObservationIgnored private var filler: Task<Void, Never>?
     /// Counts the rounds started, so rounds that end clear `filler` only when they are the current ones.
@@ -260,12 +258,8 @@ final class HistoryModel {
         if let inFlight, inFlight.wallet == wallet { return (await inFlight.round.value, true) }
         let round = Task { await env.walletHistory.refresh(wallet: wallet, budget: budget, curves: curves, decimals: decimals) }
         inFlight = (wallet, round)
-        refreshing = true
         let snapshot = await round.value
-        if inFlight?.round == round {
-            inFlight = nil
-            refreshing = false
-        }
+        if inFlight?.round == round { inFlight = nil }
         return (snapshot, false)
     }
 
@@ -362,7 +356,6 @@ final class HistoryModel {
         filler = nil
         stopPolling()
         inFlight = nil
-        refreshing = false
         backingOff = false
         stalls = 0
         lastProgress = -1

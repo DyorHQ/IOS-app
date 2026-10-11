@@ -6,7 +6,7 @@ import UIKit
 /// size, the notification center, price alerts and settings — and restores them on a fresh device
 /// after one sign-in (for a passkey account, which keeps nothing on the device, that is its whole local history). Every write goes through the wallet's backend session (row-level security by wallet);
 /// nothing here touches a key. Uploads are debounced and best-effort: the local stores stay the source of truth.
-/// Nothing waits on the session being up (security audit 2026-09-26, RS-4): each activity record joins a per-wallet
+/// Nothing waits on the session being up: each activity record joins a per-wallet
 /// queue kept on the device (`BackendMirrorQueue`) until an upload succeeds, and a store whose upload was skipped or
 /// failed stays marked for another try. Both are retried whenever the wallet's session connects (`restore`), the app
 /// returns to the foreground, and a new record arrives.
@@ -79,11 +79,11 @@ final class BackendSync {
     private static func row(_ record: ActivityRecord, owner: Address) -> ActivityRow {
         ActivityRow(id: stableID(record).uuidString.lowercased(), wallet: owner.checksummed.lowercased(), kind: record.kind.rawValue,
                     section: record.section ?? "wallet", title: String(record.title.prefix(120)), subtitle: String(record.subtitle.prefix(300)),
-                    tx_hash: record.txHashHex?.lowercased(), usd: record.usd, fee_usd: record.feeUsd, occurred_at: iso(record.time))
+                    tx_hash: record.txHashHex?.lowercased(), usd: record.usd, fee_usd: record.feeUsd, occurred_at: BackendTimestamp.string(record.time))
     }
 
     /// The same settled transaction always maps to the same row, so re-recording it can never double a row. The row
-    /// is keyed by wallet and id together (`on_conflict=wallet,id`, security audit 2026-09-26, SB-5): the id comes from
+    /// is keyed by wallet and id together (`on_conflict=wallet,id`): the id comes from
     /// a public transaction hash, so another wallet claiming it first must not keep this wallet's row out.
     private static func stableID(_ record: ActivityRecord) -> UUID {
         guard let hash = record.txHash, hash.count >= 16 else { return record.id }
@@ -129,14 +129,14 @@ final class BackendSync {
 
     private func notifications(_ items: [AppNotification], owner: Address?) {
         guard let owner else { return }
-        // Marked, never dropped, while this wallet's restore runs (RS-4): its closing flush sends the store as it is then.
+        // Marked, never dropped, while this wallet's restore runs: its closing flush sends the store as it is then.
         guard restoring != owner else { Self.setDirty(.notifications, true, owner: owner); return }
         uploadNotifications(items, owner: owner, delay: 2)
     }
 
     private func uploadNotifications(_ items: [AppNotification], owner: Address, delay: Double) {
         let wallet = owner.checksummed.lowercased()
-        let rows = items.prefix(200).map { NotificationRow(wallet: wallet, id: $0.id.uuidString.lowercased(), kind: $0.kind.rawValue, title: $0.title, body: $0.body, read: $0.read, data: $0, created_at: Self.iso($0.time)) }
+        let rows = items.prefix(200).map { NotificationRow(wallet: wallet, id: $0.id.uuidString.lowercased(), kind: $0.kind.rawValue, title: $0.title, body: $0.body, read: $0.read, data: $0, created_at: BackendTimestamp.string($0.time)) }
         schedule(.notifications, owner: owner, delay: delay) { [social] in
             if rows.isEmpty {
                 try await social.client.delete("notifications", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
@@ -157,7 +157,7 @@ final class BackendSync {
         uploadAlerts(alerts, owner: owner, delay: 2)
     }
 
-    /// Mirrors the wallet's own alert list (security audit 2026-09-26, RS-7): upsert what the device has, then delete
+    /// Mirrors the wallet's own alert list: upsert what the device has, then delete
     /// what it no longer has — so the wallet's alerts are never missing server-side in between, and a failed request
     /// leaves the previous list rather than none.
     private func uploadAlerts(_ alerts: [PriceAlert], owner: Address, delay: Double) {
@@ -188,7 +188,7 @@ final class BackendSync {
         let wallet = owner.checksummed.lowercased()
         let data = settings.snapshot.compactMapValues(JSONValue.init(any:))
         schedule(.settings, owner: owner, delay: delay) { [social] in
-            try await social.client.upsertRows("user_settings", [SettingsRow(wallet: wallet, data: data, updated_at: Self.iso(Date()))], onConflict: "wallet")
+            try await social.client.upsertRows("user_settings", [SettingsRow(wallet: wallet, data: data, updated_at: BackendTimestamp.string(Date()))], onConflict: "wallet")
         }
     }
 
@@ -247,7 +247,7 @@ final class BackendSync {
 
     /// Once per wallet: the records this device holds that the server doesn't (`onServer`: the ids of its newest rows)
     /// join the queue. Builds before the queue sent a record only while the session was up, so anything recorded while
-    /// it was down was never uploaded (RS-4); from here on the queue keeps every new record until it is sent.
+    /// it was down was never uploaded; from here on the queue keeps every new record until it is sent.
     private func backfillActivity(owner: Address, onServer: Set<String>) {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: Self.backfilledKey(owner)) else { return }
@@ -346,9 +346,16 @@ final class BackendSync {
         guard dirty ? set.insert(store).inserted : set.remove(store) != nil else { return }
         UserDefaults.standard.set(set.map(\.rawValue).sorted(), forKey: dirtyKey(owner))
     }
+}
 
-    private static let isoFormatter: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
-    private static func iso(_ date: Date) -> String { isoFormatter.string(from: date) }
+/// How the app writes a time into the backend's timestamp columns (`BackendSync`'s rows, `SocialSession`'s sign-out
+/// time): ISO 8601 with fractional seconds.
+enum BackendTimestamp {
+    private static let formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+
+    static func string(_ date: Date) -> String { formatter.string(from: date) }
 }
 
 /// A JSON scalar/collection for `jsonb` columns without a fixed schema (the settings snapshot).

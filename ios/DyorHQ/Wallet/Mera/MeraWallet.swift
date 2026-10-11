@@ -8,7 +8,7 @@ import Security
 /// sign-in can be pinned to it) and the address it derives to (so the app can show the account while locked — the
 /// address Receive shows). Neither is a secret, but both must be what this app wrote after a passkey ceremony derived
 /// the address: they live in this device's Keychain (not synced, not in backups made on another device), where another
-/// app or an edited backup can't swap in someone else's address (security audit 2026-09-26, IOSK-12). Builds before
+/// app or an edited backup can't swap in someone else's address. Builds before
 /// that kept them in UserDefaults, which a restored or edited backup can plant, so that copy is never trusted: it is
 /// deleted, and the account comes back with "I already have a passkey", which derives the address from the passkey. A
 /// fresh device reconstructs everything from the passkey alone.
@@ -245,11 +245,11 @@ final class MeraSession {
     private(set) var runningActions = 0
     /// The app is in the background (`endWhenIdle` until `enteredForeground`).
     @ObservationIgnored private var inBackground = false
-    /// The app left the foreground while an action ran: the session ends when the last one finishes (GL-1).
+    /// The app left the foreground while an action ran: the session ends when the last one finishes.
     @ObservationIgnored private var endsWhenIdle = false
     /// The background time iOS grants for those actions to finish; when it runs out the session ends regardless.
     @ObservationIgnored private var backgroundTime: BackgroundTime?
-    /// And a deadline of its own, whatever iOS grants (GL-7): checked on every use of the session, and a timer ends it.
+    /// And a deadline of its own, whatever iOS grants: checked on every use of the session, and a timer ends it.
     @ObservationIgnored private var idleDeadline: Date?
     @ObservationIgnored private var idleDeadlineTimer: Task<Void, Never>?
     /// How long a session may outlive the app leaving the foreground for an approved action to finish: about the
@@ -551,7 +551,7 @@ final class MeraSession {
         if live === session { lifecycle?.meraSessionDidOpen(self) }
     }
 
-    // MARK: Leaving the app (security audit 2026-09-26, GL-1 and GL-7)
+    // MARK: Leaving the app
 
     /// An action the owner already approved starts signing or sending — a plan (`TransactionRun`), a Perpl bracket
     /// (`PerpTradeView`). While one runs, leaving the app doesn't end the session under it. Pair with `endAction`.
@@ -576,7 +576,7 @@ final class MeraSession {
         endWithLastAction()
     }
 
-    /// The live session ends when the last running action does, and no later than `backgroundGrace` from now (GL-7):
+    /// The live session ends when the last running action does, and no later than `backgroundGrace` from now:
     /// the background time iOS grants ends it when it runs out, and so does a deadline of its own, which holds when iOS
     /// grants none or suspends the app before either fires — `liveSession` checks it on every use.
     private func endWithLastAction() {
@@ -725,7 +725,7 @@ final class MeraSession {
         scheduleExpiry(of: session)
         MeraCredentialStore.save(credentialID: result.credentialID, address: session.address)
         lifecycle?.meraSessionDidOpen(self)
-        // A ceremony that finished after the app left the foreground (GL-7): the session serves the call that asked for
+        // A ceremony that finished after the app left the foreground: the session serves the call that asked for
         // it, then ends — with the last running action, within the same deadline as `endWhenIdle`, or, when none runs, as
         // soon as that call has it.
         if inBackground {

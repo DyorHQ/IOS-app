@@ -287,7 +287,7 @@ final class HistoryStoreTests: XCTestCase {
         var snapshot = WalletHistorySnapshot.empty
         snapshot.status = [WalletHistoryScans.transfersInId: HistoryStatus(complete: false, progress: 0, reachedChain: true, updatedAt: nil, floor: nil, head: nil)]
         XCTAssertTrue(snapshot.read)
-        let home = try? DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try? AppSource.app("Home/HomeView.swift")
         // Beside the live figure only: a saved one says when it was read instead (`SavedLine`).
         XCTAssertEqual(home?.contains("if liveVolume, env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {"), true)
     }

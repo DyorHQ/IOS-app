@@ -51,7 +51,7 @@ public struct Address: Hashable, Sendable, Codable, CustomStringConvertible {
         return "0x" + body == address.checksummed
     }
 
-    /// Typed or pasted recipient text as the person meant it (GR-4): surrounding spaces and line breaks trimmed, and the
+    /// Typed or pasted recipient text as the person meant it: surrounding spaces and line breaks trimmed, and the
     /// invisible characters a copy can carry removed wherever they are — zero-width spaces and joiners, word joiners,
     /// the byte-order mark, soft hyphens and the bidirectional controls, which can also make an address display in an
     /// order other than its characters. `removedInvisible` says whether any were there.

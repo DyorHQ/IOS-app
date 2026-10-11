@@ -8,9 +8,7 @@ import XCTest
 final class LaunchpadDeploymentTests: XCTestCase {
     /// A deployment record from `contracts/deployments/`, or a skip when this checkout has no contracts.
     static func deploymentRecord(_ name: String) throws -> [String: Any] {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { url.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios → repo root
-        url.appendPathComponent("contracts/deployments/\(name)")
+        let url = AppSource.root.appendingPathComponent("contracts/deployments/\(name)")
         guard let data = try? Data(contentsOf: url) else { throw XCTSkip("contracts/deployments/\(name) is not in this checkout") }
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }

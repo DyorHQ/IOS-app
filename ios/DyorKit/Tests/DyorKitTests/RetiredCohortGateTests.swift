@@ -155,9 +155,7 @@ final class RetiredCohortGateTests: XCTestCase {
 
     /// The checker at the repo root, or a skip when this checkout has no scripts.
     private func script() throws -> URL {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { url.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios → repo root
-        url.appendPathComponent("scripts/dev/check-launchpad-addresses.py")
+        let url = AppSource.root.appendingPathComponent("scripts/dev/check-launchpad-addresses.py")
         guard FileManager.default.fileExists(atPath: url.path) else { throw XCTSkip("scripts/dev/check-launchpad-addresses.py is not in this checkout") }
         return url
     }
@@ -322,8 +320,7 @@ final class RetiredCohortGateTests: XCTestCase {
         let script = try String(contentsOf: try script(), encoding: .utf8)
         XCTAssertTrue(script.contains("LIVE_LAUNCHPAD = \"\(l.factory.hex)\"\n"), "the script's LIVE_LAUNCHPAD is not \(l.factory.hex)")
         XCTAssertTrue(script.contains("LIVE_MOMENTS = \"\(m.factory.hex)\"\n"), "the script's LIVE_MOMENTS is not \(m.factory.hex)")
-        let keepers = try self.script().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("contracts/keepers/lib/deployments.mjs")
+        let keepers = AppSource.root.appendingPathComponent("contracts/keepers/lib/deployments.mjs")
         guard FileManager.default.fileExists(atPath: keepers.path) else { throw XCTSkip("contracts/keepers is not in this checkout") }
         let pins = try String(contentsOf: keepers, encoding: .utf8).lowercased()
         XCTAssertTrue(pins.contains("launchpad: \"\(l.factory.hex)\""), "the keepers' LIVE_FACTORIES.launchpad is not \(l.factory.hex)")
@@ -334,7 +331,7 @@ final class RetiredCohortGateTests: XCTestCase {
     /// script's pins are moved in a copy that reads this checkout's sources and records.
     func testAFactoryOtherThanThePinnedOneRefuses() throws {
         let original = try script()
-        let repo = original.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let repo = AppSource.root
         let tree = FileManager.default.temporaryDirectory.appendingPathComponent("gate-pin-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tree) }
         try FileManager.default.createDirectory(at: tree.appendingPathComponent("scripts/dev"), withIntermediateDirectories: true)
@@ -407,7 +404,7 @@ final class RetiredCohortGateTests: XCTestCase {
     /// under ios/ that the phase does not declare: each DyorKit source the script reads is one of its inputs.
     func testTheArchivePhaseDeclaresEverySourceTheGateReads() throws {
         let script = try String(contentsOf: try script(), encoding: .utf8)
-        let repo = try self.script().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let repo = AppSource.root
         let project = try String(contentsOf: repo.appendingPathComponent("ios/project.yml"), encoding: .utf8)
         let path = try NSRegularExpression(pattern: #""ios/(DyorKit/Sources/[A-Za-z/]+\.swift)""#)
         let read = Set(path.matches(in: script, range: NSRange(script.startIndex..., in: script)).map { (script as NSString).substring(with: $0.range(at: 1)) })

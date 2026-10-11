@@ -224,7 +224,7 @@ final class SwapRetiredCoinTests: XCTestCase {
             ("another amount in", SwapNetStub.kuruSwap(amountIn: 2 * amount)),
             ("a minimum below the requested slippage", SwapNetStub.kuruSwap(minOut: 2_586_999)),
             ("not a Kuru Flow swap", "0xdeadbeef"),
-            // The app never asks Kuru for an integrator or referral fee, so any basis points are a skim (IOST-7, as web).
+            // The app never asks Kuru for an integrator or referral fee, so any basis points are a skim (as on the web).
             ("an integrator fee", SwapNetStub.kuruSwap(feeRecipient: stranger, feeBps: 30)),
             ("a referral fee", SwapNetStub.kuruSwap(referrer: stranger, referrerBps: 30)),
             ("a fee on the input side", SwapNetStub.kuruSwap(feeRecipient: stranger, feeBps: 1, feeOnOutput: 0)),

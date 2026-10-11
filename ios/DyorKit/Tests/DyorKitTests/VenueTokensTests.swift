@@ -460,15 +460,12 @@ final class VenueTokensTests: XCTestCase {
 
     /// The app reads the venues on rpc1, one request at a time, and reads the whole history once more: the list
     /// is kept, and the checkpoint is a new one, since build 16's moved past gaps, under a key that can't mark the install
-    /// as earlier than App Lock's default (`AppSettings`, security audit 2026-09-26, IOSK-4). The list is kept in memory
+    /// as earlier than App Lock's default (`AppSettings`). The list is kept in memory
     /// (`VenueTokenList`): the swap picker searches it there, never the store, and says while it is short.
     func testTheAppReadsTheVenuesOnRpc1AndReadsTheirHistoryOnceMore() throws {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        let app = ios.appendingPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        // Read with every run of whitespace as one space (`squeezed`): the checks pin the code, not its indentation.
-        let environment = squeezed(try String(contentsOf: app.appendingPathComponent("App/AppEnvironment.swift"), encoding: .utf8))
+        // Read with every run of whitespace as one space (`AppSource.squeezed`): the checks pin the code, not its
+        // indentation.
+        let environment = AppSource.squeezed(try AppSource.app("App/AppEnvironment.swift"))
         // The venue scan goes through the app's one logs client: the router over every public endpoint, behind the gate
         // the wallet's history shares (`LogsRouter`), so the two never throttle each other.
         XCTAssertTrue(environment.contains("venueTokens = VenueTokensService(logsRPC: logsClient, multicall: multicall)"))
@@ -478,7 +475,7 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(environment.contains("read: { VenueTokenStore.read() }, write: { VenueTokenStore.write($0, lastBlock: $1, dropped: $2) })"))
         XCTAssertEqual(environment.components(separatedBy: "VenueTokenStore.").count - 1, 2, "the list reads and writes the store; nothing else does")
         // A cold launch runs the list; every return to the app resets log scans' outage and resumes a run that ended short.
-        let root = squeezed(try String(contentsOf: app.appendingPathComponent("App/RootView.swift"), encoding: .utf8))
+        let root = AppSource.squeezed(try AppSource.app("App/RootView.swift"))
         // ...the stored list read at once for search, and the run told, on every change, which wallet is signed in and
         // whether its history is filling in — as it is too while the history model isn't on that wallet yet
         // (`VenueTokenList.follow`): paused while a wallet's history fills in for the first time (the two share the gate),
@@ -492,8 +489,7 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(environment.contains("func followVenueTokens(wallet: Address?, historyFilling: Bool) { venueList.follow(wallet: wallet, historyFilling: historyFilling) }"))
         // Nothing else starts a run: a return to the app resumes one that ended short (below), which waits as a run does.
         var starts = 0
-        for file in FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.compactMap({ $0 as? URL }) ?? [] where file.pathExtension == "swift" {
-            let source = try String(contentsOf: file, encoding: .utf8)
+        for (_, source) in try AppSource.allAppFiles() {
             starts += source.components(separatedBy: "venueList.refresh()").count - 1 + source.components(separatedBy: "refreshVenueTokens").count - 1
         }
         XCTAssertEqual(starts, 0, "the app starts the list's run through `follow` only")
@@ -505,18 +501,18 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(root[phases...].contains("if LogScanClock.resumed() { env.venueList.resume() }"))
         XCTAssertEqual(root.components(separatedBy: "LogScanClock.resumed()").count - 1, 1, "nothing else resets the outage")
         XCTAssertEqual(LaunchpadService.defaultLogsRPC.absoluteString, "https://rpc1.monad.xyz")
-        let service = squeezed(try String(contentsOf: ios.appendingPathComponent("DyorKit/Sources/DyorKit/Services/VenueTokensService.swift"), encoding: .utf8))
+        let service = AppSource.squeezed(try AppSource.kit("Services/VenueTokensService.swift"))
         XCTAssertTrue(service.contains("public init(logsRPC: RPCClient, multicall: Multicall) {"))
         XCTAssertTrue(service.contains("concurrency: 1, mode: .paced, lane: .background)"),
                       "one request at a time, a throttle waited out, in the gate's background lane: behind every screen's scan and the wallet's history")
 
-        let store = try String(contentsOf: app.appendingPathComponent("Wallet/VenueTokenStore.swift"), encoding: .utf8)
+        let store = try AppSource.app("Wallet/VenueTokenStore.swift")
         XCTAssertTrue(store.contains("private static let key = \"venueTokens.v1\""), "the list is kept")
         XCTAssertTrue(store.contains("private static let blockKey = \"venueScan.v2.lastBlock\""), "a new checkpoint: the history read once more")
         XCTAssertTrue(store.contains("private static let droppedKey = \"venueScan.v2.dropped\""), "what runs dropped, kept across launches")
         XCTAssertFalse(store.contains("\"venueTokens.v1.lastBlock\""), "build 16's checkpoint is never read, nor written")
         // The checkpoint is saved only once the list reads back as written (UserDefaults refuses a value past its ceiling).
-        let write = squeezed(store)
+        let write = AppSource.squeezed(store)
         // It says whether it saved them, and the list counts a save only then (`VenueTokenList.store`).
         let readBack = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(list, forKey: key) guard UserDefaults.standard.data(forKey: key) == list else { return false }"))
         let checkpoint = try XCTUnwrap(write.range(of: "UserDefaults.standard.set(String(lastBlock), forKey: blockKey)"))
@@ -528,10 +524,7 @@ final class VenueTokensTests: XCTestCase {
         XCTAssertTrue(write.contains("dropped: UserDefaults.standard.data(forKey: droppedKey))"))
         // R4: every key the store names, beyond build 16's list and stamp, is outside the prefixes that mark an earlier
         // install.
-        let theme = try String(contentsOf: app.appendingPathComponent("Design/Theme.swift"), encoding: .utf8)
-        let earlierRun = try XCTUnwrap(theme.range(of: "let earlierRun = [")).upperBound
-        let quotesAndSpace = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\""))
-        let prefixes = theme[earlierRun...].prefix { $0 != "]" }.split(separator: ",").map { $0.trimmingCharacters(in: quotesAndSpace) }
+        let prefixes = AppLockStore.earlierRunPrefixes
         XCTAssertTrue(prefixes.contains("venueTokens."), "\(prefixes)")
         let keys = store.components(separatedBy: "\n").filter { $0.contains("Key = \"") || $0.contains("key = \"") }
             .compactMap { line in line.split(separator: "\"").dropFirst().first.map(String.init) }
@@ -540,19 +533,18 @@ final class VenueTokensTests: XCTestCase {
 
         // R4: every erase of this device's data stops the list's reading first, so no save of it follows the erase.
         var erases = 0
-        let files = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
-        for file in files where file.pathExtension == "swift" {
-            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+        for (path, text) in try AppSource.allAppFiles() {
+            let lines = text.components(separatedBy: "\n")
             for (i, line) in lines.enumerated() where line.contains(".eraseLocalData()") && !line.contains("func eraseLocalData") {
                 erases += 1
                 // Anywhere before the erase in the function that makes it, whatever else runs between them.
                 let function = lines[..<i].lastIndex { $0.contains("func ") } ?? 0
-                XCTAssertTrue(lines[function..<i].contains { $0.contains("env.venueList.stop()") }, "\(file.lastPathComponent):\(i + 1)")
+                XCTAssertTrue(lines[function..<i].contains { $0.contains("env.venueList.stop()") }, "\((path as NSString).lastPathComponent):\(i + 1)")
             }
         }
         XCTAssertEqual(erases, 2, "Delete Account, and this device's erase (a passkey account's deletion, Forget This Device)")
 
-        let swap = squeezed(try String(contentsOf: app.appendingPathComponent("Swap/SwapView.swift"), encoding: .utf8))
+        let swap = AppSource.squeezed(try AppSource.app("Swap/SwapView.swift"))
         XCTAssertFalse(swap.contains("VenueTokenStore"), "the search never reads the store")
         XCTAssertTrue(swap.contains("let venueHits = env.venueList.tokens.filter {"))
         XCTAssertTrue(swap.contains("let remote = remoteMatches"), "the matches computed once a render")
@@ -563,11 +555,6 @@ final class VenueTokensTests: XCTestCase {
         // With nothing matched, the "no match" footer says it: never two footers stacked.
         XCTAssertTrue(swap.contains("if !remote.isEmpty || (venueListCatchingUp && !noMatch) {"))
         XCTAssertTrue(swap.contains("} else if venueListCatchingUp { Paragraph(\"No token matches yet: Monad's token list is still loading. Paste a contract address to add any Monad token.\")"))
-    }
-
-    /// `text` with every run of whitespace, line breaks included, as one space.
-    private func squeezed(_ text: String) -> String {
-        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     /// A fresh install's first read, live on Monad (read-only): every venue from genesis on rpc1, and the metadata on the

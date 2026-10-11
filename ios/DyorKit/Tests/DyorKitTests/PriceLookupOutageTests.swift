@@ -4,7 +4,7 @@ import XCTest
 @testable import DyorKit
 
 /// A pool lookup that an outage cut short is never remembered as "no pool": the token is looked up again on the next
-/// read, and the pool it had keeps pricing it meanwhile (security audit 2026-09-26, RS-12). Runs PriceService's real
+/// read, and the pool it had keeps pricing it meanwhile. Runs PriceService's real
 /// RPCClient and Multicall code against a stub chain whose pool reads can be made to fail.
 final class PriceLookupOutageTests: XCTestCase {
     private static let token = Token(address: Address(literal: "0x00000000000000000000000000000000000000aa"), symbol: "TKN", name: "Token", decimals: 6)

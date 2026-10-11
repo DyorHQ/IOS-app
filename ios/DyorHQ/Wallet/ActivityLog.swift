@@ -183,7 +183,7 @@ enum Activity {
     }
 }
 
-/// Transactions sent whose confirmation the app hasn't seen (security audit 2026-09-26, GL-2). Each step a plan sends is
+/// Transactions sent whose confirmation the app hasn't seen. Each step a plan sends is
 /// written as a pending row under its hash the moment it is sent, so a plan that fails afterwards — the phone locked
 /// mid-wait, the connection dropped, the app killed — still leaves the transaction in Recent Activity with its View
 /// link. A step seen confirmed keeps its row, marked confirmed, until it is superseded: by the plan's next step (it was

@@ -191,7 +191,7 @@ public actor DyorCoinRegistry {
 
         var countCall: ContractCall {
             switch self {
-            case .launchpad(let stack): return LaunchpadABI.call(stack.factory, LaunchpadABI.Factory.launchCount, returns: "uint256")
+            case .launchpad(let stack): return LaunchpadABI.launchCountCall(stack.factory)
             case .cohort(let cohort): return MomentsABI.call(cohort.factory, MomentsABI.Factory.momentCount, returns: "uint256")
             }
         }
@@ -368,7 +368,7 @@ public actor DyorCoinRegistry {
     static func launchReads(_ token: Address, stack: LaunchpadAddresses) -> [ContractCall] {
         typealias T = LaunchpadABI.Token
         return [
-            LaunchpadABI.call(stack.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: stack.generation.legacyRecord)),
+            LaunchpadABI.launchRecordCall(token, stack: stack),
             LaunchpadABI.call(token, T.name, returns: "string"),
             LaunchpadABI.call(token, T.symbol, returns: "string"),
             LaunchpadABI.call(token, T.getTokenInfo, returns: "address,string,string,\(LaunchpadABI.socialsTuple)"),
@@ -466,7 +466,7 @@ public actor DyorCoinRegistry {
         //    for it: the factories' own answers, of a fixed size.
         let perCandidate = launchpads.count + cohorts.count
         let records = await read(candidates.flatMap { candidate in
-            launchpads.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(candidate)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.generation.legacyRecord)) }
+            launchpads.map { LaunchpadABI.launchRecordCall(candidate, stack: $0) }
                 + cohorts.map { MomentsABI.call($0.factory, MomentsABI.Factory.momentIdByCoin, [.address(candidate)], returns: "uint256") }
         })
         let claims = candidates.enumerated().map { i, candidate in
@@ -639,34 +639,9 @@ public actor DyorCoinRegistry {
 
     /// `calls` in Multicall3 reads of at most `maxCallsPerRead`, `Multicall.readsInFlight` of them at a time (the next as
     /// each answers), their answers in `calls` order; every call of a read that failed as a whole comes back as a
-    /// failure. For the factories' own answers, which are of a fixed size.
+    /// failure (`Multicall.readChunked`). For the factories' own answers, which are of a fixed size.
     private func read(_ calls: [ContractCall]) async -> [Result<[ABIValue], Error>] {
-        let chunks = stride(from: 0, to: calls.count, by: Self.maxCallsPerRead).map { Array(calls[$0 ..< min(calls.count, $0 + Self.maxCallsPerRead)]) }
-        var answers = [[Result<[ABIValue], Error>]](repeating: [], count: chunks.count)
-        let multicall = multicall
-        await withTaskGroup(of: (Int, [Result<[ABIValue], Error>]).self) { group in
-            var next = 0
-            func send() {
-                guard next < chunks.count else { return }
-                let index = next
-                next += 1
-                let chunk = chunks[index]
-                group.addTask {
-                    do {
-                        let results = try await multicall.read(chunk)
-                        return (index, results.count == chunk.count ? results : chunk.map { _ in .failure(NetworkError.malformedResponse) })
-                    } catch {
-                        return (index, chunk.map { _ in .failure(error) })
-                    }
-                }
-            }
-            for _ in 0 ..< Multicall.readsInFlight { send() }
-            while let (index, results) = await group.next() {
-                answers[index] = results
-                send()
-            }
-        }
-        return answers.flatMap { $0 }
+        await multicall.readChunked(calls, chunk: Self.maxCallsPerRead)
     }
 
     /// Coins' reads (`launchReads`, `momentReads`) as a list's items (`Multicall.readItems`); nil when a record couldn't

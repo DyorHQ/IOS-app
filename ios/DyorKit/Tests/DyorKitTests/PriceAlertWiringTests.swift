@@ -7,7 +7,7 @@ final class PriceAlertWiringTests: XCTestCase {
     /// The app reads the target with `PriceAlertTarget.parse`, never `Double(targetText)`, and the list and the
     /// notification show it in the one price style.
     func testTargetParsingAndDisplay() throws {
-        let alerts = try DocsLinksTests.appSource("Wallet/PriceAlerts.swift")
+        let alerts = try AppSource.app("Wallet/PriceAlerts.swift")
         XCTAssertTrue(alerts.contains("private var target: Double? { PriceAlertTarget.parse(targetText) }"))
         XCTAssertFalse(alerts.contains("Double(targetText)"))
         XCTAssertTrue(alerts.contains("\\(PriceFormat.usdPrice(alert.target))"))
@@ -18,7 +18,7 @@ final class PriceAlertWiringTests: XCTestCase {
         XCTAssertTrue(alerts.contains("Text(\"USD\").foregroundStyle(.secondary).fixedSize()"), "nor the USD label")
         XCTAssertFalse(alerts.contains("minWidth: 120"), "no minimum width that pushes the row past the edge at large text sizes")
         XCTAssertFalse(alerts.contains("NumberStyle."), "no second number style on the alerts screen")
-        let notifications = try DocsLinksTests.appSource("Wallet/Notifications.swift")
+        let notifications = try AppSource.app("Wallet/Notifications.swift")
         XCTAssertTrue(notifications.contains("let now = PriceFormat.usdPrice(price)"))
         XCTAssertTrue(notifications.contains("let goal = PriceFormat.usdPrice(target)"))
         XCTAssertTrue(notifications.contains("tr(\"\\(symbol) is now \\(now) — above your \\(goal) target.\") : tr(\"\\(symbol) is now \\(now) — below your \\(goal) target.\")"))

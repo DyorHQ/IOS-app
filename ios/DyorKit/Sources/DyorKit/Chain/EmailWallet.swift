@@ -93,8 +93,8 @@ public enum EmailWallet {
     // MARK: Input hygiene and history
 
     /// Whether `password` holds anything outside printable ASCII — curly quotes and long dashes from smart punctuation,
-    /// letters with accents, a non-breaking space, emoji — which another keyboard or device may type as different bytes
-    /// (security audit 2026-09-26, IOSK-9). The derivation always uses the exact bytes typed: normalising them would move
+    /// letters with accents, a non-breaking space, emoji — which another keyboard or device may type as different bytes.
+    /// The derivation always uses the exact bytes typed: normalising them would move
     /// every existing wallet with such a password to another address. So sign-up only warns.
     public static func hasHardToRetypeCharacters(_ password: String) -> Bool {
         password.unicodeScalars.contains { !(0x20...0x7E).contains($0.value) }
@@ -107,7 +107,7 @@ public enum EmailWallet {
 
     /// Whether the wallet an email is bound to may be a legacy (pre-v2) one, judged by when its public profile was
     /// created: nil (no profile, or it couldn't be read) counts as maybe, so a funded legacy wallet is never let go of
-    /// by mistake (GE-1).
+    /// by mistake.
     public static func mayBeLegacy(profileCreatedAt: Date?) -> Bool {
         guard let created = profileCreatedAt else { return true }
         return created < v2Cutoff

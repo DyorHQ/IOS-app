@@ -150,22 +150,6 @@ final class V2ForkTests: V2ForkCase {
         XCTAssertTrue(restored.canPublish)
     }
 
-    /// `collectPlan`, the Permit2 path: the collect carries a transfer signed by the fork key over the app's own Permit2
-    /// digest. (The app's collect sheet uses the exact-approval plan; this keeps the Permit2 path honest on v2.)
-    func testPermit2CollectSignedByTheForkKey() async throws {
-        let fork = try moments()
-        let creator = try await wallet()
-        let collector = try await wallet(usdc: 5 * Self.usdcUnit)
-        let detail = try await publish(fork, input("Fork permit"), by: creator)
-        let plan = try await fork.service.collectPlan(momentId: detail.info.id, quantity: 2, price: detail.info.moment.price, signer: collector, symbol: "FORK")
-        XCTAssertEqual(plan.count, 2)
-        XCTAssertEqual(collector.signatures, 1, "the Permit2 transfer was signed while building the plan")
-        try await run(plan, collector)
-        let account = try await fork.service.accountView(detail.info, account: collector.address)
-        XCTAssertEqual(account.nftBalance, 2)
-        XCTAssertEqual(account.usdcBalance, 5 * Self.usdcUnit - 2 * detail.info.moment.price)
-    }
-
     // MARK: Graduation, claims, withdrawals
 
     /// A terminal collect graduates the Moment in the collect itself; the collector claims the 60% that vests at
@@ -320,7 +304,7 @@ final class V2ForkTests: V2ForkCase {
 
     // MARK: Refusals, decoded before anything is signed
 
-    /// MO-4: a proposal applied between the review and the publish. The publish carries the reviewed hash, so the
+    /// A proposal applied between the review and the publish. The publish carries the reviewed hash, so the
     /// factory refuses it (`TermsChanged`), `prepare` says so, and the wallet never signs.
     func testTermsChangedBetweenReviewAndPublishIsRefusedUnsigned() async throws {
         let fork = try moments()

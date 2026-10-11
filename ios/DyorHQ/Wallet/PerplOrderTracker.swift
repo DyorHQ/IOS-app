@@ -156,7 +156,7 @@ final class PerplOrderTracker {
                     Self.record(outcome, order, kindName: Self.kindName(order), hash: nil, id: order.id, owner: order.owner, positionEnded: positionEnded)
                 }
             case .removeTriggerEcho(_, let echo):
-                // This order's own echo only: another order's take-profit or stop-loss on that side is still live (GT-1).
+                // This order's own echo only: another order's take-profit or stop-loss on that side is still live.
                 TriggerStore.remove(ids: [echo], owner: order.owner)
             case .noteAnnounced, .releaseExpectation, .refund, .voidUserClose, .reload, .wakeWatcher:
                 perform(effect)
@@ -323,7 +323,7 @@ final class PerplOrderTracker {
         }
     }
 
-    /// A wallet-signed order's row the moment its transaction confirms (GL-3), before its receipt is read: no volume,
+    /// A wallet-signed order's row the moment its transaction confirms, before its receipt is read: no volume,
     /// no notice. The decoded result replaces it (same hash).
     static func recordOnChainSent(_ order: PerplTrackedOrder, hash: Data) {
         let perp = "\(order.asset)-PERP"

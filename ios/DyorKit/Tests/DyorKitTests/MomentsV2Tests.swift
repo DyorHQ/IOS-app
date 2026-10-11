@@ -276,7 +276,7 @@ final class MomentsV2Tests: XCTestCase {
     /// (`MomentsFormat.usdc`).
     func testTheReserveRowsRoundToTheCentAndACollectStaysExact() throws {
         XCTAssertEqual(V2Fixture.policy(termsHash: nil).threshold, 771_428_571)
-        let detail = try DocsLinksTests.appSource("Moments/MomentDetailView.swift")
+        let detail = try AppSource.app("Moments/MomentDetailView.swift")
         XCTAssertTrue(detail.contains(#"LabeledContent("Reserve", value: tr("\(MomentsFormat.usdcCents(info.ledger.reserve)) of \(MomentsFormat.usdcCents(m.threshold))"))"#))
         XCTAssertTrue(detail.contains(#"LabeledContent("Still needed", value: tr("\(MomentsFormat.usdcCents(info.reserveRemaining)) · about"#))
         for unrounded in ["MomentsFormat.usdc(m.threshold)", "MomentsFormat.usdc(info.reserveRemaining)", "MomentsFormat.usdc(info.ledger.reserve)"] {
@@ -284,8 +284,27 @@ final class MomentsV2Tests: XCTestCase {
         }
         XCTAssertTrue(detail.contains(#"LabeledContent("You pay") { Text(MomentsFormat.usdc(quote.gross))"#))
         XCTAssertTrue(detail.contains(#"DetailRow("You pay", MomentsFormat.usdc(quote?.gross ?? m.price * BigUInt(quantity)))"#))
-        let create = try DocsLinksTests.appSource("Moments/CreateMomentView.swift")
+        let create = try AppSource.app("Moments/CreateMomentView.swift")
         XCTAssertEqual(create.components(separatedBy: "MomentsFormat.usdcCents(policy.threshold)").count - 1, 3, "Graduates at, twice, and the pricing footer")
         XCTAssertTrue(create.contains(#"case .threshold: return "\(MomentsFormat.usdc(now.threshold)) → \(MomentsFormat.usdc(next.threshold))""#))
+    }
+
+    /// Collect signs only the quote of the quantity, reserve and state on screen: each quote is noted with what it was
+    /// read for, a cancelled read writes nothing, and after a change the button waits for the new quote. The settled
+    /// sheet's View opens the newest edition the collect minted (`MomentNFT.mint` ranks totalMinted+1…), counted from the
+    /// editions there were when Collect was tapped, never from the number of collect calls.
+    func testCollectSignsOnlyTheQuoteOnScreenAndViewOpensTheNewEdition() throws {
+        let detail = AppSource.squeezed(try AppSource.app("Moments/MomentDetailView.swift"))
+        XCTAssertTrue(detail.contains(#"private var quoteKey: String { "\(quantity)-\(info.ledger.reserve)-\(info.state.rawValue)" }"#))
+        XCTAssertTrue(detail.contains(".task(id: quoteKey) { await refreshQuote() }"))
+        XCTAssertTrue(detail.contains(".disabled(quote == nil || quotedFor != quoteKey || insufficient)"))
+        let refresh = try XCTUnwrap(detail.range(of: "private func refreshQuote() async {"))
+        let body = String(detail[refresh.upperBound...])
+        XCTAssertTrue(body.hasPrefix(" let key = quoteKey guard canCollect else { quote = nil; quoteReason = nil; quotedFor = key; return }"))
+        XCTAssertTrue(body.contains("let read = try await env.moments.quote(id: m.id, quantity: quantity) guard !Task.isCancelled else { return } quote = read quoteReason = nil quotedFor = key"))
+        XCTAssertTrue(body.contains("} catch { guard !Task.isCancelled else { return } quote = nil quoteReason = describe(error) quotedFor = key }"))
+        XCTAssertTrue(detail.contains("Haptics.tap() collectBase = info.editions action = .collect"))
+        XCTAssertTrue(detail.contains("let minted = quote?.editions ?? BigUInt(quantity) openURL(OpenSea.item(contract: m.nft, tokenId: BigUInt(collectBase ?? info.editions) + minted))"))
+        XCTAssertFalse(detail.contains("supply.collects ?? 0) + quantity"), "a count of collect calls is not an edition")
     }
 }

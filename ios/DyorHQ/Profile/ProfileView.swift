@@ -138,7 +138,7 @@ struct ProfileView: View {
                                 let address = session.address
                                 Task { @MainActor in
                                     // Signing out can delete the only copy of an imported key, so with App Lock on it
-                                    // asks for the device owner first, like key export (audit F5).
+                                    // asks for the device owner first, like key export.
                                     if session.canSign, settings.appLockApplies(to: session.account),
                                        !(await BiometricGate.authenticate(reason: "Sign out of DyorHQ")) { return }
                                     signingOut = true
@@ -158,7 +158,7 @@ struct ProfileView: View {
                     }
                     .disabled(signingOut)
                 } footer: {
-                    Paragraph("DyorHQ \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · \(SupportLinks.tagline) · Self-custodial.")
+                    Paragraph("DyorHQ \(AppInfo.version) · \(SupportLinks.tagline) · Self-custodial.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -321,12 +321,12 @@ struct SendSheet: View {
     @State private var balance: BigUInt?
     /// The token `balance` is for.
     @State private var balanceToken: Address?
-    /// What the review shows and signs, frozen when Review is tapped (RT-7): a Max that lands late or an edit behind
+    /// What the review shows and signs, frozen when Review is tapped: a Max that lands late or an edit behind
     /// the sheet can't change the amount signed after it was shown.
     @State private var review: SendReview?
-    /// The pasted text hidden characters were removed from (GR-4), while it is still what the field holds.
+    /// The pasted text hidden characters were removed from, while it is still what the field holds.
     @State private var cleanedPaste: String?
-    /// Whether the recipient has contract code (GR-3): nil until read, or when it couldn't be read.
+    /// Whether the recipient has contract code: nil until read, or when it couldn't be read.
     @State private var recipientIsContract: Bool?
     @State private var recipientCheckFailed = false
     /// The recipient whose check finished (`checkRecipient`): coming back from the token list neither checks it again
@@ -340,7 +340,7 @@ struct SendSheet: View {
     private var assetsReadKey: String { "\(session.address?.hex ?? "")#\(attempt)" }
     /// Which balance Available and Max want: the chosen token's, after the list's latest read.
     private var balanceReadKey: String { "\(token?.address.hex ?? "")#\(assetsKey ?? "")" }
-    /// What was typed or pasted, without surrounding whitespace or invisible characters (GR-4).
+    /// What was typed or pasted, without surrounding whitespace or invisible characters.
     private var recipientText: String { Address.cleanedInput(recipient).text }
     /// Nil for a mixed-case address whose EIP-55 checksum is wrong: a mistyped character must never become the recipient.
     private var recipientAddress: Address? { Address.inputProblem(recipientText) == nil ? Address(recipientText) : nil }
@@ -351,7 +351,7 @@ struct SendSheet: View {
         if let issue = Address.inputProblem(recipientText) { return issue }
         if let to = recipientAddress {
             if to.isZero { return tr("That's the zero address: anything sent there is lost for good.") }
-            // Tokens sent to their own contract are stuck there: almost no token can send them back (GR-3).
+            // Tokens sent to their own contract are stuck there: almost no token can send them back.
             if let token, !token.isNative, to == token.address { return tr("That's the \(token.symbol) token contract itself. Tokens sent to it are almost always lost for good.") }
         }
         if let rawAmount, let balance, let token, rawAmount > balance {

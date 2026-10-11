@@ -213,7 +213,7 @@ final class DyorCoinRegistryTests: XCTestCase {
         }
         XCTAssertEqual(TokenBadge.of(coins[later[0].token]!.token, coin: coins[later[0].token], receivedUnasked: false), .dyorLaunch)
 
-        MomentsChainStub.install { chain.answer($0, $1) }
+        MomentsChainStub.install { [chain] in chain.answer($0, $1) }
         let reopened = DyorCoinRegistry(rpc: MomentsChainStub.rpc(), store: store)
         let kept = await reopened.all
         XCTAssertEqual(kept, coins, "kept in the file as read")
@@ -271,7 +271,7 @@ final class DyorCoinRegistryTests: XCTestCase {
         let normal = launch("0x000000000000000000000000000000000000f401", "NORMAL")
         var chain = DyorCoinChain()
         chain.launches[v2] = heavy + [normal]
-        MomentsChainStub.install({ chain.answer($0, $1) }, responseCap: 4_100_000)
+        MomentsChainStub.install({ [chain] in chain.answer($0, $1) }, responseCap: 4_100_000)
         let registry = DyorCoinRegistry(rpc: MomentsChainStub.rpc())
         let complete = await registry.refresh()
         XCTAssertTrue(complete)
@@ -685,7 +685,7 @@ final class DyorCoinRegistryTests: XCTestCase {
         let asked = await registry.membership(fake)
         XCTAssertEqual(asked, .notDyor, "a fake token under a real factory: every factory answered for it")
 
-        MomentsChainStub.install { chain.answer($0, $1) }
+        MomentsChainStub.install { [chain] in chain.answer($0, $1) }
         await registry.ingest([launchValue(real.token, factory: .zero)])
         XCTAssertTrue(MomentsChainStub.batches().isEmpty, "a coin already known isn't asked again")
 
@@ -781,9 +781,7 @@ final class DyorCoinRegistryTests: XCTestCase {
     /// Nothing is kept in UserDefaults: a key there with an earlier-install prefix turns App Lock off on a new install
     /// (`AppSettings.appLockDefault`, rule R4).
     func testTheRegistryKeepsNothingInUserDefaults() throws {
-        var folder = URL(fileURLWithPath: #filePath)
-        for _ in 0..<3 { folder.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit
-        folder.append(path: "Sources/DyorKit/Services/DyorCoins")
+        let folder = AppSource.kitFolder.appendingPathComponent("Services/DyorCoins")
         let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "swift" }
         XCTAssertTrue(files.contains { $0.lastPathComponent == "DyorCoinStore.swift" })
         for file in files {

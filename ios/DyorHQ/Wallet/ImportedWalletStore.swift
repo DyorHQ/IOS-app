@@ -41,8 +41,6 @@ enum ImportedWalletStore {
         return Secp256k1Account(privateKey: key)
     }
 
-    static var exists: Bool { loadKey() != nil }
-
     static func clear() {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

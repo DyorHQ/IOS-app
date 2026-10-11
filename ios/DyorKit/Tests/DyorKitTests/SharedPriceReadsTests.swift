@@ -5,7 +5,7 @@ import XCTest
 
 /// Prices every screen shares (`PriceService` with a `ChainCache`): identical reads at once are one read, a token's
 /// price is kept `ChainCache.TTL.price` seconds and the day-ago block a minute, so a warm read is one round trip; an
-/// invalidation reads again; and the pools found are kept on the device with the time each was found (RS-12), for the
+/// invalidation reads again; and the pools found are kept on the device with the time each was found, for the
 /// venue setting they were found under. Runs `PriceService`'s real code against `VenueChainStub`.
 final class SharedPriceReadsTests: XCTestCase {
     static let head = BlockHeader(number: 2_000_000, timestamp: 1_800_000_000)

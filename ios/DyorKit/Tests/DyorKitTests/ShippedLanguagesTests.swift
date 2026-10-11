@@ -12,16 +12,10 @@ final class ShippedLanguagesTests: XCTestCase {
     private static let catalogs = ["DyorHQ/Resources/Localizable.xcstrings", "DyorHQ/Resources/InfoPlist.xcstrings",
                                    "DyorKit/Sources/DyorKit/Resources/Localizable.xcstrings"]
 
-    private static func ios() throws -> URL {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        guard FileManager.default.fileExists(atPath: ios.appendingPathComponent("DyorHQ").path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        return ios
-    }
-
     /// One catalog's entries, by key.
     private static func strings(_ path: String) throws -> [String: [String: Any]] {
-        let data = try Data(contentsOf: try ios().appendingPathComponent(path))
+        try AppSource.requireApp()
+        let data = try Data(contentsOf: AppSource.iosFolder.appendingPathComponent(path))
         let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any], path)
         XCTAssertEqual(catalog["sourceLanguage"] as? String, "en", path)
         let strings = try XCTUnwrap(catalog["strings"] as? [String: Any], path)
@@ -30,7 +24,8 @@ final class ShippedLanguagesTests: XCTestCase {
 
     /// The languages the app ships, as Info.plist lists them.
     private static func shipped() throws -> [String] {
-        let info = try XCTUnwrap(NSDictionary(contentsOf: try ios().appendingPathComponent("DyorHQ/Info.plist")) as? [String: Any])
+        try AppSource.requireApp()
+        let info = try XCTUnwrap(NSDictionary(contentsOf: AppSource.appFolder.appendingPathComponent("Info.plist")) as? [String: Any])
         return try XCTUnwrap(info["CFBundleLocalizations"] as? [String])
     }
 

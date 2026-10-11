@@ -1,7 +1,7 @@
 import DyorKit
 import SwiftUI
 
-/// The app's one image pipeline (`ImagePipeline`, security audit 2026-09-26, RI-5) for every image from a host it
+/// The app's one image pipeline (`ImagePipeline`) for every image from a host it
 /// doesn't control: coin logos, launch and Moment artwork, avatars, NFT art, news thumbnails, chain badges. Each fetch is
 /// capped (`RemoteMedia.fetch`) — tighter for a logo-sized image (`RemoteMedia.caps(forThumbnail:)`) — and only a
 /// thumbnail at the size bucket the view shows is decoded (`ImageSizeBucket`), never the full image. What it accepted is

@@ -3,7 +3,7 @@ import Foundation
 import Observation
 import SwiftUI
 
-/// The minimum supported build (security audit 2026-09-26, GP-2). A build that contains this check (the first after
+/// The minimum supported build. A build that contains this check (the first after
 /// build 13) and is below `app_config` 'ios'.min_build (supabase migration 28) shows `UpdateRequiredView` in place of the
 /// app, where balances and key export stay reachable and nothing signs. Builds 13 and earlier never read it, so raising
 /// min_build does nothing for them: the ones that hard-code retired contract stacks (12 and earlier) must still be
@@ -45,7 +45,7 @@ final class UpdateGate {
     }
 }
 
-/// "Update required" (GP-2): shown in place of the app while this build is below the minimum. It says what to do and
+/// "Update required": shown in place of the app while this build is below the minimum. It says what to do and
 /// opens the update, shows the account's balances read-only, and keeps key export reachable — the funds never depend
 /// on updating. Nothing on it signs, and nothing that signs is reachable from it. The owner's message from the row is
 /// written in English, so it is shown only while the app is in English; in any other language the app's own text says

@@ -29,15 +29,17 @@ final class LogScanTests: XCTestCase {
     }
 
     /// The finding: rpc1 answers the chain head (108.8M blocks) but fails every getLogs, with an internal error or no
-    /// answer at all. The wallet's history, read fail-fast as Send and the Portfolio read it, ends at once, incomplete: the
-    /// whole window asked three times, then two rounds of six ranges, each asked twice, and no range split.
-    func testAnEndpointThatAnswersNoRangeEndsTheScanInAFewRequests() async {
+    /// answer at all. The wallet's whole history, read fail-fast, ends at once, incomplete: the whole window asked three
+    /// times, then two rounds of six ranges, each asked twice, and no range split.
+    func testAnEndpointThatAnswersNoRangeEndsTheScanInAFewRequests() async throws {
         for failure in [LogsStub.Failure.error(code: -32603, message: "Internal error"), .noAnswer] {
             LogsStub.install(head: 108_800_000) { _ in failure }
-            let discovery = WalletTokenDiscovery(logsRPC: LogsStub.rpc(), multicall: Multicall(rpc: LogsStub.rpc()))
+            let rpc = LogsStub.rpc()
             let started = Date()
-            let scan = await discovery.scan(wallet: wallet, wholeHistory: true, logScan: .failFast)
-            XCTAssertEqual(scan, WalletTokenDiscovery.Scan(tokens: [], complete: false), "\(failure)")
+            let head = try await rpc.block(.latest).number
+            let report = await rpc.chunkedLogsReport(address: nil, topics: [transferTopic, nil, walletWord], fromBlock: 0, toBlock: head, mode: .failFast)
+            XCTAssertTrue(report.logs.isEmpty, "\(failure)")
+            XCTAssertFalse(report.complete, "\(failure)")
             let asked = LogsStub.queries()
             XCTAssertEqual(asked.count, 27, "\(failure): 3 for the whole window, then 2 rounds of 6 ranges, each asked twice")
             XCTAssertEqual(asked.prefix(3).map(\.span), [108_800_001, 108_800_001, 108_800_001])
@@ -297,18 +299,13 @@ final class LogScanTests: XCTestCase {
         }
     }
 
-    /// Only the wallet's history on Send and the Portfolio (`WalletTokens.history`) is read fail-fast: every other log
-    /// scan — the launchpad's events and holdings, Moments' history, swap history, venue tokens, Home's 30-day discovery —
-    /// keeps the patient default, whose callers take what it read (the wallet's NFTs scan nothing since build 23: they come
-    /// from the history store).
+    /// Nothing in the app reads fail-fast any more: the wallet's history on Send and the Portfolio, its tokens and its NFTs
+    /// come from the history store (`WalletTokens.history`), and every log scan — the launchpad's events and holdings,
+    /// Moments' history, swap history, venue tokens — keeps the patient default, whose callers take what it read.
     func testOnlyTheWalletsHistoryIsReadFailFast() throws {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        let app = ios.appendingPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let kit = ios.appendingPathComponent("DyorKit/Sources/DyorKit")
+        try AppSource.requireApp()
         var sayFailFast: [String] = []
-        for root in [app, kit] {
+        for root in [AppSource.appFolder, AppSource.kitFolder] {
             let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
             for file in files where file.pathExtension == "swift" {
                 let source = try String(contentsOf: file, encoding: .utf8)
@@ -317,15 +314,16 @@ final class LogScanTests: XCTestCase {
         }
         // LogsRouter.swift: the budget each mode spends. The wallet's history itself no longer scans: it comes from the
         // history store (`WalletTokens.history`), so nothing in the app reads fail-fast any more.
-        XCTAssertEqual(Set(sayFailFast), ["Logs.swift", "LogsRouter.swift", "WalletTokenDiscovery.swift"])
-        let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
+        XCTAssertEqual(Set(sayFailFast), ["Logs.swift", "LogsRouter.swift"])
+        let tokens = try AppSource.app("Wallet/WalletTokens.swift")
         XCTAssertEqual(tokens.components(separatedBy: "logScan: .failFast").count - 1, 0, "the history comes from the store")
         XCTAssertTrue(tokens.contains("env.walletDiscovery.held(wallet: address, incoming: snapshot.transfersIn, complete: snapshot.status(WalletHistoryScans.transfersInId).complete, known: known)"))
-        let discovery = try String(contentsOf: kit.appendingPathComponent("Services/WalletTokenDiscovery.swift"), encoding: .utf8)
-        XCTAssertTrue(discovery.contains("logScan: LogScanMode = .patient"))
-        XCTAssertTrue(discovery.contains("fromBlock: from, toBlock: latest, mode: logScan)"))
+        // Token discovery reads no logs of its own: it takes the transfers in the history store holds.
+        let discovery = try AppSource.kit("Services/WalletTokenDiscovery.swift")
+        XCTAssertFalse(discovery.contains("chunkedLogs"))
+        XCTAssertTrue(discovery.contains("public func held(wallet: Address, incoming: [Log], complete scanned: Bool, known: Set<Address> = []) async -> Scan {"))
         // Read with every run of whitespace as one space: the checks pin the code, not its line breaks or indentation.
-        let logs = try String(contentsOf: kit.appendingPathComponent("Core/Logs.swift"), encoding: .utf8).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let logs = AppSource.squeezed(try AppSource.kit("Core/Logs.swift"))
         // A scan is a screen's at the gate unless it says otherwise (`LogsGate.Lane`), and the router reads it in its lane,
         // as many requests at once as it asks for, from the end it asks for (`LogsRouter.Order`): oldest first unless it
         // says newest first, as every wide scan a screen shows does (`newestLogs`, `NewestFirstScanTests`).

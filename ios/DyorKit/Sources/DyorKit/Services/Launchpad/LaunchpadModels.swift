@@ -666,19 +666,6 @@ public struct LaunchDetail: Identifiable, Hashable, Sendable {
 
     /// The Uniswap v4 fallback is open at `now` (the factory's `block.timestamp >= stuckSince + delay`).
     public func isV4FallbackOpen(at now: Int) -> Bool { v4FallbackOpensAt.map { now >= $0 } ?? false }
-
-    /// Seconds of snipe tax left at `now`, clamped to the schedule so a chain clock ahead of the device never
-    /// shows a longer window.
-    public func snipeWindowLeft(at now: Int) -> Int {
-        min(snipeSchedule.count, max(0, launch.launchedAt + snipeSchedule.count - now))
-    }
-
-    /// The snipe tax a non-exempt buyer would pay at `now`, from the schedule alone.
-    public func snipeTaxBps(at now: Int) -> Int {
-        guard snipeWindowLeft(at: now) > 0, !snipeSchedule.isEmpty else { return 0 }
-        let index = max(0, min(snipeSchedule.count - 1, now - launch.launchedAt))
-        return snipeSchedule[index]
-    }
 }
 
 /// The v2 factory's rule for a stuck Monday launch's Uniswap v4 fallback (`graduateFallback`): open as soon as it is
@@ -1037,35 +1024,5 @@ public enum LaunchpadMath {
     public static func minimumOut(_ amount: BigUInt, slippageBps: Int) -> BigUInt {
         let keep = BigUInt(max(0, min(10_000, 10_000 - slippageBps)))
         return amount * keep / bps
-    }
-
-    public static func feeOf(_ amount: BigUInt, bps taxBps: Int) -> BigUInt {
-        amount * BigUInt(max(0, taxBps)) / bps
-    }
-
-    /// Gross amount whose net after `totalBps` of fees is at least `net`, rounded up (`CurveMath.grossForNet`).
-    public static func grossForNet(_ net: BigUInt, totalBps: Int) -> BigUInt {
-        let keep = BigUInt(max(1, 10_000 - totalBps))
-        return (net * bps + keep - 1) / keep
-    }
-
-    /// Mirrors `BondingCurve.quoteBuy` for the deployer (snipe-tax exempt) before the curve exists, which is what
-    /// the create screen shows next to the developer buy.
-    public static func estimateDevBuy(amount: BigUInt, pair: PairEconomics, protocol info: ProtocolInfo, creatorTaxBps: Int) -> (tokens: BigUInt, used: BigUInt, refund: BigUInt, sharePercent: Double) {
-        let totalBps = info.curveFeeBps + creatorTaxBps
-        func netOf(_ gross: BigUInt) -> BigUInt {
-            let fees = feeOf(gross, bps: info.curveFeeBps) + feeOf(gross, bps: creatorTaxBps)
-            return fees > gross ? 0 : gross - fees
-        }
-        var used = amount
-        var net = netOf(used)
-        if net > pair.graduationThreshold {
-            used = grossForNet(pair.graduationThreshold, totalBps: totalBps)
-            net = netOf(used)
-        }
-        let denominator = pair.phantomQuote + net
-        let tokens = denominator == 0 ? 0 : net * info.supply / denominator
-        let share = info.supply == 0 ? 0 : Double(tokens * bps / info.supply) / 100
-        return (tokens, used, amount > used ? amount - used : 0, share)
     }
 }
