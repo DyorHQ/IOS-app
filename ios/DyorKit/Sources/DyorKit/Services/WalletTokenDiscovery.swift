@@ -162,8 +162,8 @@ public struct WalletTokenDiscovery: Sendable {
     }
 
     /// An ERC-20 `Transfer`: three topics (the signature, `from`, `to`) and the amount as 32 bytes of data. An ERC-721
-    /// `Transfer` has the same signature but indexes the token id (four topics, no data), as `SwapHistory` tells them
-    /// apart: its contract is a collection, whose `balanceOf` counts editions, not a token a send can move.
+    /// `Transfer` has the same signature but indexes the token id (four topics, no data): its contract is a collection,
+    /// whose `balanceOf` counts editions, not a token a send can move. `SwapHistoryService` keeps a swap's legs by it too.
     static func isERC20Transfer(_ log: Log) -> Bool { log.topics.count == 3 && log.data.count == 32 }
 
     /// A `Transfer` with its amount indexed too (four topics, no data): an ERC-721 collection's, or a token's that declares

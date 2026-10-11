@@ -110,7 +110,7 @@ public enum RemoteMedia {
                              onResponse: (@Sendable () -> Void)? = nil) async throws -> Data {
         guard url.scheme?.lowercased() == "https" else { throw Failure.insecureURL }
         var request = URLRequest(url: url)
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         if let timeout { request.timeoutInterval = timeout }
         let task = session.dataTask(with: request)
         let load = CappedLoad(maxBytes: maxBytes, onResponse: onResponse)

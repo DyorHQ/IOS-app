@@ -65,8 +65,6 @@ public struct SwapHistoryService: Sendable {
         self.clock = clock ?? BlockClock(rpc: rpc)
     }
 
-    private static let transferSig = "Transfer(address,address,uint256)"
-
     /// A history filter the user picks (24H, 7D, 30D, All): the app shows its `label` and keeps the recorded rows newer
     /// than its `seconds`. No scan reads by window any more; `blocks(secondsPerBlock:)` and `allBlocks` keep the block
     /// budget each one stood for, which BlockClockTests pins.
@@ -109,7 +107,7 @@ public struct SwapHistoryService: Sendable {
     }
 
     private func scan(wallet: Address, from: UInt64, to latest: UInt64, anchor: BlockHeader, secondsPerBlock: Double, decimals: [Address: Int], limit: Int) async -> [SwapRecord] {
-        let topic = ABI.eventTopic(Self.transferSig)
+        let topic = ERC20.transferTopic
         let walletWord = wallet.data.leftPadded(to: 32)
         // No address filter: one scan for everything the wallet sent, one for everything it received, each newest first
         // (`RPCClient.chunkedLogs`), so a window wider than a scan's budget gives its latest swaps. No screen reads swaps
@@ -254,12 +252,12 @@ public struct SwapHistoryService: Sendable {
         struct Leg { let token: Address; let amount: BigUInt; let block: UInt64; let timestamp: Int? }
         var sent: [Data: [Leg]] = [:]
         var received: [Data: [Leg]] = [:]
-        // Only ERC-20 transfers: exactly three topics and a 32-byte amount. ERC-721 `Transfer` shares the topic but
-        // indexes the token id (four topics, empty data), and an NFT mint in a payment transaction is not a swap leg.
-        func isERC20(_ log: Log) -> Bool { log.topics.count == 3 && log.data.count == 32 }
+        // Only ERC-20 transfers (`WalletTokenDiscovery.isERC20Transfer`): exactly three topics and a 32-byte amount.
+        // ERC-721 `Transfer` shares the topic but indexes the token id (four topics, empty data), and an NFT mint in a
+        // payment transaction is not a swap leg.
         func leg(_ log: Log) -> Leg { Leg(token: log.address, amount: BigUInt(log.data), block: log.blockNumber, timestamp: log.blockTimestamp) }
-        for log in outLogs where isERC20(log) { sent[log.transactionHash, default: []].append(leg(log)) }
-        for log in inLogs where isERC20(log) { received[log.transactionHash, default: []].append(leg(log)) }
+        for log in outLogs where WalletTokenDiscovery.isERC20Transfer(log) { sent[log.transactionHash, default: []].append(leg(log)) }
+        for log in inLogs where WalletTokenDiscovery.isERC20Transfer(log) { received[log.transactionHash, default: []].append(leg(log)) }
 
         // Compare tokens by human value (decimals-normalized), not raw wei — otherwise an 18-decimal reward/refund
         // credited in the same tx would outrank a 6-decimal output. Unknown tokens assume 18.

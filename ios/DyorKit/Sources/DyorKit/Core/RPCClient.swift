@@ -464,10 +464,20 @@ public actor RPCClient {
     }
 
     /// Whether `url` is a node on this machine (a local fork), which has no public endpoint's limits: the one rule for the
-    /// read limits and the item budget here, and for the log floors and fork-block clamps (`Logs.swift`, `isLocal`).
+    /// read limits and the item budget here, and for the log floors and fork-block clamps (`Logs.swift`, `isLocal`). It
+    /// reads the host alone; `mentionsLocalNode` is the other rule, which reads the whole URL.
     static func isLocal(_ url: URL) -> Bool {
         let host = url.host() ?? ""
         return host == "127.0.0.1" || host == "localhost"
+    }
+
+    /// Whether `url`'s text names this machine: "127.0.0.1" or "localhost" anywhere in it, not only as its host. The rule
+    /// of the log ranges' size (`logChunkSize(for:)`) and of the launchpad's and Moments' services, which read logs on a
+    /// local fork itself when no logs client is passed. It is not `isLocal`'s rule (the host alone), though the two agree
+    /// on every URL the app is configured with.
+    static func mentionsLocalNode(_ url: URL) -> Bool {
+        let text = url.absoluteString
+        return text.contains("127.0.0.1") || text.contains("localhost")
     }
 
     /// One request of a read to one endpoint (`raceRound`): its answer given `limit` seconds without a byte and a third

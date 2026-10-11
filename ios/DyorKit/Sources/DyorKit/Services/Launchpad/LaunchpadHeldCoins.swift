@@ -60,7 +60,7 @@ public extension LaunchpadService {
         let stacks = stacks.filter(\.isDeployed)
         guard !coins.isEmpty, !stacks.isEmpty else { return .none }
         let calls = coins.flatMap { coin in
-            stacks.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(coin)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.generation.legacyRecord)) }
+            stacks.map { LaunchpadABI.launchRecordCall(coin, stack: $0) }
         }
         let results = try await multicall.read(calls)
         guard results.count == calls.count else { throw LaunchpadError.unexpectedResponse(L10n.string(LocalizedStringResource("launchpad records", bundle: L10n.kit, comment: "What the app could not read, completing “The launchpad returned something the app could not read (<this>).”"))) }
@@ -95,7 +95,7 @@ public extension LaunchpadService {
         let price: Double
         if graduated {
             guard case .bytes(let word)? = values.first else { return nil }
-            let sqrtPriceX96 = BigUInt(word) & ((BigUInt(1) << 160) - 1)
+            let sqrtPriceX96 = BigUInt(word) & SwapCalldata.maxUint160
             guard sqrtPriceX96 > 0 else { return nil }
             let token0 = BigUInt(token.data) < BigUInt(pairSide.data) ? token : pairSide
             price = PriceService.price(sqrtPriceX96: sqrtPriceX96, token: token, token0: token0, tokenDecimals: 18, quoteDecimals: pairDecimals)

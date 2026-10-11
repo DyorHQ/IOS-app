@@ -703,7 +703,7 @@ public actor PriceService {
         //    decides it at once; a Moment's is read next.
         if !unknown.isEmpty {
             let perCoin = launchpads.count + cohorts.count
-            let answers = await Self.readChunked(multicall, unknown.flatMap { DyorListing.originCalls($0, launchpads: launchpads, cohorts: cohorts) }, block: .latest)
+            let answers = await multicall.readChunked(unknown.flatMap { DyorListing.originCalls($0, launchpads: launchpads, cohorts: cohorts) }, block: .latest)
             for (i, coin) in unknown.enumerated() {
                 switch DyorListing.origins(coin, launchpads: launchpads, cohorts: cohorts, answers: Array(answers[i * perCoin ..< (i + 1) * perCoin])) {
                 case .moment(let cohort, let id): origins[coin] = .moment(cohort, id: id)
@@ -741,7 +741,7 @@ public actor PriceService {
         guard !origins.isEmpty else { return [:] }
         let entries = origins.sorted { $0.key.hex < $1.key.hex }
         let layouts = entries.map { entry in DyorListing.recordCalls(entry.key, origin: entry.value) }
-        let answers = await Self.readChunked(multicall, layouts.flatMap { $0 }, block: block)
+        let answers = await multicall.readChunked(layouts.flatMap { $0 }, block: block)
         var out: [Address: DyorListing.Record] = [:]
         var at = 0
         for (entry, layout) in zip(entries, layouts) {
@@ -749,36 +749,6 @@ public actor PriceService {
             at += layout.count
         }
         return out
-    }
-
-    /// `calls` at `block` in Multicall3 reads of at most `Multicall.recordChunk`, `Multicall.readsInFlight` at a time, their
-    /// answers in `calls` order; every call of a read that failed as a whole comes back as a failure.
-    static func readChunked(_ multicall: Multicall, _ calls: [ContractCall], block: BlockTag) async -> [Result<[ABIValue], Error>] {
-        let chunks = stride(from: 0, to: calls.count, by: Multicall.recordChunk).map { Array(calls[$0 ..< min(calls.count, $0 + Multicall.recordChunk)]) }
-        var answers = [[Result<[ABIValue], Error>]](repeating: [], count: chunks.count)
-        await withTaskGroup(of: (Int, [Result<[ABIValue], Error>]).self) { group in
-            var next = 0
-            func send() {
-                guard next < chunks.count else { return }
-                let index = next
-                next += 1
-                let chunk = chunks[index]
-                group.addTask {
-                    do {
-                        let results = try await multicall.read(chunk, block: block)
-                        return (index, results.count == chunk.count ? results : chunk.map { _ in .failure(NetworkError.malformedResponse) })
-                    } catch {
-                        return (index, chunk.map { _ in .failure(error) })
-                    }
-                }
-            }
-            for _ in 0 ..< Multicall.readsInFlight { send() }
-            while let (index, results) = await group.next() {
-                answers[index] = results
-                send()
-            }
-        }
-        return answers.flatMap { $0 }
     }
 
     // MARK: Reads
@@ -865,8 +835,7 @@ public actor PriceService {
             return price(sqrtPriceX96: sqrtPriceX96, token: Monad.native, token0: Monad.native, tokenDecimals: 18, quoteDecimals: 6)
         case .v3(_, let token, let quote, let token0):
             // USDC and AUSD are 6-decimal dollar stables; a WMON quote is 18-decimal and converted to USD via MON.
-            let quoteDecimals = (quote == Monad.usdc || quote == Monad.ausd) ? 6 : 18
-            return price(sqrtPriceX96: sqrtPriceX96, token: token, token0: token0, tokenDecimals: tokenDecimals, quoteDecimals: quoteDecimals)
+            return price(sqrtPriceX96: sqrtPriceX96, token: token, token0: token0, tokenDecimals: tokenDecimals, quoteDecimals: quoteDecimals(quote))
         case .v2, .dyor:
             return 0 // v2 is priced from reserves, a DyorHQ venue by `DyorListing.pairPrice`: never from here.
         }

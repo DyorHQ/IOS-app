@@ -95,7 +95,7 @@ public actor NewsService {
     private func fetch(_ source: NewsSource) async -> [NewsArticle]? {
         var request = URLRequest(url: source.feed)
         request.timeoutInterval = 15
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         guard let (data, response) = try? await session.data(for: request), (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true else { return nil }
         return RSSParser.parse(data, source: source.name)
     }

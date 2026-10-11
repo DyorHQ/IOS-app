@@ -39,8 +39,7 @@ public actor LaunchpadService {
                 cache: ChainCache? = nil, store: ChainStore? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
         self.rpc = rpc
         self.addresses = addresses
-        let text = rpc.url.absoluteString
-        let local = text.contains("127.0.0.1") || text.contains("localhost")
+        let local = RPCClient.mentionsLocalNode(rpc.url)
         self.logsRPC = logsRPC ?? (local ? rpc : RPCClient(url: Self.defaultLogsRPC))
         self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
@@ -117,7 +116,7 @@ public actor LaunchpadService {
             LaunchpadABI.call(factory, F.maxCreatorTaxBps, returns: "uint16"),
             LaunchpadABI.call(factory, F.whitelistEnabled, returns: "bool"),
             LaunchpadABI.call(factory, F.getLaunchFeePolicy, returns: "(address,uint16)"),
-            LaunchpadABI.call(factory, F.launchCount, returns: "uint256"),
+            LaunchpadABI.launchCountCall(factory),
         ] + (checksModules ? moduleCalls(factory) : []) + (account.map { [LaunchpadABI.call(factory, F.canLaunch, [.address($0)], returns: "bool")] } ?? []))
         var index = 6
         func next() -> [ABIValue] {
@@ -217,14 +216,14 @@ public actor LaunchpadService {
     public func launches(limit: Int = 48, factory: Address) async throws -> [Launch] {
         guard !factory.isZero, limit > 0 else { return [] }
         let legacy = stack(for: factory).generation.legacyRecord
-        let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.launchCount, returns: "uint256")])[0][0])
+        let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.launchCountCall(factory)])[0][0])
         guard total > 0 else { return [] }
         let offset = max(0, total - limit)
         let page = try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunches, [.uint(offset), .uint(total - offset)], returns: "address[]")])[0][0].elements.map(\.address)
         // A page shorter than the count (an empty one included) was read on a node behind the one that counted: the shared
         // list's read refuses it too (`launches(limit:factory:total:epoch:)`).
         guard page.count == total - offset else { throw ChainListUnread(.launch) }
-        let records = try await multicall.readAll(page.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
+        let records = try await multicall.readAll(page.map { LaunchpadABI.launchRecordCall($0, factory: factory, legacy: legacy) })
             .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
         for (token, record) in zip(page, records) where !record.exists || record.token != token { throw ChainListUnread(.launch) }
         return try await hydrate(records, factory: factory).reversed()
@@ -276,7 +275,7 @@ public actor LaunchpadService {
     /// moves only.
     private func factoryLaunches(limit: Int, factory: Address) async throws -> [Launch] {
         let epoch = store?.epoch
-        let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.call(factory, LaunchpadABI.Factory.launchCount, returns: "uint256")])[0][0])
+        let total = LaunchpadABI.int(try await multicall.readAll([LaunchpadABI.launchCountCall(factory)])[0][0])
         return try await launches(limit: limit, factory: factory, total: total, epoch: epoch)
     }
 
@@ -338,7 +337,7 @@ public actor LaunchpadService {
     /// throttling) is every factory's, as it would be one by one.
     func launchCounts(_ factories: [Address]) async -> [Result<Int, Error>] {
         guard !factories.isEmpty else { return [] }
-        let calls = factories.map { LaunchpadABI.call($0, LaunchpadABI.Factory.launchCount, returns: "uint256") }
+        let calls = factories.map { LaunchpadABI.launchCountCall($0) }
         do {
             return try await multicall.read(calls).map { result in result.map { LaunchpadABI.int($0[0]) } }
         } catch where ERC20.isCallError(error) {
@@ -374,7 +373,7 @@ public actor LaunchpadService {
             guard page.count == total - first else { throw ChainListUnread(.launch) }
             let indices = (first ..< total).filter { saved[$0] == nil }
             let tokens = indices.map { page[$0 - first] }
-            let records = try await multicall.readAll(tokens.map { LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address($0)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)) })
+            let records = try await multicall.readAll(tokens.map { LaunchpadABI.launchRecordCall($0, factory: factory, legacy: legacy) })
                 .map { LaunchpadABI.LaunchRecord($0[0], legacy: legacy) }
             for (token, record) in zip(tokens, records) where !record.exists || record.token != token { throw ChainListUnread(.launch) }
             let read = try await hydrateReading(records, factory: factory)
@@ -411,7 +410,7 @@ public actor LaunchpadService {
         typealias F = LaunchpadABI.Factory
         typealias C = LaunchpadABI.Curve
         let legacy = stack.generation.legacyRecord
-        let tuple = try await multicall.readAll([LaunchpadABI.call(factory, F.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy))])[0][0]
+        let tuple = try await multicall.readAll([LaunchpadABI.launchRecordCall(token, factory: factory, legacy: legacy)])[0][0]
         let record = LaunchpadABI.LaunchRecord(tuple, legacy: legacy)
         guard record.exists else { return nil }
         let info = try await hydrate([record], factory: factory)[0]
@@ -626,7 +625,7 @@ public actor LaunchpadService {
         async let pairsRead = pairInfos(known.map(\.pairToken))
         let items = known.map { s in
             [
-                LaunchpadABI.call(factory, LaunchpadABI.Factory.getLaunchedToken, [.address(s.token)], returns: LaunchpadABI.launchedTokenReturns(legacy: legacy)),
+                LaunchpadABI.launchRecordCall(s.token, factory: factory, legacy: legacy),
                 LaunchpadABI.call(s.curve, C.price, returns: "uint256"),
                 LaunchpadABI.call(s.curve, C.realQuoteReserve, returns: "uint256"),
                 LaunchpadABI.call(s.curve, C.completed, returns: "bool"),
@@ -772,7 +771,7 @@ public actor LaunchpadService {
     public func knownCurve(token: Address) async -> Address? {
         let stacks = stacks.filter(\.isDeployed)
         guard !token.isZero, !stacks.isEmpty else { return nil }
-        let calls = stacks.map { LaunchpadABI.call($0.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(token)], returns: LaunchpadABI.launchedTokenReturns(legacy: $0.generation.legacyRecord)) }
+        let calls = stacks.map { LaunchpadABI.launchRecordCall(token, stack: $0) }
         guard let results = try? await multicall.read(calls) else { return nil }
         return Self.knownCurve(stacks: stacks, records: results)
     }
@@ -1105,7 +1104,7 @@ public extension LaunchpadMath {
     /// Converts a PoolManager slot0 word into quote wei per 1e18 token wei, the scale `BondingCurve.price`
     /// uses, so graduated launches keep the same price field. Nil when the pool is uninitialised.
     static func poolPrice(slot0 value: Data, token: Address, pairToken: Address) -> BigUInt? {
-        let sqrtPriceX96 = BigUInt(value) & ((BigUInt(1) << 160) - 1)
+        let sqrtPriceX96 = BigUInt(value) & SwapCalldata.maxUint160
         if sqrtPriceX96 == 0 { return nil }
         let e36 = BigUInt(10).power(36)
         let tokenDecimals = BigUInt(10).power(18)

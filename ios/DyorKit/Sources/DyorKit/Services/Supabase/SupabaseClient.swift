@@ -346,7 +346,7 @@ public actor SupabaseClient {
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue(upsert ? "true" : "false", forHTTPHeaderField: "x-upsert")
         if let cacheControl = Self.cacheControl(forBucket: bucket) { request.setValue(cacheControl, forHTTPHeaderField: "Cache-Control") }
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
         return request
     }
@@ -371,7 +371,7 @@ public actor SupabaseClient {
             request.setValue(anonKey, forHTTPHeaderField: "apikey")
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+            request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
             request.timeoutInterval = 30
             return request
         }
@@ -510,7 +510,7 @@ public actor SupabaseClient {
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -543,7 +543,7 @@ public actor SupabaseClient {
             break
         }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if let prefer { request.setValue(prefer, forHTTPHeaderField: "Prefer") }
         request.timeoutInterval = timeout

@@ -14,7 +14,6 @@ public enum WalletHistoryScans {
     /// How far back the transfer scans read at least: 30 days at Monad's pace — further, to the wallet's first
     /// transaction, once that is known (`WalletHistoryService`), so every swap the wallet ever made counts.
     public static let transferDays: TimeInterval = 30 * 86_400
-    static let transferTopic = ABI.eventTopic("Transfer(address,address,uint256)")
     public static var transferBlocks: UInt64 { BlockClock.blocks(in: transferDays, secondsPerBlock: BlockClock.fallbackSecondsPerBlock) }
     public static var transferFloor: HistoryScan.Floor { .blocks(transferBlocks) }
 
@@ -26,12 +25,12 @@ public enum WalletHistoryScans {
 
     /// Every ERC-20 `Transfer` into the wallet: swaps' received legs, and every token that ever paid it.
     public static func transfersIn(wallet: Address, floor: HistoryScan.Floor = transferFloor) -> HistoryScan {
-        HistoryScan(id: transfersInId, query: LogsQuery(addresses: [], topics: [[transferTopic], nil, [wallet.data.leftPadded(to: 32)]]), floor: floor)
+        HistoryScan(id: transfersInId, query: LogsQuery(addresses: [], topics: [[ERC20.transferTopic], nil, [wallet.data.leftPadded(to: 32)]]), floor: floor)
     }
 
     /// Every ERC-20 `Transfer` out of the wallet: swaps' spent legs.
     public static func transfersOut(wallet: Address, floor: HistoryScan.Floor = transferFloor) -> HistoryScan {
-        HistoryScan(id: transfersOutId, query: LogsQuery(addresses: [], topics: [[transferTopic], [wallet.data.leftPadded(to: 32)]]), floor: floor)
+        HistoryScan(id: transfersOutId, query: LogsQuery(addresses: [], topics: [[ERC20.transferTopic], [wallet.data.leftPadded(to: 32)]]), floor: floor)
     }
 
     /// The wallet's curve fills (`CurveBuy` / `CurveSell` index the trader first) and the creator fees an escrow paid it

@@ -277,7 +277,7 @@ public actor ServerHistorySync {
     private let defaults: ServerHistoryDefaults
     private let now: @Sendable () -> Date
     private let random: @Sendable (ClosedRange<UInt64>) -> UInt64
-    private static let log = Logger(subsystem: "fun.dyorhq.app", category: "history")
+    private static let log = Logger(subsystem: AppIdentity.logSubsystem, category: "history")
 
     /// What this session holds of one wallet's reads.
     private struct Watch {

@@ -1289,7 +1289,7 @@ public final class PerplTradeClient {
     /// DEBUG builds only: which fields each inbound order / fill / position update carried, and its status codes. Ids are
     /// private; nothing outbound (the sign-in frame carries a signature) is ever logged.
     private static func debugLog(mt: Int, _ items: [[String: Any]]) {
-        let logger = Logger(subsystem: "fun.dyorhq.app", category: "perpl") // not localized: a log category
+        let logger = Logger(subsystem: AppIdentity.logSubsystem, category: "perpl") // not localized: a log category
         for item in items {
             let fields = item.keys.sorted().joined(separator: ",")
             let st = intValue(item["st"]).map(String.init) ?? "-", sr = intValue(item["sr"]).map(String.init) ?? "-"

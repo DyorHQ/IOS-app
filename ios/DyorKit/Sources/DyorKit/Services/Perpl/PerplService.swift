@@ -22,9 +22,9 @@ public actor PerplService {
         (90, "PUMP", "Pump.fun"),
     ]
 
-    /// Perpl's public REST API. `Perpl.api` (api.perpl.xyz) has no DNS record; the web app proxies
-    /// app.perpl.xyz/api, which is what this defaults to.
-    public static let restBase = URL(string: "https://app.perpl.xyz/api")!
+    /// Perpl's public REST API: app.perpl.xyz/api (`Perpl.api`), which its web app proxies (api.perpl.xyz has no DNS
+    /// record).
+    public static let restBase = Perpl.api
 
     public let rpc: RPCClient
     private let multicall: Multicall
@@ -197,7 +197,7 @@ public actor PerplService {
         let url = apiBase.appending(path: "v1/market-data/\(marketId)/candles/\(resolution)/\(fromMs)-\(toMs)")
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "accept")
-        request.setValue("DyorHQ/1.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
         let (data, response): (Data, URLResponse)
         do { (data, response) = try await session.data(for: request) } catch { throw NetworkError.transport(error) }

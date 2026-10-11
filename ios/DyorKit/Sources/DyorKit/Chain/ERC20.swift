@@ -3,6 +3,10 @@ import Foundation
 
 /// ERC-20 calldata builders and reads.
 public enum ERC20 {
+    /// Topic 0 of a `Transfer(address,address,uint256)` log. ERC-721 shares the signature but indexes the token id (four
+    /// topics, no data), so a log's shape tells the two apart (`WalletTokenDiscovery.isERC20Transfer`).
+    static let transferTopic = ABI.eventTopic("Transfer(address,address,uint256)")
+
     public static func balanceOf(_ token: Address, _ owner: Address) throws -> ContractCall {
         try ContractCall(to: token, "balanceOf(address)", [.address(owner)], returns: "uint256")
     }

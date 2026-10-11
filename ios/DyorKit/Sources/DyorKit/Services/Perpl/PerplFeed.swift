@@ -104,7 +104,7 @@ public final class PerplFeed {
     private static let showConnectingAfter: TimeInterval = 3
     private static let forceReconnectAfter: TimeInterval = 8
 
-    public init(chainId: Int = 143, wsURL: URL = URL(string: "wss://app.perpl.xyz/ws/v1/market-data")!, session: URLSession = .shared) {
+    public init(chainId: Int = 143, wsURL: URL = Perpl.websocket, session: URLSession = .shared) {
         self.chainId = chainId
         self.wsURL = wsURL
         self.session = session

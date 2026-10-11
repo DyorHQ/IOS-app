@@ -136,3 +136,36 @@ public extension Multicall {
         return false
     }
 }
+
+extension Multicall {
+    /// `calls` at `block` in Multicall3 reads of at most `chunk` calls, `readsInFlight` of them at a time (the next as each
+    /// answers), their answers in `calls` order; every call of a read that failed as a whole comes back as a failure. For
+    /// answers of a fixed size, such as the factories' own records and the price reads.
+    func readChunked(_ calls: [ContractCall], block: BlockTag = .latest, chunk size: Int = recordChunk) async -> [Result<[ABIValue], Error>] {
+        let chunks = stride(from: 0, to: calls.count, by: size).map { Array(calls[$0 ..< min(calls.count, $0 + size)]) }
+        var answers = [[Result<[ABIValue], Error>]](repeating: [], count: chunks.count)
+        await withTaskGroup(of: (Int, [Result<[ABIValue], Error>]).self) { group in
+            var next = 0
+            func send() {
+                guard next < chunks.count else { return }
+                let index = next
+                next += 1
+                let chunk = chunks[index]
+                group.addTask {
+                    do {
+                        let results = try await self.read(chunk, block: block)
+                        return (index, results.count == chunk.count ? results : chunk.map { _ in .failure(NetworkError.malformedResponse) })
+                    } catch {
+                        return (index, chunk.map { _ in .failure(error) })
+                    }
+                }
+            }
+            for _ in 0 ..< Self.readsInFlight { send() }
+            while let (index, results) = await group.next() {
+                answers[index] = results
+                send()
+            }
+        }
+        return answers.flatMap { $0 }
+    }
+}

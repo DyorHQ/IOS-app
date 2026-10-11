@@ -31,8 +31,7 @@ public actor MomentsService {
                 cache: ChainCache? = nil, store: ChainStore? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
         self.rpc = rpc
         self.addresses = addresses
-        let text = rpc.url.absoluteString
-        let local = text.contains("127.0.0.1") || text.contains("localhost")
+        let local = RPCClient.mentionsLocalNode(rpc.url)
         self.logsRPC = logsRPC ?? (local ? rpc : RPCClient(url: LaunchpadService.defaultLogsRPC))
         self.clock = clock ?? BlockClock(rpc: rpc)
         multicall = Multicall(rpc: rpc)
@@ -494,6 +493,11 @@ public actor MomentsService {
     }
 
     public func claimPlan(momentId: BigUInt, symbol: String) -> [TransactionStep] {
+        Self.claimPlan(momentId: momentId, symbol: symbol, addresses: addresses)
+    }
+
+    /// `claimPlan` against `addresses`' vesting contract: the live cohort's, or a retired one's (`RetiredMoments.plan`).
+    static func claimPlan(momentId: BigUInt, symbol: String, addresses: MomentsAddresses) -> [TransactionStep] {
         [.call(TransactionRequest(to: addresses.vesting, data: MomentsABI.calldata(MomentsABI.Vesting.claim, [.uint(momentId)])), label: L10n.string(LocalizedStringResource("Claim \(symbol)", bundle: L10n.kit, comment: "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The value is the symbol of a Moment's coin, whose vested coins are claimed.")))]
     }
 
@@ -502,6 +506,11 @@ public actor MomentsService {
     }
 
     public func withdrawCreatorProceedsPlan(momentId: BigUInt) -> [TransactionStep] {
+        Self.withdrawCreatorProceedsPlan(momentId: momentId, addresses: addresses)
+    }
+
+    /// `withdrawCreatorProceedsPlan` against `addresses`' collect contract: the live cohort's, or a retired one's.
+    static func withdrawCreatorProceedsPlan(momentId: BigUInt, addresses: MomentsAddresses) -> [TransactionStep] {
         [.call(TransactionRequest(to: addresses.collect, data: MomentsABI.calldata(MomentsABI.Collect.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator proceeds"))]
     }
 
@@ -514,6 +523,11 @@ public actor MomentsService {
     }
 
     public func withdrawCreatorFeesPlan(momentId: BigUInt) -> [TransactionStep] {
+        Self.withdrawCreatorFeesPlan(momentId: momentId, addresses: addresses)
+    }
+
+    /// `withdrawCreatorFeesPlan` against `addresses`' hook: the live cohort's, or a retired one's.
+    static func withdrawCreatorFeesPlan(momentId: BigUInt, addresses: MomentsAddresses) -> [TransactionStep] {
         [.call(TransactionRequest(to: addresses.hook, data: MomentsABI.calldata(MomentsABI.Hook.withdrawCreator, [.uint(momentId)])), label: L10n.tr("Withdraw creator fees"))]
     }
 
@@ -712,7 +726,7 @@ public actor MomentsService {
             var sqrtPrice = record.sqrtPriceX96
             var liveRead = false
             if let priceReads, case .success(let values) = priceReads[i] {
-                let live = BigUInt(values[0].bytes) & ((BigUInt(1) << 160) - 1)
+                let live = BigUInt(values[0].bytes) & SwapCalldata.maxUint160
                 if live > 0 { sqrtPrice = live; liveRead = true }
             }
             out[id] = MomentPool(

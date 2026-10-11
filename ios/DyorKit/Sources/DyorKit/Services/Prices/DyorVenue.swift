@@ -174,7 +174,7 @@ struct DyorListing: Hashable, Sendable {
     /// The sqrt price in a slot0 word's low 160 bits; nil for an uninitialised pool.
     static func sqrtPrice(_ values: [ABIValue]) -> BigUInt? {
         guard case .bytes(let word)? = values.first else { return nil }
-        let sqrt = BigUInt(word) & ((BigUInt(1) << 160) - 1)
+        let sqrt = BigUInt(word) & SwapCalldata.maxUint160
         return sqrt > 0 ? sqrt : nil
     }
 
@@ -195,7 +195,7 @@ struct DyorListing: Hashable, Sendable {
     /// The calls that find which factory recorded `coin`, when nothing says so yet: each launchpad's `getLaunchedToken`,
     /// in its own layout, then each cohort's `momentIdByCoin`.
     static func originCalls(_ coin: Address, launchpads: [LaunchpadAddresses], cohorts: [MomentsAddresses]) -> [ContractCall] {
-        launchpads.map { launchRecordCall(coin, stack: $0) }
+        launchpads.map { LaunchpadABI.launchRecordCall(coin, stack: $0) }
             + cohorts.map { MomentsABI.call($0.factory, MomentsABI.Factory.momentIdByCoin, [.address(coin)], returns: "uint256") }
     }
 
@@ -226,7 +226,7 @@ struct DyorListing: Hashable, Sendable {
     static func recordCalls(_ coin: Address, origin: Origin) -> [ContractCall] {
         switch origin {
         case .launch(let stack):
-            return [launchRecordCall(coin, stack: stack)]
+            return [LaunchpadABI.launchRecordCall(coin, stack: stack)]
         case .moment(let cohort, let id):
             return [
                 MomentsABI.call(cohort.factory, MomentsABI.Factory.momentCount, returns: "uint256"),
@@ -294,9 +294,5 @@ struct DyorListing: Hashable, Sendable {
             venue = MomentsABI.ledger(ledgerTuple).state == .expired ? .closed : .collecting
         }
         return .listed(DyorListing(coin: coin, origin: .moment(cohort, id: id), venue: venue, pair: cohort.usdc, graduatedAt: graduatedAt, curve: nil))
-    }
-
-    private static func launchRecordCall(_ coin: Address, stack: LaunchpadAddresses) -> ContractCall {
-        LaunchpadABI.call(stack.factory, LaunchpadABI.Factory.getLaunchedToken, [.address(coin)], returns: LaunchpadABI.launchedTokenReturns(legacy: stack.generation.legacyRecord))
     }
 }

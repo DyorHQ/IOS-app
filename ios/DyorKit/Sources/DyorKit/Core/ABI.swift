@@ -155,6 +155,13 @@ public enum ABI {
         return selector(signature) + (try encode(args, types))
     }
 
+    /// `encodeCall` for a call whose signature and argument shapes are fixed in source, as every contract namespace's own
+    /// are (`LaunchpadABI`, `MomentsABI`, `PerplExchange`): one that fails to encode is a programming error rather than
+    /// something the app can recover from at run time, so it traps, naming `context` and the signature.
+    static func fixedCalldata(_ signature: String, _ args: [ABIValue], context: String) -> Data {
+        do { return try encodeCall(signature, args) } catch { preconditionFailure("\(context) calldata for \(signature) failed to encode: \(error)") }
+    }
+
     /// The parameter types declared in a signature like `execOrders((uint256,uint8)[],bool)`.
     public static func parameterTypes(of signature: String) throws -> [ABIType] {
         guard let open = signature.firstIndex(of: "("), signature.hasSuffix(")") else { throw ABIError.invalidSignature(signature) }

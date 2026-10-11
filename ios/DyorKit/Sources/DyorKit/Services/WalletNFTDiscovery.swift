@@ -223,7 +223,7 @@ public struct WalletNFTDiscovery: Sendable {
     static func candidates(_ incoming: [Log]) -> [Candidate] {
         var seen = Set<Candidate>()
         var out: [Candidate] = []
-        for log in incoming.sorted(by: { $0.blockNumber == $1.blockNumber ? $0.logIndex > $1.logIndex : $0.blockNumber > $1.blockNumber }) where log.topics.count == 4 {
+        for log in incoming.sorted(by: { Log.chainOrder($1, $0) }) where log.topics.count == 4 {
             let candidate = Candidate(contract: log.address, tokenId: BigUInt(log.topics[3]))
             if seen.insert(candidate).inserted { out.append(candidate) }
         }
