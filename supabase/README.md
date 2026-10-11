@@ -27,7 +27,7 @@ dedicated ES256 key, `APP_JWT_SIGNING_JWK` (see "Session signing key" below), wh
 PostgREST accepts the tokens. pin-media and aurora-proxy verify sessions in code with the same keys: `APP_JWT_SECRET`
 for HS256 and the project's JWKS for ES256.
 
-## Schema (applied as migrations 01–07, RLS on every table, security advisor clean)
+## Schema (RLS on every table)
 
 | Area | Tables |
 |---|---|
@@ -45,22 +45,28 @@ for HS256 and the project's JWKS for ES256.
 ∈ spot, perps, launch(pad), moments, bridge, wallet. The whole user journey — username (`profiles.handle`), wallet,
 per-domain volume, deposits/withdrawals, notifications and activities — is stitched by the `user_journey` view.
 
-`migrations/` holds every migration applied to the live project, 01–28 (23–28 are the 2026-09-26 hardening); 29
-(`waitlist`) is written but not applied, and its Edge Function is not deployed, because the website keeps its own
-signups; 32 (`wallet_history`) is written and tested but not applied yet. `migrations-deferred/` holds two that must
-wait for an app build AND for every older build to be expired in App Store Connect / TestFlight (each header says
-which build; each refuses to run until armed): `30_activity_primary_key_wallet_id.sql` (the build that upserts
-activity with `on_conflict=wallet,id`) and `31_launch_media_strict_write_once.sql` (the build that uploads launch-media
-with `x-upsert: false`); and one that needs the platform (pg_cron, pg_net, Vault) and a deployed function:
-`33_history_indexer_schedule.sql` (it refuses until armed, on any database without pg_cron and pg_net, and without
-32's `history_cron_digest`; it creates the Vault secrets it needs when they are missing — the cron secret from
-random bytes generated inside Postgres — and refuses an existing cron secret that is not 32–512 visible ASCII
-characters; once applied it moves into `migrations/`, where `tests/migrations_test.ts`
-lists it as platform-only). 01–07 and 11 were
-restored on 2026-09-26 from the project's own migration history (`supabase_migrations.schema_migrations.statements`),
-byte-for-byte — each file's md5 equals the recorded statements' md5. Two out-of-band changes are NOT in any
-migration: the Strategies tables below were dropped directly (2026-09-18), and 18's revokes supersede 11's
-`grant execute … platform_volume … to anon`.
+The security advisor's remaining notes are intended: the tables with RLS on and no policies are server-only (no API
+role may read or write them), and `history_read` (anon, authenticated) and `storage_upload_allowed` (authenticated) are
+SECURITY DEFINER functions the app calls on purpose, each granted explicitly by its migration (32 and 26).
+
+`migrations/` holds the migrations applied to the live project: 01–28 (23–28 are the 2026-09-26 hardening) and 32
+(`wallet_history`, applied 2026-10-09). 29 (`waitlist`) is written but not applied, and its Edge Function is not
+deployed, because the website keeps its own signups. `migrations-deferred/` holds two that must wait for an app build
+AND for every older build to be expired in App Store Connect / TestFlight (each header says which build; each refuses
+to run until armed): `30_activity_primary_key_wallet_id.sql` (the build that upserts activity with
+`on_conflict=wallet,id`) and `31_launch_media_strict_write_once.sql` (the build that uploads launch-media with
+`x-upsert: false`). It also still holds `33_history_indexer_schedule.sql`, which is applied: on 2026-10-09, once pg_cron
+and pg_net were enabled and `history-indexer` was deployed. The live copy ran with its switch on; the file here keeps the
+switch off until it moves into `migrations/` as its header describes, together with `tests/migrations_test.ts`, which
+reads it from here. It refuses until armed, on any database without pg_cron and pg_net, and without 32's
+`history_cron_digest`; it creates the Vault secrets it needs when they are missing — the cron secret from random bytes
+generated inside Postgres — and refuses an existing cron secret that is not 32–512 visible ASCII characters.
+01–07 and 11 were restored on 2026-09-26 from the project's own migration history
+(`supabase_migrations.schema_migrations.statements`), byte-for-byte — each file's md5 equals the recorded statements'
+md5. Changes that are NOT in any file here: the Strategies tables below were dropped directly (2026-09-18); 18's
+revokes supersede 11's `grant execute … platform_volume … to anon`; and two steps recorded in the project's migration
+history while 32 and 33 went live on 2026-10-09, `enable_pg_cron_and_pg_net` (the extensions 33 needs) and
+`net_not_for_api_roles` (a revoke aimed at keeping pg_net's schema from the API roles).
 Record every future schema change as a numbered migration here, so the backend can be rebuilt and audited from source.
 
 > The Strategies feature (copy-trading, market-making, delta-neutral) was removed from the app on 2026-09-18; its
@@ -69,7 +75,10 @@ Record every future schema change as a numbered migration here, so the backend c
 ## Edge Functions
 
 `config.toml` pins each function's gateway JWT check; deploy with `supabase functions deploy <name>` from the repository
-root (the CLI bundles `functions/_shared/`). Never run `supabase config push` from this repository.
+root (the CLI bundles `functions/_shared/`). Never run `supabase config push` from this repository. `history-indexer`
+is the exception: deploy it with `scripts/dev/deploy-history-indexer.sh` (`--dry-run` lists the files it would send),
+which deploys only the committed tree and stamps `version.ts` with the commit's short SHA, so every run row records the
+version that ran.
 
 | Function | verify_jwt | Caller proves | Limits |
 |---|---|---|---|
@@ -80,7 +89,7 @@ root (the CLI bundles `functions/_shared/`). Never run `supabase config push` fr
 | `pin-media` | true | a wallet session, verified in code too | `edge_rate_gate` per wallet, network and overall; 20 s budget |
 | `aurora-proxy` | true | a wallet session, verified in code too; quotes only to and from that wallet | `edge_rate_gate` per wallet and network |
 | `waitlist` (not deployed) | false | nothing (CORS: dyorhq.fun, www.dyorhq.fun; honeypot) | `edge_rate_gate` per network (IPv6 /48) and overall |
-| `history-indexer` (not deployed) | false | the `x-history-cron` header equal to the Vault secret `history_cron_secret` (its SHA-256 compared in constant time with `history_cron_digest()`, fetched at most once a minute per isolate; or the optional `HISTORY_CRON_SECRET`); called only by pg_cron → pg_net | one run at a time (a database lease); ≤ 240 s per run and ≤ 1,000 ms of estimated CPU per isolate (half the platform's 2,000 ms); per RPC endpoint ≤ 4 requests/s (`rpc2` 2 at launch); a header never reaches the database, so callers without it cost no query |
+| `history-indexer` | false | the `x-history-cron` header equal to the Vault secret `history_cron_secret` (its SHA-256 compared in constant time with `history_cron_digest()`, fetched at most once a minute per isolate; or the optional `HISTORY_CRON_SECRET`); called only by pg_cron → pg_net | one run at a time (a database lease); ≤ 240 s per run and ≤ 1,000 ms of estimated CPU per isolate (half the platform's 2,000 ms); per RPC endpoint ≤ 4 requests/s (`rpc2` 2 at launch); a header never reaches the database, so callers without it cost no query |
 
 Secrets (names only): `APP_JWT_SECRET` or `APP_JWT_SIGNING_JWK` (wallet-auth; pin-media and aurora-proxy read
 `APP_JWT_SECRET` to verify HS256 sessions — secrets are project-wide), `PRIVY_APP_SECRET` (+ optional `PRIVY_APP_ID`),
@@ -159,7 +168,9 @@ again with `p_cursor = next` until `next` is null. The cursor carries page 1's b
 beyond what page 1 promised. `p_from_block`/`p_to_block` bound a read (a top-up); `p_meta_only` answers page 1's
 metadata alone. `serving: false` (the owner's switch) means: discard the read and read the chain. A client adopts a
 scan's coverage only up to `head − 1,200` (a clamping node's margin), never across `holes` or `omitted` blocks, and
-aborts the whole read when `tracked` or a `defVersion` changes between pages. The app side is a later milestone.
+aborts the whole read when `tracked` or a `defVersion` changes between pages. The app reads it since build 23
+(`HistoryServerClient` and `ServerHistorySync` in DyorKit) and still reads the chain itself for whatever the cache does
+not cover.
 
 **Enrolment and deletion.** `profiles_history_enrol` (after insert or update on `profiles`; ensureProfile upserts on
 every launch and sign-in) enrols the wallet and moves `requested_at`; a failure never fails the profile write, and it
