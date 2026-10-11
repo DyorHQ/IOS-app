@@ -111,9 +111,6 @@ struct PortfolioView: View {
     /// (`PortfolioModel.saved`, said to be: `shownSavedAt`), else nil — placeholders, never $0.00.
     private var live: Bool { model.showsLive(router.period) }
     private var shownTotals: PortfolioModel.Stats? { live ? model.totals(router.period) : model.savedTotals(router.period) }
-    private var totals: PortfolioModel.Stats { shownTotals ?? PortfolioModel.Stats() }
-    /// No figure to show for the period yet: neither this load's nor a saved one.
-    private var unread: Bool { shownTotals == nil }
     /// When the saved figures shown were read; nil when the figures are this session's, or none show.
     private var shownSavedAt: Date? { live ? nil : model.savedAt(router.period) }
 
@@ -123,7 +120,13 @@ struct PortfolioView: View {
     }
 
     private var heroCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        // Read once per redraw: while the figures are this session's, each read of `shownTotals` runs every section's
+        // figures again (`PortfolioModel.totals`).
+        let shown = shownTotals
+        let totals = shown ?? PortfolioModel.Stats()
+        // No figure to show for the period yet: neither this load's nor a saved one.
+        let unread = shown == nil
+        return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Cumulative Volume").font(.subheadline).foregroundStyle(.secondary)
@@ -141,10 +144,10 @@ struct PortfolioView: View {
             }
             Divider()
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                metric("Fees paid", usd(totals.fees), tint: .primary)
-                metric("P&L", signed(totals.pnl) + (totals.pnlComplete ? "" : "*"), tint: totals.pnl < 0 ? .negative : totals.pnl > 0 ? .positive : .primary)
-                metric("Fees received", usd(totals.claimedFees), tint: totals.claimedFees > 0 ? .positive : .primary)
-                metric("Trades", "\(totals.trades)", tint: .primary)
+                metric("Fees paid", usd(totals.fees), tint: .primary, unread: unread)
+                metric("P&L", signed(totals.pnl) + (totals.pnlComplete ? "" : "*"), tint: totals.pnl < 0 ? .negative : totals.pnl > 0 ? .positive : .primary, unread: unread)
+                metric("Fees received", usd(totals.claimedFees), tint: totals.claimedFees > 0 ? .positive : .primary, unread: unread)
+                metric("Trades", "\(totals.trades)", tint: .primary, unread: unread)
             }
             if let saved = shownSavedAt {
                 // Saved figures, shown while the wallet is read again: when they were read, never taken for this read's;
@@ -175,7 +178,7 @@ struct PortfolioView: View {
     }
 
     /// A hero figure: a placeholder while the period has none to show (`unread`).
-    private func metric(_ title: LocalizedStringKey, _ value: String, tint: Color) -> some View {
+    private func metric(_ title: LocalizedStringKey, _ value: String, tint: Color, unread: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.headline).monospacedDigit().foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7)
@@ -197,7 +200,12 @@ struct PortfolioView: View {
     private var slices: [Slice] { PortfolioModel.Section.allCases.map { Slice(section: $0, volume: shownStats($0)?.volume ?? 0) } }
 
     private var breakdownCard: some View {
+        // Read once per redraw, like the hero's figures: each read runs the sections' figures again.
+        let shown = shownTotals
+        let totals = shown ?? PortfolioModel.Stats()
+        let unread = shown == nil
         let total = max(totals.volume, 0)
+        let slices = self.slices
         return VStack(alignment: .leading, spacing: 12) {
             Text("Volume by Section").font(.headline)
             if total > 0 {

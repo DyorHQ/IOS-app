@@ -265,14 +265,18 @@ final class PortfolioModel {
         return .spot
     }
 
-    /// The transactions of the wallet's curve fills: a curve buy or sell moves the coin and the pair asset in the same
-    /// transaction, so the transfer history reads it as a swap too. The fill is the record; the swap is left out.
-    private var fillTransactions: Set<Data> { Set(launchHistory.fills.map(\.hash)) }
+    /// The wallet's swaps, less those that are curve fills: a curve buy or sell moves the coin and the pair asset in the
+    /// same transaction, so the transfer history reads it as a swap too. The fill is the record; the swap is left out.
+    /// Kept rather than computed on every read (the Spot, Launch and Moments figures, through `spotStats`, and the
+    /// activity list read it, several times per redraw), and rebuilt after each change to `swaps` or `launchHistory`
+    /// (`rebuildSwapsLessFills`). Observed: the screens showing those figures read this, not `swaps`, so they redraw when
+    /// it changes.
+    private var swapsLessFills: [SwapRecord] = []
 
-    /// The wallet's swaps, less those that are curve fills.
-    private var swapsLessFills: [SwapRecord] {
-        let fills = fillTransactions
-        return fills.isEmpty ? swaps : swaps.filter { !fills.contains($0.hash) }
+    /// Rebuilds `swapsLessFills` from `swaps` and the transactions of the wallet's curve fills (`launchHistory`).
+    private func rebuildSwapsLessFills() {
+        let fillTransactions = Set(launchHistory.fills.map(\.hash))
+        swapsLessFills = fillTransactions.isEmpty ? swaps : swaps.filter { !fillTransactions.contains($0.hash) }
     }
 
     private func units(_ token: Address, _ raw: BigUInt) -> Double {
@@ -540,6 +544,7 @@ final class PortfolioModel {
         history = snapshot
         swaps = snapshot.swaps
         launchHistory = snapshot.launch
+        rebuildSwapsLessFills()
         momentsHistory = snapshot.moments
         historyUnreachable = snapshot.unreachable
         // A period the history has now read in full is final: saved, for the next time the wallet opens.
@@ -615,6 +620,7 @@ final class PortfolioModel {
         loadingFor = nil
         swaps = []; fills = []; closed = []
         launchHistory = .empty; momentsHistory = .empty
+        rebuildSwapsLessFills()
         launchesByCurve = [:]; launchesByToken = [:]; momentsByCoin = [:]; momentsByKey = [:]
         tokens = [:]; prices = [:]
         hasLoaded = false; landedWhole = false; updatedAt = nil; loadedFor = nil; perpsNote = nil; saved = nil; lastSaved = nil; savedFor = nil
