@@ -119,7 +119,7 @@ final class EmailWalletTests: XCTestCase {
     /// A run of sequential characters (abcd / 1234) is measured in `Int`: in `UInt8`, `a - 1` trapped on a NUL (U+0000),
     /// crashing sign-up as such a password was pasted. The step reads every other ASCII pair as before.
     func testTheStrengthMeterNeverTrapsOnANul() throws {
-        let password = try DocsLinksTests.appSource("Wallet/PasswordWallet.swift")
+        let password = try AppSource.app("Wallet/PasswordWallet.swift")
         XCTAssertTrue(password.contains("guard let a = chars[i - 1].asciiValue, let b = chars[i].asciiValue else { run = 1; continue }"))
         XCTAssertTrue(password.contains("let step = Int(b) - Int(a)"))
         XCTAssertTrue(password.contains("if step == 1 || step == -1 { run += 1; longestRun = max(longestRun, run) } else { run = 1 }"))

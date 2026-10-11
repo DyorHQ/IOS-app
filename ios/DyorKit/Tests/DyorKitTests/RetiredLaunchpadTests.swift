@@ -184,11 +184,7 @@ final class RetiredLaunchpadTests: XCTestCase {
     /// The source wires those answers in: the coin page picks its ticket by `curveSellsOpen` and offers Retry Graduation
     /// only while the launch awaits it. (Which screens send a coin to this page: `LaunchpadCurveRoutingTests`.)
     func testTheScreensFollowTheCurveState() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let launchpad = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadView.swift"), encoding: .utf8)
+        let launchpad = try AppSource.app("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
         XCTAssertTrue(launchpad.contains("private var isStuck: Bool { launch.awaitsGraduation && (detail?.stuckSince ?? 0) > 0 }"))
         XCTAssertFalse(launchpad.contains("if launch.phase == .bonding { ticketSection }"))

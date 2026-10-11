@@ -781,9 +781,7 @@ final class DyorCoinRegistryTests: XCTestCase {
     /// Nothing is kept in UserDefaults: a key there with an earlier-install prefix turns App Lock off on a new install
     /// (`AppSettings.appLockDefault`, rule R4).
     func testTheRegistryKeepsNothingInUserDefaults() throws {
-        var folder = URL(fileURLWithPath: #filePath)
-        for _ in 0..<3 { folder.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit
-        folder.append(path: "Sources/DyorKit/Services/DyorCoins")
+        let folder = AppSource.kitFolder.appendingPathComponent("Services/DyorCoins")
         let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "swift" }
         XCTAssertTrue(files.contains { $0.lastPathComponent == "DyorCoinStore.swift" })
         for file in files {

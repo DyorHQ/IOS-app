@@ -303,13 +303,9 @@ final class LogScanTests: XCTestCase {
     /// come from the history store (`WalletTokens.history`), and every log scan — the launchpad's events and holdings,
     /// Moments' history, swap history, venue tokens — keeps the patient default, whose callers take what it read.
     func testOnlyTheWalletsHistoryIsReadFailFast() throws {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        let app = ios.appendingPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let kit = ios.appendingPathComponent("DyorKit/Sources/DyorKit")
+        try AppSource.requireApp()
         var sayFailFast: [String] = []
-        for root in [app, kit] {
+        for root in [AppSource.appFolder, AppSource.kitFolder] {
             let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
             for file in files where file.pathExtension == "swift" {
                 let source = try String(contentsOf: file, encoding: .utf8)
@@ -319,15 +315,15 @@ final class LogScanTests: XCTestCase {
         // LogsRouter.swift: the budget each mode spends. The wallet's history itself no longer scans: it comes from the
         // history store (`WalletTokens.history`), so nothing in the app reads fail-fast any more.
         XCTAssertEqual(Set(sayFailFast), ["Logs.swift", "LogsRouter.swift"])
-        let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
+        let tokens = try AppSource.app("Wallet/WalletTokens.swift")
         XCTAssertEqual(tokens.components(separatedBy: "logScan: .failFast").count - 1, 0, "the history comes from the store")
         XCTAssertTrue(tokens.contains("env.walletDiscovery.held(wallet: address, incoming: snapshot.transfersIn, complete: snapshot.status(WalletHistoryScans.transfersInId).complete, known: known)"))
         // Token discovery reads no logs of its own: it takes the transfers in the history store holds.
-        let discovery = try String(contentsOf: kit.appendingPathComponent("Services/WalletTokenDiscovery.swift"), encoding: .utf8)
+        let discovery = try AppSource.kit("Services/WalletTokenDiscovery.swift")
         XCTAssertFalse(discovery.contains("chunkedLogs"))
         XCTAssertTrue(discovery.contains("public func held(wallet: Address, incoming: [Log], complete scanned: Bool, known: Set<Address> = []) async -> Scan {"))
         // Read with every run of whitespace as one space: the checks pin the code, not its line breaks or indentation.
-        let logs = try String(contentsOf: kit.appendingPathComponent("Core/Logs.swift"), encoding: .utf8).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let logs = AppSource.squeezed(try AppSource.kit("Core/Logs.swift"))
         // A scan is a screen's at the gate unless it says otherwise (`LogsGate.Lane`), and the router reads it in its lane,
         // as many requests at once as it asks for, from the end it asks for (`LogsRouter.Order`): oldest first unless it
         // says newest first, as every wide scan a screen shows does (`newestLogs`, `NewestFirstScanTests`).

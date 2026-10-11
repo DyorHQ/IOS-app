@@ -104,7 +104,7 @@ final class HistoryInstantReadTests: XCTestCase {
         XCTAssertNil(late, "never kept after an erase")
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(wallet.hex).path), "no folder named for the wallet")
 
-        let source = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
+        let source = try AppSource.app("Wallet/HistoryModel.swift")
         XCTAssertTrue(source.contains("Task { await env.walletHistory.keep(reference: reference, wallet: wallet, since: erasureMark) }"), "setReference keeps it")
         XCTAssertTrue(source.contains("""
                         let mark = await env.walletHistory.erasureMark
@@ -118,7 +118,7 @@ final class HistoryInstantReadTests: XCTestCase {
         XCTAssertTrue(source.contains("let reference = WalletHistoryReference(curves: self.curves, decimals: decimals)"))
         XCTAssertFalse(source.contains("self.curves = curves"), "never replaced")
         // An erase stops the rounds first, in both of its paths.
-        let deletion = try DocsLinksTests.appSource("Profile/AccountDeletion.swift")
+        let deletion = try AppSource.app("Profile/AccountDeletion.swift")
         XCTAssertEqual(deletion.components(separatedBy: "env.history.start(env: env, wallet: nil)\n        await env.walletHistory.forget(wallet: ").count - 1, 2)
         XCTAssertTrue(source.contains("curves.formUnion(kept.curves)"))
         XCTAssertTrue(source.contains("decimals.merge(kept.decimals) { now, _ in now }"), "what this launch read wins")
@@ -348,7 +348,7 @@ final class HistoryInstantReadTests: XCTestCase {
 
         // The app's rounds: a complete round whose facts failed is a round that read nothing (a stall, and the backoff, and
         // after `HistoryModel.stalls` of them the stalled snapshot); one that read some goes on at once, not after a top-up.
-        let model = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
+        let model = try AppSource.app("Wallet/HistoryModel.swift")
         XCTAssertTrue(model.contains("""
                 if round.complete, !round.swapFactsFailed {
                     stalls = 0
@@ -376,9 +376,7 @@ final class HistoryInstantReadTests: XCTestCase {
         let after = try String(contentsOf: kept, encoding: .utf8)
         for hash in [chain.buy, chain.sale, chain.gift] { XCTAssertTrue(after.contains(hash.hexString), "still kept: \(hash.hexString)") }
 
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<3 { root.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit
-        let source = try String(contentsOf: root.appendingPathComponent("Sources/DyorKit/Services/WalletHistory.swift"), encoding: .utf8)
+        let source = try AppSource.kit("Services/WalletHistory.swift")
         XCTAssertTrue(source.contains("let current = await transfers(wallet)"))
         XCTAssertTrue(source.contains("let held = Set(current.outgoing.map(\\.transactionHash)).union(current.incoming.map(\\.transactionHash))"))
         XCTAssertTrue(source.contains("var facts = before\n        for (hash, fact) in built.facts { facts[hash] = facts[hash].map { $0.merged(with: fact) } ?? fact }\n        facts = facts.filter { held.contains($0.key) }"))
@@ -389,7 +387,7 @@ final class HistoryInstantReadTests: XCTestCase {
     /// The app reads the facts on the archive client, knows a first transaction found before at once, and publishes the
     /// instant read before reading what it left out.
     func testTheAppWiresTheInstantRead() throws {
-        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let environment = try AppSource.app("App/AppEnvironment.swift")
         XCTAssertTrue(environment.contains("swapHistory = SwapHistoryService(rpc: logsClient, clock: clock, archive: archiveClient)"))
         XCTAssertTrue(environment.contains("let archiveClient = isFork ? RPCClient(url: config.rpcURL) : RPCClient(urls: LogsEndpoints.archive)"))
         XCTAssertTrue(environment.contains("knownFirstActivity: keptFirstBlock)"))
@@ -399,7 +397,7 @@ final class HistoryInstantReadTests: XCTestCase {
         XCTAssertTrue(environment.contains(#"if let first { UserDefaults.standard.set(String(first), forKey: "history.v1.firstBlock.\(wallet.hex.lowercased())") }"#))
         XCTAssertEqual(environment.components(separatedBy: "history.v1.firstBlock.").count - 1, 2, "read once, written once")
         XCTAssertFalse(environment.contains("keepFirstActivity"))
-        let model = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
+        let model = try AppSource.app("Wallet/HistoryModel.swift")
         XCTAssertTrue(model.contains("""
                         let cached = await env.walletHistory.cached(wallet: wallet, curves: curves, decimals: decimals)
                         guard !Task.isCancelled, self.wallet == wallet else { return }

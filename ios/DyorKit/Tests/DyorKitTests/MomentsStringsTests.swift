@@ -284,9 +284,7 @@ final class MomentsStringsTests: XCTestCase {
 
     /// Every Swift file of ios/DyorHQ/Moments, by name; a new file is read too.
     private static func sources() throws -> [(name: String, text: String)] {
-        var folder = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { folder.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        folder = folder.appendingPathComponent("DyorHQ/Moments")
+        let folder = AppSource.appFolder.appendingPathComponent("Moments")
         guard FileManager.default.fileExists(atPath: folder.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "swift" }
         XCTAssertGreaterThanOrEqual(files.count, 7)
@@ -295,9 +293,7 @@ final class MomentsStringsTests: XCTestCase {
 
     /// The app's catalog (ios/DyorHQ/Resources/Localizable.xcstrings), its entries by key.
     private static func appCatalog() throws -> [String: Any] {
-        var file = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { file.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        file = file.appendingPathComponent("DyorHQ/Resources/Localizable.xcstrings")
+        let file = AppSource.appFolder.appendingPathComponent("Resources/Localizable.xcstrings")
         guard FileManager.default.fileExists(atPath: file.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         return try XCTUnwrap(catalog["strings"] as? [String: Any], "a catalog has its strings")

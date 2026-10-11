@@ -8,9 +8,7 @@ import XCTest
 final class GoogleButtonFontTests: XCTestCase {
     /// The characters the bundled font file draws, read from its character map.
     private static func fontCharacters() throws -> Set<Character> {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        let file = ios.appendingPathComponent("DyorHQ/Resources/Fonts/GoogleSans-Medium.ttf")
+        let file = AppSource.appFolder.appendingPathComponent("Resources/Fonts/GoogleSans-Medium.ttf")
         guard FileManager.default.fileExists(atPath: file.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let descriptors = try XCTUnwrap(CTFontManagerCreateFontDescriptorsFromURL(file as CFURL) as? [CTFontDescriptor])
         let font = CTFontCreateWithFontDescriptor(try XCTUnwrap(descriptors.first), 17, nil)
@@ -29,9 +27,7 @@ final class GoogleButtonFontTests: XCTestCase {
     /// The font's licence lets the app bundle and subset it: the SIL Open Font License, with no reserved font name that a
     /// modified version would have to drop.
     func testTheFontsLicenceAllowsTheSubset() throws {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() }
-        let file = ios.appendingPathComponent("DyorHQ/Resources/Fonts/GoogleSans-OFL.txt")
+        let file = AppSource.appFolder.appendingPathComponent("Resources/Fonts/GoogleSans-OFL.txt")
         guard FileManager.default.fileExists(atPath: file.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let licence = try String(contentsOf: file, encoding: .utf8)
         XCTAssertTrue(licence.contains("SIL Open Font License, Version 1.1"))

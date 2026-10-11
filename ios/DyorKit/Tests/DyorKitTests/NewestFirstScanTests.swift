@@ -382,8 +382,7 @@ final class NewestFirstScanTests: XCTestCase {
 /// and keeps the last good figure, a minimum no read could better says so plainly, with no error and no Retry, and a
 /// page's reads are its own task, cancelled with it. Reverting any of these lines fails here.
 final class NewestFirstScreenPinTests: XCTestCase {
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-    private static func source(_ path: String) throws -> String { squeezed(try DocsLinksTests.appSource(path)) }
+    private static func source(_ path: String) throws -> String { AppSource.squeezed(try AppSource.app(path)) }
 
     /// My Holdings' NFTs: never "No NFTs" on a read that was a part or not made yet, a count that may be missing one is a
     /// minimum, "Reading your history" only while this wallet's history reads its window (else Retry), and the transfers'

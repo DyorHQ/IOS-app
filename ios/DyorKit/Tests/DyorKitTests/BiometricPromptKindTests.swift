@@ -7,21 +7,12 @@ import XCTest
 /// it and picks its icon, so the icon never depends on text that is translated, and the reason iOS shows is written in
 /// the code and resolved in the app's language.
 final class BiometricPromptKindTests: XCTestCase {
-    private static func source(_ path: String) throws -> String {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        guard FileManager.default.fileExists(atPath: ios.appendingPathComponent("DyorHQ").path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        return try String(contentsOf: ios.appendingPathComponent(path), encoding: .utf8)
-    }
-
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-
     /// `BiometricGate`'s body in Theme.swift, its whitespace squeezed.
     private static func gate() throws -> String {
-        let theme = try source("DyorHQ/Design/Theme.swift")
+        let theme = try AppSource.app("Design/Theme.swift")
         let from = try XCTUnwrap(theme.range(of: "enum BiometricGate {")).upperBound
         let to = try XCTUnwrap(theme.range(of: "final class BiometricPrompt")).lowerBound
-        return squeezed(String(theme[from..<to]))
+        return AppSource.squeezed(String(theme[from..<to]))
     }
 
     /// The prompt's kind decides both its name and its icon; Apple's names are never translated.

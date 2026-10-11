@@ -111,29 +111,15 @@ final class DyorCoinWiringTests: XCTestCase {
 
     // MARK: The app's wiring
 
-    /// The app's sources (ios/DyorHQ), whitespace squeezed to single spaces, or a skip when this checkout has only the
-    /// package.
-    private static func app() throws -> URL {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        return app
-    }
-
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-
+    /// The app's file at `path` under ios/DyorHQ, whitespace squeezed to single spaces, or a skip when this checkout
+    /// has only the package.
     private static func source(_ path: String) throws -> String {
-        squeezed(try String(contentsOf: try app().appendingPathComponent(path), encoding: .utf8))
+        AppSource.squeezed(try AppSource.app(path))
     }
 
     /// Every Swift file of the app, by its path under ios/DyorHQ, squeezed.
     private static func sources() throws -> [(path: String, text: String)] {
-        let root = try app()
-        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
-        return try files.filter { $0.pathExtension == "swift" }.map { file in
-            (String(file.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1)), squeezed(try String(contentsOf: file, encoding: .utf8)))
-        }
+        try AppSource.allAppFiles().map { (path: $0.path, text: AppSource.squeezed($0.text)) }
     }
 
     /// The text of `source` from `start` to `end`.
@@ -247,8 +233,7 @@ final class DyorCoinWiringTests: XCTestCase {
         // The pipeline's erase is synchronous and takes everything: the epoch first (nothing a load under way finishes is
         // kept), memory, the fetched bytes, both kinds of miss, every warm-up (cancelled, queued or under way), and the
         // folder.
-        let pipeline = Self.squeezed(try String(contentsOf: try Self.app().deletingLastPathComponent()
-            .appendingPathComponent("DyorKit/Sources/DyorKit/Core/ImagePipeline.swift"), encoding: .utf8))
+        let pipeline = AppSource.squeezed(try AppSource.kit("Core/ImagePipeline.swift"))
         XCTAssertTrue(pipeline.contains("public func removeAll() { epoch.advance() memory.removeAllObjects() bytes.removeAllObjects() "
             + "misses = RecentMisses() prefetchMisses = RecentMisses() for warming in prefetching.values { warming.task.cancel() } prefetching = [:] "
             + "if let directory = disk.directory { ImageDiskCache.discardFiles(at: directory) } }"))
@@ -259,9 +244,9 @@ final class DyorCoinWiringTests: XCTestCase {
     /// the profile shows; and a picture with no letters to stand in for it waits a moment before its spinner, so one kept
     /// on the phone never flashes one.
     func testPicturesKeptOrJustUploadedPaintWithoutASpinner() throws {
-        let app = Self.squeezed(try Self.source("App/DyorHQApp.swift"))
+        let app = AppSource.squeezed(try Self.source("App/DyorHQApp.swift"))
         XCTAssertTrue(app.contains("Notifications.configure() // The image cache's index is read off the main thread now, before the first screen asks it for a picture. RemoteImageLoader.shared.prepare() return true"))
-        let social = Self.squeezed(try Self.source("Social/SocialSession.swift"))
+        let social = AppSource.squeezed(try Self.source("Social/SocialSession.swift"))
         let upload = try Self.between(social, "func uploadAvatar(jpeg: Data) async throws {", "/// A public DyorHQ profile row.")
         let seeded = try XCTUnwrap(upload.range(of: "if let shown = URL(string: updated.avatar_url ?? cacheBusted) { RemoteImageLoader.shared.seed(jpeg, for: [RemoteImageSource(url: shown)]) }"))
         XCTAssertLessThan(seeded.upperBound, try XCTUnwrap(upload.range(of: "profile = updated")).lowerBound, "seeded before the profile shows the new link")
@@ -270,10 +255,10 @@ final class DyorCoinWiringTests: XCTestCase {
         }
         XCTAssertTrue(try Self.source("Portfolio/AssetsModel.swift").contains("if loading { ImageLoadingSpinner() } else { Image(systemName: \"photo\").foregroundStyle(.secondary) }"))
         for file in try Self.sources() where file.text.contains("RemoteImage(") {
-            XCTAssertFalse(Self.squeezed(file.text).contains("if loading { ProgressView()"), "\(file.path): a spinner at once")
-            XCTAssertFalse(Self.squeezed(file.text).contains("if loading { ZStack { Color(.tertiarySystemFill); ProgressView()"), "\(file.path): a spinner at once")
+            XCTAssertFalse(AppSource.squeezed(file.text).contains("if loading { ProgressView()"), "\(file.path): a spinner at once")
+            XCTAssertFalse(AppSource.squeezed(file.text).contains("if loading { ZStack { Color(.tertiarySystemFill); ProgressView()"), "\(file.path): a spinner at once")
         }
-        let image = Self.squeezed(try Self.source("Design/RemoteImage.swift"))
+        let image = AppSource.squeezed(try Self.source("Design/RemoteImage.swift"))
         XCTAssertTrue(image.contains(".task { if await RemoteImageWait.graceElapses(RemoteImageWait.spinnerDelay) { spinning = true } }"))
         // The first frame: this picture's from memory whatever the view held; the stand-in only for this picture.
         XCTAssertTrue(image.contains("RemoteImageWait.drawn(held: image, heldKey: imageKey, key: key) { RemoteImageLoader.shared.memoryImage(sources, bucket: bucket)?.image }"))

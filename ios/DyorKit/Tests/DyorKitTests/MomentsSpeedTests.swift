@@ -582,8 +582,7 @@ final class MomentsSpeedTests: XCTestCase {
 /// its positions and proceeds, and its proceeds once on opening; the screens are drawn again only when what they show of
 /// the time changes; a Moment saved when last read opens by its link.
 final class MomentsSpeedScreenPinTests: XCTestCase {
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-    private static func source(_ path: String) throws -> String { squeezed(try DocsLinksTests.appSource(path)) }
+    private static func source(_ path: String) throws -> String { AppSource.squeezed(try AppSource.app(path)) }
 
     func testTheBoardPollsOnlyOnScreenAndDrawsOnlyWhatChanged() throws {
         let board = try Self.source("Moments/MomentsView.swift")
@@ -611,16 +610,13 @@ final class MomentsSpeedScreenPinTests: XCTestCase {
         XCTAssertTrue(ui.contains("next = MomentCountdown.nextChange(after: Int(current.timeIntervalSince1970), deadline: deadline)"))
         XCTAssertTrue(ui.contains("struct MomentCard: View { let info: MomentInfo var body: some View {"), "a card has no clock of its own")
         // Every screen's clock says what it shows of the time; no badge or card is handed one.
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() }
-        app.appendPathComponent("DyorHQ")
-        let files = try XCTUnwrap(FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)).compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        let files = try AppSource.allAppFiles()
         XCTAssertFalse(files.isEmpty)
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            XCTAssertFalse(text.contains("clock.run()"), file.lastPathComponent)
-            XCTAssertFalse(text.contains("MomentStateBadge(info: info, now:"), file.lastPathComponent)
-            XCTAssertFalse(text.contains("MomentCard(info: info, now:"), file.lastPathComponent)
+        for (path, text) in files {
+            let name = (path as NSString).lastPathComponent
+            XCTAssertFalse(text.contains("clock.run()"), name)
+            XCTAssertFalse(text.contains("MomentStateBadge(info: info, now:"), name)
+            XCTAssertFalse(text.contains("MomentCard(info: info, now:"), name)
         }
         for path in ["Moments/MomentDetailView.swift", "Moments/RetiredMomentDetailView.swift"] {
             XCTAssertTrue(try Self.source(path).contains(".task { await clock.run(showing: { MomentPageTimes(info, at: $0) }) }"), path)

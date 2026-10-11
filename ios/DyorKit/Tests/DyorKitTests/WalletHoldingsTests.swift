@@ -368,12 +368,8 @@ final class WalletHoldingsTests: XCTestCase {
     /// The sources wire it in: the Portfolio's Assets and the Send sheet read the wallet the same way (`WalletTokens`),
     /// the Send sheet starts on `selection`/`defaultChoice`, and a send's dollars come from the stables' addresses.
     func testThePortfolioAndTheSendSheetShareOneList() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
-        let profile = try String(contentsOf: app.appendingPathComponent("Profile/ProfileView.swift"), encoding: .utf8)
+        let assets = try AppSource.app("Portfolio/AssetsModel.swift")
+        let profile = try AppSource.app("Profile/ProfileView.swift")
         let start = try XCTUnwrap(profile.range(of: "struct SendSheet: View {"))
         let end = try XCTUnwrap(profile.range(of: "enum QRCode", range: start.upperBound..<profile.endIndex))
         let send = String(profile[start.upperBound..<end.lowerBound])
@@ -417,13 +413,13 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(send.contains("if review.badge.isImitation, let title = review.badge.title { DetailRow(\"Token\", title, tint: .attention) }"))
         XCTAssertTrue(assets.contains("WalletTokens.ranked(read, env: env, by: WalletHoldings.portfolioPrecedes)"), "the Portfolio keeps its order")
         // Both lists value DyorHQ's own coins the app's way (`AppCoinValueTests`).
-        let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
+        let tokens = try AppSource.app("Wallet/WalletTokens.swift")
         XCTAssertTrue(tokens.contains("prices: valued, unverified:"))
         // The wallet's own launches and Moments aren't Unverified, in both lists; a curve buy records its coin as chosen.
         XCTAssertTrue(tokens.contains("let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)"))
         XCTAssertTrue(tokens.contains("rows.filter { $0.isCreator || $0.entitlement > 0 }"))
         XCTAssertTrue(assets.contains("Set(ranked.filter(\\.unverified).map(\\.id))"))
-        let launchpad = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadView.swift"), encoding: .utf8)
+        let launchpad = try AppSource.app("Launchpad/LaunchpadView.swift")
         let buy = try XCTUnwrap(launchpad.range(of: "ConfirmationSheet(title: \"Buy \\(launch.symbol)\""))
         let bought = try XCTUnwrap(launchpad.range(of: "Activity.record(ActivityRecord(kind: .buy", range: buy.upperBound..<launchpad.endIndex))
         let settled = String(launchpad[buy.upperBound..<bought.lowerBound])

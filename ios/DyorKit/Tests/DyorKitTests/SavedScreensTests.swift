@@ -285,16 +285,16 @@ final class SavedScreensTests: XCTestCase {
     /// An erase of this device's data removes every saved screen of every wallet, and Delete Account and Forget This
     /// Device both erase through it.
     func testAnEraseOfThisDeviceRemovesEverySavedScreen() throws {
-        let session = try DocsLinksTests.appSource("Wallet/Session.swift")
+        let session = try AppSource.app("Wallet/Session.swift")
         let erase = try XCTUnwrap(session.range(of: "func eraseLocalData() async {"))
         let body = String(session[erase.upperBound...].prefix(6_000))
         XCTAssertTrue(body.contains("savedScreens?.erase()"))
         let signedOut = try XCTUnwrap(body.range(of: "state = .signedOut"))
         XCTAssertLessThan(try XCTUnwrap(body.range(of: "savedScreens?.erase()")).upperBound, signedOut.lowerBound)
-        let env = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let env = try AppSource.app("App/AppEnvironment.swift")
         XCTAssertTrue(env.contains("session.savedScreens = savedScreens"))
         XCTAssertTrue(env.contains("savedScreens = isFork ? SavedScreens(directory: nil, build: build) : SavedScreens.applicationSupport(build: build)"), "a fork saves none")
-        let deletion = try DocsLinksTests.appSource("Profile/AccountDeletion.swift")
+        let deletion = try AppSource.app("Profile/AccountDeletion.swift")
         XCTAssertEqual(deletion.components(separatedBy: "await session.eraseLocalData()").count - 1, 2, "Delete Account and Forget This Device")
     }
 
@@ -314,7 +314,7 @@ final class SavedScreensTests: XCTestCase {
              "env.savedScreens.save(saved, .myLaunchpad, wallet: address, savedAt: began, epoch: epoch)"),
         ]
         for screen in screens {
-            let source = try DocsLinksTests.appSource(screen.file)
+            let source = try AppSource.app(screen.file)
             XCTAssertEqual(source.components(separatedBy: "env.savedScreens.load(").count - 1, 1, screen.file)
             XCTAssertTrue(source.contains(screen.restore), screen.file)
             XCTAssertTrue(source.contains(screen.save), screen.file)
@@ -324,12 +324,12 @@ final class SavedScreensTests: XCTestCase {
         }
         // The Moments board follows the wallet signed in, so a sign-out or an erase restarts its reads (and, since build 23,
         // the app coming to the front: it polls only then).
-        let moments = try DocsLinksTests.appSource("Moments/MomentsView.swift")
+        let moments = try AppSource.app("Moments/MomentsView.swift")
         XCTAssertTrue(moments.contains(".task(id: \"\\(session.address?.hex ?? \"\")-\\(scenePhase == .active)\") {\n"
                                        + "                guard scenePhase == .active else { return }\n"
                                        + "                await model.poll(env: env, account: session.address)\n"))
         XCTAssertTrue(moments.contains("if !Task.isCancelled { env.savedScreens.save("))
-        let board = try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift")
+        let board = try AppSource.app("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(board.contains("if listing.complete, held != nil, prices != nil, !Task.isCancelled, account == loadedFor {"), "the board saves only a full read")
         XCTAssertTrue(board.contains("guard launches.isEmpty, let saved"), "never over what this session read")
     }
@@ -337,7 +337,7 @@ final class SavedScreensTests: XCTestCase {
     /// Whatever shows from a save says so ("Updated 3 min ago", `SavedLine`) until it is read again: on Home, the
     /// Portfolio, both boards and My Launchpad.
     func testEveryScreenSaysWhenWhatItShowsFromASaveWasRead() throws {
-        let line = try DocsLinksTests.appSource("Design/Components.swift")
+        let line = try AppSource.app("Design/Components.swift")
         XCTAssertTrue(line.contains("Text(\"Updated \\(date, style: .relative) ago\")"), "the Portfolio's own words")
         for (file, use) in [("Home/HomeView.swift", "SavedLine(date: date, reading: model.loading)"),
                             ("Home/HomeView.swift", "SavedLine(date: volumeSavedAt, reading: env.portfolio.loading)"),
@@ -346,17 +346,17 @@ final class SavedScreensTests: XCTestCase {
                             ("Launchpad/LaunchpadView.swift", "if model.savedAt == nil, let heldAt = model.heldSellOnlySavedAt { SavedLine(date: heldAt, reading: model.loading) }"),
                             ("Moments/MomentsView.swift", "if let savedAt = model.savedAt { SavedLine(date: savedAt, reading: model.loading) }"),
                             ("Launchpad/LaunchpadProfileView.swift", "if let savedAt = model.savedAt { SavedLine(date: savedAt, reading: model.loading) }")] {
-            XCTAssertTrue(try DocsLinksTests.appSource(file).contains(use), file)
+            XCTAssertTrue(try AppSource.app(file).contains(use), file)
         }
         // Home's line beside the balance is its own parts' alone; Total Volume says its own under it, so a balance read
         // again is never said to be hours old for want of the Portfolio's heavier load.
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         XCTAssertTrue(home.contains("if let savedAt = model.savedAt { savedLine(savedAt) }"))
         XCTAssertTrue(home.contains("private var volumeSavedAt: Date? { liveVolume ? nil : env.portfolio.savedAt(router.period) }"))
         XCTAssertFalse(home.contains("[model.savedAt, liveVolume ? nil : env.portfolio.savedAt(router.period)]"))
         // The board's and the Moments' saved line goes once every launchpad was read, or the Moments were.
-        XCTAssertTrue(try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift").contains("if listing.complete { savedAt = nil }"))
-        XCTAssertTrue(try DocsLinksTests.appSource("Moments/MomentsView.swift").contains("if error != nil { error = nil }\n            if savedAt != nil { savedAt = nil }"))
+        XCTAssertTrue(try AppSource.app("Launchpad/LaunchpadView.swift").contains("if listing.complete { savedAt = nil }"))
+        XCTAssertTrue(try AppSource.app("Moments/MomentsView.swift").contains("if error != nil { error = nil }\n            if savedAt != nil { savedAt = nil }"))
     }
 
     /// No animation follows a saved line (build 23): one keyed to it animated everything that changed with it — the
@@ -367,13 +367,13 @@ final class SavedScreensTests: XCTestCase {
     func testNoSavedLineAnimatesTheScreen() throws {
         for file in ["Home/HomeView.swift", "Launchpad/LaunchpadView.swift", "Moments/MomentsView.swift", "Launchpad/LaunchpadProfileView.swift",
                      "Portfolio/PortfolioView.swift", "Moments/MomentDetailView.swift"] {
-            let source = try DocsLinksTests.appSource(file)
+            let source = try AppSource.app(file)
             for pattern in [#"\.animation\([^)]*,\s*value:[^)]*[sS]avedAt"#, #"SavedLine\([^)]*\)\s*\.transition"#, #"savedLine\([^)]*\)\s*\.transition"#] {
                 XCTAssertNil(source.range(of: pattern, options: .regularExpression), "\(file): \(pattern)")
             }
         }
         // The Moments board's line is in its eyebrow's row, never a row of its own above the filter.
-        let moments = try DocsLinksTests.appSource("Moments/MomentsView.swift")
+        let moments = try AppSource.app("Moments/MomentsView.swift")
         let header = try XCTUnwrap(moments.range(of: "private var header: some View {"))
         // Centered on the eyebrow, never on its baseline: aligned so, the line (a spinner beside its text) hung below it.
         let eyebrow = try XCTUnwrap(moments.range(of: "HStack(spacing: 8) {\n                Text(\"MOMENTS\"", range: header.upperBound..<moments.endIndex))
@@ -382,7 +382,7 @@ final class SavedScreensTests: XCTestCase {
         XCTAssertLessThan(line.upperBound, try XCTUnwrap(moments.range(of: "Text(\"Make your favorite moments last forever.\")")).lowerBound)
         XCTAssertEqual(moments.components(separatedBy: "SavedLine(").count - 1, 1)
         // Home's under the balance and its day's move, in the column beside Total Volume, never above the card.
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         let hero = try XCTUnwrap(home.range(of: "private var heroCard: some View {"))
         let move = try XCTUnwrap(home.range(of: "ChangeBadge(value: unread ? 0 : model.change24h ?? 0)\n                    }\n                    .unreadFigure(unread)\n", range: hero.upperBound..<home.endIndex))
         XCTAssertTrue(home[move.upperBound...].hasPrefix("                    if let savedAt = model.savedAt { savedLine(savedAt) }\n                }\n                Spacer(minLength: 8)\n                totalVolume"))
@@ -402,31 +402,31 @@ final class SavedScreensTests: XCTestCase {
             ("Launchpad/LaunchpadProfileView.swift", "withTransaction(\\.disablesAnimations, true) { model.showSaved(env: env, address: address) }"),
         ]
         for screen in screens {
-            let source = try DocsLinksTests.appSource(screen.file)
+            let source = try AppSource.app(screen.file)
             let appear = try XCTUnwrap(source.range(of: ".onAppear {"), screen.file)
             let call = try XCTUnwrap(source.range(of: screen.appear), screen.file)
             XCTAssertLessThan(appear.upperBound, call.lowerBound, screen.file)
             XCTAssertLessThan(source.distance(from: appear.upperBound, to: call.lowerBound), 700, "\(screen.file): in the onAppear")
         }
         // Each load takes the wallet in through the same door first, so a wallet changed in place clears and restores too.
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         XCTAssertTrue(home.contains("func load(env: AppEnvironment, address: Address?) async {\n        loading = true\n        defer { loading = false }\n        // Already done before Home's first frame (`showSaved`), unless the account changed since.\n        showSaved(env: env, address: address)"))
         let show = try XCTUnwrap(home.range(of: "func showSaved(env: AppEnvironment, address: Address?) {"))
         let reset = try XCTUnwrap(home.range(of: "if address != loadedFor {\n            rows = []; launchHoldings = []; positions = []; perpEquity = nil; momentRows = []; updatedAt = nil; reads = HomeReadState(); readAt = [:]\n            loadedFor = address\n            restoreSaved(env: env, address: address)\n        }", range: show.upperBound..<home.endIndex))
         XCTAssertLessThan(home.distance(from: show.upperBound, to: reset.lowerBound), 600)
-        let board = try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift")
+        let board = try AppSource.app("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(board.contains("loading = true\n        defer { loading = false }\n        // Already done before the board's first frame (`showSaved`), unless the account changed since.\n        showSaved(env: env, account: account)"))
-        let moments = try DocsLinksTests.appSource("Moments/MomentsView.swift")
+        let moments = try AppSource.app("Moments/MomentsView.swift")
         XCTAssertTrue(moments.contains("func showSaved(env: AppEnvironment, account: Address?) {\n        guard env.config.moments.isDeployed else { return }\n        restoreSaved(env: env, account: account)\n    }"))
-        let profile = try DocsLinksTests.appSource("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
         XCTAssertTrue(profile.contains("guard let address else {\n            reset()\n            return\n        }\n        // Already done before the sheet's first frame (`showSaved`), unless the wallet changed since.\n        showSaved(env: env, address: address)\n        loading = true"))
         // The Portfolio's saved figures, for Total Volume: only while nothing of the wallet is on hand, another wallet's
         // figures cleared first; and a sign-out, or another wallet, clears what it holds (RootView).
-        let portfolio = try DocsLinksTests.appSource("Portfolio/PortfolioModel.swift")
+        let portfolio = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(portfolio.contains("guard let address, loadedFor != address, loadingFor != address, savedFor != address else { return }\n        reset()\n        restoreSaved(env: env, address: address)"))
         XCTAssertTrue(portfolio.contains("let held = [loadedFor, loadingFor, savedFor].compactMap { $0 }\n        guard !held.isEmpty, !held.contains(where: { $0 == address }) else { return }\n        reset()"))
         XCTAssertTrue(portfolio.contains("saved = nil; lastSaved = nil; savedFor = nil"), "reset forgets whose figures were taken in")
-        XCTAssertTrue(try DocsLinksTests.appSource("App/RootView.swift").contains("env.launchpadProfile.follow(session.address)\n            // So does the Portfolio, Total Volume's figures and those saved for the wallet among them.\n            env.portfolio.follow(session.address)"))
+        XCTAssertTrue(try AppSource.app("App/RootView.swift").contains("env.launchpadProfile.follow(session.address)\n            // So does the Portfolio, Total Volume's figures and those saved for the wallet among them.\n            env.portfolio.follow(session.address)"))
     }
 
     /// With nothing saved, a board shows its spinner until a read answers, never "No Moments yet" or "No Launches Yet" —
@@ -440,7 +440,7 @@ final class SavedScreensTests: XCTestCase {
         XCTAssertFalse(BoardFirstRead.isLoading(empty: false, answered: false, reading: true), "what is on screen stays")
         XCTAssertFalse(BoardFirstRead.isLoading(empty: false, answered: true, reading: true))
 
-        let moments = try DocsLinksTests.appSource("Moments/MomentsView.swift")
+        let moments = try AppSource.app("Moments/MomentsView.swift")
         XCTAssertTrue(moments.contains("private var firstLoad: Bool { BoardFirstRead.isLoading(empty: model.moments.isEmpty, answered: model.listed, reading: model.loading) }"))
         XCTAssertTrue(moments.contains(".overlay { if firstLoad { ProgressView().controlSize(.large) } }"))
         XCTAssertTrue(moments.contains("if model.listed, model.error == nil || !model.moments.isEmpty { emptyState }"))
@@ -451,7 +451,7 @@ final class SavedScreensTests: XCTestCase {
         XCTAssertTrue(moments.contains("moments = saved.value.moments\n        listed = true\n        savedAt = saved.savedAt"))
         XCTAssertEqual(moments.components(separatedBy: "listed = true").count - 1, 3)
 
-        let board = try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift")
+        let board = try AppSource.app("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(board.contains("private var firstLoad: Bool { BoardFirstRead.isLoading(empty: model.launches.isEmpty, answered: model.listed, reading: model.loading) }"))
         XCTAssertTrue(board.contains("error = listing.firstError.map(describe)\n        if !listed { listed = true }"), "after a read that wasn't cut short")
         XCTAssertTrue(board.contains("savedAt = saved.savedAt\n        listed = true"))
@@ -462,7 +462,7 @@ final class SavedScreensTests: XCTestCase {
     /// read the period's whole window, the chain reachable — never a part as the whole; shows saved ones only until its
     /// load lands; and shows placeholders, never $0.00, when it has neither.
     func testThePortfolioSavesOnlyFinalFiguresAndShowsPlaceholdersOtherwise() throws {
-        let model = try DocsLinksTests.appSource("Portfolio/PortfolioModel.swift")
+        let model = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(model.contains("guard let address = loadedFor, hasLoaded, error == nil, !history.unreachable, history.read, let savedScreens else { return }"))
         XCTAssertTrue(model.contains("for period in VolumePeriod.allCases where history.covers(since: historyStart(period), scans: WalletHistoryScans.ids, now: now) {"))
         XCTAssertTrue(model.contains("figures.periods = figures.periods.filter { SavedScreens.isShowable(savedAt: $0.value.savedAt, now: now) }"), "each period under a day old")
@@ -477,7 +477,7 @@ final class SavedScreensTests: XCTestCase {
         XCTAssertEqual(model.components(separatedBy: "landedWhole = true").count - 1, 1)
         XCTAssertTrue(model.contains("error = nil\n            updatedAt = .now\n            landedWhole = true"), "only a load with nothing unread")
         XCTAssertTrue(model.contains("hasLoaded = false; landedWhole = false;"), "another wallet starts again")
-        let view = try DocsLinksTests.appSource("Portfolio/PortfolioView.swift")
+        let view = try AppSource.app("Portfolio/PortfolioView.swift")
         XCTAssertTrue(view.contains("private var live: Bool { model.showsLive(router.period) }"))
         XCTAssertTrue(view.contains("private var shownTotals: PortfolioModel.Stats? { live ? model.totals(router.period) : model.savedTotals(router.period) }"))
         XCTAssertTrue(view.contains("private var shownSavedAt: Date? { live ? nil : model.savedAt(router.period) }"))
@@ -489,7 +489,7 @@ final class SavedScreensTests: XCTestCase {
         XCTAssertFalse(view.contains(".redacted(reason: model.loading && !model.hasLoaded"), "a placeholder whenever there is no figure, loading or not")
         XCTAssertGreaterThanOrEqual(view.components(separatedBy: ".unreadFigure(unread)").count - 1, 5)
         // Home's Total Volume: the Portfolio's once landed with the history read, else the saved one, else a placeholder.
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         XCTAssertTrue(home.contains("liveVolume ? env.portfolio.totals(router.period).volume : env.portfolio.savedTotals(router.period)?.volume"))
         XCTAssertTrue(home.contains("private var liveVolume: Bool { env.portfolio.showsLive(router.period) && (session.address == nil || env.history.snapshot.anchor != nil) }"))
         XCTAssertFalse(home.contains("env.portfolio.hasLoaded &&"))
@@ -504,14 +504,14 @@ final class SavedScreensTests: XCTestCase {
     /// over: built on the history dropped, they were otherwise shown on Home and in the Portfolio for up to a day. None is
     /// saved again from a snapshot published before the reset, so the next round's save can't carry one back.
     func testAHistoryResetDropsThePortfoliosSavedFigures() throws {
-        let history = try DocsLinksTests.appSource("Wallet/HistoryModel.swift")
+        let history = try AppSource.app("Wallet/HistoryModel.swift")
         XCTAssertTrue(history.contains("func epochReset(env: AppEnvironment) {\n        restart(env: env)\n    }"))
         XCTAssertTrue(history.contains("guard await sync.spotCheck(wallet: wallet) == .mismatched, let self, self.wallet == wallet else { return }\n            restart(env: env)"))
         let restart = try XCTUnwrap(history.range(of: "    private func restart(env: AppEnvironment) {\n        guard let wallet else { return }\n        env.portfolio.dropSaved(env: env, for: wallet, historyVersion: version)\n"))
         let rerun = try XCTUnwrap(history.range(of: "run(env: env, wallet: wallet, fromStore: true, afterReset: true)", range: restart.upperBound..<history.endIndex))
         XCTAssertLessThan(restart.upperBound, rerun.lowerBound)
 
-        let portfolio = try DocsLinksTests.appSource("Portfolio/PortfolioModel.swift")
+        let portfolio = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(portfolio.contains("""
             func dropSaved(env: AppEnvironment, for wallet: Address, historyVersion version: Int) {
                 env.savedScreens.remove(.portfolio, wallet: wallet)
@@ -532,7 +532,7 @@ final class SavedScreensTests: XCTestCase {
     /// My Launchpad's saved escrows are marked as last read and its saved rewards not current, so Claim All never claims
     /// what was saved; it saves only a load that read every part.
     func testMyLaunchpadNeverClaimsWhatWasSaved() throws {
-        let source = try DocsLinksTests.appSource("Launchpad/LaunchpadProfileView.swift")
+        let source = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
         XCTAssertTrue(source.contains("balances: $0.balances, kept: true) }"))
         XCTAssertTrue(source.contains("return RewardClaim(launch: launch, amount: amount, current: !saved && !held.rewardsUnread.contains(coin))"))
         XCTAssertTrue(source.contains("var claimAllRewardClaimables: [RewardClaim] { rewardClaimables.filter(\\.current) }"))
@@ -548,7 +548,7 @@ final class SavedScreensTests: XCTestCase {
     /// Home restores its saved parts only for the wallet it now reads, each under a day old, and saves the parts it has
     /// figures of with when each was read; the Perps positions are never saved, so that tab says "none" only once read.
     func testHomeRestoresAndSavesPartByPart() throws {
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         let reset = try XCTUnwrap(home.range(of: "perpEquity = nil; momentRows = []; updatedAt = nil; reads = HomeReadState(); readAt = [:]"))
         let restore = try XCTUnwrap(home.range(of: "restoreSaved(env: env, address: address)", range: reset.upperBound..<home.endIndex))
         XCTAssertLessThan(reset.upperBound, restore.lowerBound, "another wallet's figures go before this one's saved ones show")

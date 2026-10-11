@@ -54,26 +54,21 @@ final class LaunchListingTests: XCTestCase {
     /// The screens wire it in: the board shows its error with Retry (and no "No Launches Yet" beside it) and keeps a
     /// launchpad's last coins; the Portfolio, My Launchpad and Home say a load was incomplete.
     func testTheScreensSayALaunchpadCouldntBeRead() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        func source(_ path: String) throws -> String { try String(contentsOf: app.appendingPathComponent(path), encoding: .utf8) }
-        let board = try source("Launchpad/LaunchpadView.swift")
+        let board = try AppSource.app("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(board.contains("let listing = await env.launchpad.launchListing(limit: 60)\n        launches = listing.keeping(launches)"))
         XCTAssertTrue(board.contains("error = listing.firstError.map(describe)"))
         XCTAssertTrue(board.contains("if let error = model.error {\n                    HStack(alignment: .firstTextBaseline) {\n                        InlineError(message: error)"))
         XCTAssertTrue(board.contains("Button(\"Retry\") { Task { await model.load(env: env, account: session.address) } }"))
         XCTAssertTrue(board.contains("if model.error == nil { emptyState }"))
-        let portfolio = try source("Portfolio/PortfolioModel.swift")
+        let portfolio = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(portfolio.contains("let launches = listing.keeping(Array(launchesByCurve.values))"))
         XCTAssertTrue(portfolio.contains("if !listing.complete || fetchedMoments == nil || !retired.complete || fetchedPrices == nil {"))
-        let profile = try source("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
         XCTAssertTrue(profile.contains("let launches = listing.keeping(lastLaunches)"))
         XCTAssertTrue(profile.contains("var unread = !listing.complete"))
         XCTAssertTrue(profile.contains("incomplete = unread ?"))
         XCTAssertTrue(profile.contains("if let incomplete = model.incomplete {\n                HStack(alignment: .firstTextBaseline) {\n                    InlineError(message: incomplete)\n                    Spacer(minLength: 8)\n                    retryButton()"), "said, with Retry")
-        let home = try source("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         XCTAssertTrue(home.contains("launchList = read.keeping(self.launches)"))
         XCTAssertTrue(home.contains("} else if !listing.complete {"))
         for (path, text) in [("Launchpad/LaunchpadView.swift", board), ("Portfolio/PortfolioModel.swift", portfolio), ("Launchpad/LaunchpadProfileView.swift", profile), ("Home/HomeView.swift", home)] {

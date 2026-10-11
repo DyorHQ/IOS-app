@@ -399,13 +399,8 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         }
         XCTAssertEqual(Set(MomentsChainStub.calls().map(\.to)), Set(allFactories), "nothing was asked of a factory the app doesn't serve")
 
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-
         // The Router: one helper for every screen, from its launch or by reference; the last request wins.
-        let router = try String(contentsOf: app.appendingPathComponent("App/Router.swift"), encoding: .utf8)
+        let router = try AppSource.app("App/Router.swift")
         let helper = try XCTUnwrap(router.range(of: "func openLaunchPage(for route: CurveRoute) {"))
         let helperEnd = try XCTUnwrap(router.range(of: "\n    }\n", range: helper.upperBound..<router.endIndex))
         let body = String(router[helper.upperBound..<helperEnd.lowerBound])
@@ -419,7 +414,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         // The Launch tab pushes the loader as a page of its one typed path (a stack bound to a typed path pushes its own
         // element type and nothing else: never `navigationDestination(item:)`), delivered however the tab was built; the
         // loader reads through the service.
-        let source = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadView.swift"), encoding: .utf8)
+        let source = try AppSource.app("Launchpad/LaunchpadView.swift")
         let start = try XCTUnwrap(source.range(of: "struct LaunchpadView: View {"))
         let end = try XCTUnwrap(source.range(of: "enum LaunchSort", range: start.upperBound..<source.endIndex))
         let board = String(source[start.upperBound..<end.lowerBound])
@@ -446,7 +441,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         // An account that takes over in place (Session.adopt, watch) doesn't rebuild the tabs: the previous account's
         // pages go with it.
         XCTAssertTrue(board.contains(".onChange(of: session.address) { _, _ in path = [] }"))
-        let loader = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchReferenceView.swift"), encoding: .utf8)
+        let loader = try AppSource.app("Launchpad/LaunchReferenceView.swift")
         XCTAssertTrue(loader.contains("try await env.launchpad.launch(reference)"))
         XCTAssertTrue(loader.contains("LaunchDetailView(launch: launch)"))
         XCTAssertTrue(loader.contains("\"Not a DyorHQ launch\""))
@@ -475,13 +470,9 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
     /// balance only while the board lists it; My Launchpad lists the coins launched the same way but reads creator fees
     /// for every one; Swap's "no venue" state asks and points to the Launch page.
     func testTheScreensSendACurveCoinToItsLaunchPage() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let toLaunch = "router.openLaunchPage(for: route)"
 
-        let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
+        let assets = try AppSource.app("Portfolio/AssetsModel.swift")
         // The coins on a curve come from the read that values the list (`HeldLaunches.curve`): the launchpads are asked once.
         XCTAssertTrue(assets.contains("found = result.curve"))
         let checked = try XCTUnwrap(assets.range(of: "if let found { curve = found }"))
@@ -496,7 +487,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         XCTAssertFalse(branch.contains("openSwap"))
         XCTAssertEqual(assets.components(separatedBy: "router.openSwap(").count - 1, 1, "one Swap row, for the other coins")
 
-        let home = try String(contentsOf: app.appendingPathComponent("Home/HomeView.swift"), encoding: .utf8)
+        let home = try AppSource.app("Home/HomeView.swift")
         XCTAssertTrue(home.contains("let route = await env.launchpad.curveRoute(for: row.token)"))
         XCTAssertTrue(home.contains("} else if let route = curveRoute, route.isOnCurve, let title = route.actionTitle(row.token.symbol) {"))
         XCTAssertTrue(home.contains(toLaunch))
@@ -519,7 +510,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
 
         // My Launchpad: Coins You Launched and its count list what the board lists; the creator-fee escrows are read for
         // every coin created and every pair asset, so a hidden retired coin's fees (aBIL in 0xad3d's escrow) are still read.
-        let profile = try String(contentsOf: app.appendingPathComponent("Launchpad/LaunchpadProfileView.swift"), encoding: .utf8)
+        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
         XCTAssertTrue(profile.contains("var launched: [Created] { created.filter(\\.launch.listsOnBoard) }"))
         XCTAssertTrue(profile.contains("stat(\"Launched\", model.launchesRead ? \"\\(model.launched.count)\" : model.launchesUnread ? \"—\" : \"0\", reading: !model.launchesRead && !model.launchesUnread)"),
                       "the count of what the board lists, a placeholder until the launches are read")
@@ -529,7 +520,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
                       "the escrow pairs come from every coin created, unfiltered")
         XCTAssertTrue(Token.launchpadPairAssets.contains(Token.abil.address), "and every escrow reads aBIL, a pair asset, whatever was created")
 
-        let swap = try String(contentsOf: app.appendingPathComponent("Swap/SwapView.swift"), encoding: .utf8)
+        let swap = try AppSource.app("Swap/SwapView.swift")
         // The "no venue" answer shows as soon as the venues answer; the curve check follows it and never holds it back,
         // and its answer is kept only while it answers what is on screen.
         let quoteLoop = try XCTUnwrap(swap.range(of: "func quote(env: AppEnvironment, account: Address?"))

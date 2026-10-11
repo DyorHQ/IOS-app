@@ -172,32 +172,26 @@ final class AppCoinValueTests: XCTestCase {
     /// values it at its decimal price (`Launch.pairPrice`, through `DyorPrice.launch` or `Launch.usdPrice`), the same
     /// price Spot shows, and no app file values one at the integer `Launch.price` or the market cap made from it.
     func testEveryScreenValuesALaunchAtItsDecimalPrice() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let integer = try NSRegularExpression(pattern: #"priceNumber|LaunchpadMath\.marketCap\(|\b(launch|\$0|\$1)\.(price|marketCap)\b"#)
-        let files = try XCTUnwrap(FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)).compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        let files = try AppSource.allAppFiles()
         XCTAssertGreaterThan(files.count, 50)
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
+        for (path, text) in files {
             let hits = integer.matches(in: text, range: NSRange(text.startIndex..., in: text)).map { (text as NSString).substring(with: $0.range) }
-            XCTAssertEqual(hits, [], "\(file.lastPathComponent) values a launch at its integer price")
+            XCTAssertEqual(hits, [], "\((path as NSString).lastPathComponent) values a launch at its integer price")
         }
-        func source(_ path: String) throws -> String { try String(contentsOf: app.appendingPathComponent(path), encoding: .utf8) }
-        let home = try source("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         XCTAssertTrue(home.contains("DyorPrice.launch(launch, spot: priceMap[launch.token]?.usd, pairUSD: pairUSD)"), "Home's Launch tab: Spot's price first")
-        let portfolio = try source("Portfolio/PortfolioModel.swift")
+        let portfolio = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(portfolio.contains("priced[launch.token] = DyorPrice.launch(launch, spot: fetchedPrices?[launch.token]?.usd,"))
         XCTAssertTrue(portfolio.contains("if let price = prices[token] { stats.pnl += delta * price } else { stats.pnlComplete = false }"), "the P&L at the same price")
-        let launchpad = try source("Launchpad/LaunchpadView.swift")
+        let launchpad = try AppSource.app("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(launchpad.contains("private var priceUSD: Double? { launch.usdPrice(pairUSD: pairUSD) }"))
         XCTAssertTrue(launchpad.contains("private var marketCapUSD: Double? { launch.marketCapInPair.flatMap { cap in pairUSD.map { cap * $0 } } }"))
         XCTAssertTrue(launchpad.contains("guard let current = launch.pairPrice.map({ $0 * unit }) else { return points }"))
         XCTAssertEqual(launchpad.components(separatedBy: "launch.marketCapInPair.map {").count - 1, 2, "the board card and the page header")
         // My Launchpad values a holding exactly as Home does: Spot's price, asked for every coin held in the same read as the
         // pair assets, else the coin's own decimal price; its profit and loss is measured against that same value.
-        let profile = try source("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
         XCTAssertTrue(profile.contains("let valueUSD = DyorPrice.launch(launch, spot: spotUSD[token], pairUSD: pairUSD).map { Amount.units(balance, decimals: 18) * $0 }"))
         XCTAssertTrue(profile.contains("let pairUSD = launch.pair.isNative ? self.pairUSD[Monad.native] : self.pairUSD[launch.pairToken]"), "the pair's price as Home picks it")
         XCTAssertTrue(profile.contains("} + heldCoins.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }"), "every coin held priced by Spot")
@@ -209,11 +203,7 @@ final class AppCoinValueTests: XCTestCase {
     /// The sources wire it in: the wallet's lists value DyorHQ's coins from `heldLaunches` and the Moments' live prices,
     /// say when a value couldn't be read, and route curve coins from the same read.
     func testTheWalletsListsValueDyorHQCoinsThisWay() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let tokens = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
+        let tokens = try AppSource.app("Wallet/WalletTokens.swift")
         XCTAssertTrue(tokens.contains("async let launches = try? await launchpad.heldLaunches(candidates)"))
         XCTAssertTrue(tokens.contains("complete: (found?.complete ?? false) && coins.complete, curve: found?.curve)"))
         XCTAssertTrue(tokens.contains("let valued = WalletHoldings.pricing(pooled, launches: own.launches, moments: own.momentPrices)"))
@@ -222,7 +212,7 @@ final class AppCoinValueTests: XCTestCase {
         XCTAssertTrue(tokens.contains("let price = WalletHoldings.momentPrice(info)"))
         XCTAssertFalse(tokens.contains("live.info(id:"), "never one round trip per Moment")
         XCTAssertFalse(tokens.contains("usdcPerCoin"), "a Moment coin is valued only at a live price")
-        let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
+        let assets = try AppSource.app("Portfolio/AssetsModel.swift")
         XCTAssertTrue(assets.contains("found = result.curve"))
         XCTAssertFalse(assets.contains("curveHoldings("), "the Portfolio asks the launchpads once")
     }

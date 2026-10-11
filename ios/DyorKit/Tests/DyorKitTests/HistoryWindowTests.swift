@@ -251,7 +251,7 @@ final class HistoryWindowTests: XCTestCase {
     /// received), the activity feed over its week, My Launchpad's fees over launchpad and fee sharing, My Moments'
     /// proceeds over the Moments scan, and the holdings, the Send list and its wait over transfers in.
     func testEachScreenAsksAboutItsOwnScans() throws {
-        let source = DocsLinksTests.appSource
+        let source = AppSource.app
         let home = try source("Home/HomeView.swift")
         XCTAssertTrue(home.contains("if liveVolume, env.history.snapshot.read, env.portfolio.historyFilling(router.period, scans: WalletHistoryScans.volume) {"),
                       "not before the history kept on the phone is read, nor beside a saved figure (said to be saved instead)")
@@ -287,17 +287,12 @@ final class HistoryWindowTests: XCTestCase {
     /// No screen reads the whole history's `filling` or `progress` any more: only the history model's own rounds do, and
     /// the venue scan, which waits for every scan to stop reading before it spends the gate.
     func testNoScreenWaitsForEveryScan() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let whole = try NSRegularExpression(pattern: #"snapshot\.(progress|filling)\b(?!\()|history\.filling\b(?!\()"#)
         var found: [String: Int] = [:]
-        let files = try XCTUnwrap(FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)).compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
-        for file in files {
-            let code = String(TradeStringsTests.uncommented(Array(try String(contentsOf: file, encoding: .utf8))))
+        for (path, text) in try AppSource.allAppFiles() {
+            let code = String(TradeStringsTests.uncommented(Array(text)))
             let count = whole.numberOfMatches(in: code, range: NSRange(code.startIndex..., in: code))
-            if count > 0 { found[file.lastPathComponent] = count }
+            if count > 0 { found[(path as NSString).lastPathComponent] = count }
         }
         XCTAssertEqual(found, ["HistoryModel.swift": 1, "RootView.swift": 2])
     }

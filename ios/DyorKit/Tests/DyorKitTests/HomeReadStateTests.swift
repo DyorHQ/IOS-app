@@ -86,7 +86,7 @@ final class HomeReadStateTests: XCTestCase {
     /// stands (the account unchanged, not cancelled) — and starts again for another account. A failed Perps read is nil
     /// (unread), and an account without a Perpl account is $0 read; every figure is nil while its part can't be told.
     func testHomeRecordsEachPartAndNeverTakesUnreadForZero() throws {
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         let model = try Self.homeModel(home)
         XCTAssertTrue(model.contains("perpEquity = nil; momentRows = []; updatedAt = nil; reads = HomeReadState()"), "another account starts unread")
         // Each read publishes its part as it lands, only while the load stands (RS-10), never held back by the slowest.
@@ -124,7 +124,7 @@ final class HomeReadStateTests: XCTestCase {
     /// unread, which VoiceOver says are loading; the allocation ring waits for every part; and each holdings tab shows a
     /// loading row, or that its part couldn't be read with Retry, before it would say it holds none.
     func testHomeShowsUnreadFiguresAsPlaceholdersAndTabsAsLoading() throws {
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         let hero = try XCTUnwrap(home.range(of: "private var heroCard: some View {"))
         let heroEnd = try XCTUnwrap(home.range(of: "private var changeAmount: Double {", range: hero.upperBound..<home.endIndex))
         let card = String(home[hero.upperBound..<heroEnd.lowerBound])

@@ -9,19 +9,11 @@ final class FormattedTextIsolationTests: XCTestCase {
     /// The amount fields' text, as the app names it.
     private static let fieldTexts = ["amountText", "initialBuyText", "priceText", "sizeText", "limitText", "takeProfitText", "stopLossText", "targetText", "amount"]
 
+    /// Every Swift file of the app (`AppSource.allAppFiles`), more than 50 of them.
     static func appSources() throws -> [(path: String, text: String)] {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() }
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        var out: [(String, String)] = []
-        let walker = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)
-        while let url = walker?.nextObject() as? URL {
-            guard url.pathExtension == "swift" else { continue }
-            out.append((String(url.path.dropFirst(app.path.count + 1)), try String(contentsOf: url, encoding: .utf8)))
-        }
-        XCTAssertGreaterThan(out.count, 50)
-        return out.sorted { $0.0 < $1.0 }
+        let files = try AppSource.allAppFiles()
+        XCTAssertGreaterThan(files.count, 50)
+        return files
     }
 
     private func lines(_ sources: [(path: String, text: String)], matching pattern: String) throws -> [(path: String, line: String)] {
@@ -94,10 +86,7 @@ final class FormattedTextIsolationTests: XCTestCase {
             XCTAssertFalse(text.contains(".currency(code:"), path)
             XCTAssertFalse(text.contains("\"US$\""), path)
         }
-        var sources = URL(fileURLWithPath: #filePath)
-        for _ in 0..<3 { sources.deleteLastPathComponent() }
-        sources.appendPathComponent("Sources")
-        let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)
+        let walker = FileManager.default.enumerator(at: AppSource.iosFolder.appendingPathComponent("DyorKit/Sources"), includingPropertiesForKeys: nil)
         var read = 0
         while let url = walker?.nextObject() as? URL {
             guard url.pathExtension == "swift" else { continue }
@@ -110,11 +99,11 @@ final class FormattedTextIsolationTests: XCTestCase {
     /// The price lines that can show a dust price give VoiceOver the spoken form, and the price charts label their
     /// axis with `PriceFormat.axis`.
     func testPricesAreSpokenAndChartsLabelled() throws {
-        let components = try DocsLinksTests.appSource("Design/Components.swift")
+        let components = try AppSource.app("Design/Components.swift")
         XCTAssertTrue(components.contains("init(price: Double?, font: Font = .body)"))
         XCTAssertTrue(components.contains("init(value: Double?, font: Font = .body)"))
         XCTAssertTrue(components.contains(".accessibilityLabel(isPrice ? PriceFormat.spoken(dollars) : PriceFormat.usdValue(dollars))"))
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         XCTAssertTrue(home.contains("Text(PriceFormat.axis(price, span: domain.upperBound - domain.lowerBound))"))
         XCTAssertFalse(home.contains("AxisValueLabel() }"), "no default axis label, which reads 0 for every dust tick")
         for price in ["USDText(price: row.usd, font: .subheadline.weight(.medium))", "USDText(price: row.usd, font: .caption2)",
@@ -122,11 +111,11 @@ final class FormattedTextIsolationTests: XCTestCase {
             XCTAssertTrue(home.contains(price), price)
         }
         XCTAssertFalse(home.contains("USDText(value: row.usd"), "a unit price is a price")
-        let launch = try DocsLinksTests.appSource("Launchpad/LaunchpadView.swift")
+        let launch = try AppSource.app("Launchpad/LaunchpadView.swift")
         XCTAssertTrue(launch.contains("Text(PriceFormat.usdPrice(priceUSD)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().accessibilityLabel(PriceFormat.spoken(priceUSD))"))
-        let moments = try DocsLinksTests.appSource("Moments/MomentDetailView.swift")
+        let moments = try AppSource.app("Moments/MomentDetailView.swift")
         XCTAssertEqual(moments.components(separatedBy: "MomentsFormat.coinPriceSpoken(").count - 1, 3, "every coin price shown is spoken")
-        let format = try DocsLinksTests.appSource("Moments/MomentsUI.swift")
+        let format = try AppSource.app("Moments/MomentsUI.swift")
         XCTAssertTrue(format.contains("PriceFormat.usdValue(value, compact: true)"), "Moments' compact dollars: \"$\", never \"US$\"")
     }
 }

@@ -54,11 +54,7 @@ final class MomentsBoardTests: XCTestCase {
     /// the terms, nor the terms on the list (until build 23 one `board` read held the list until the terms answered) — a
     /// value read again as it was isn't set again, and the header says why Publish is off.
     func testTheMomentsTabLoadsItsListWithoutThePolicy() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let source = try String(contentsOf: app.appendingPathComponent("Moments/MomentsView.swift"), encoding: .utf8)
+        let source = try AppSource.app("Moments/MomentsView.swift")
         let load = try XCTUnwrap(source.range(of: "func load(env: AppEnvironment, account: Address?) async {"))
         let body = String(source[load.upperBound...])
         let terms = try XCTUnwrap(body.range(of: "async let termsRead = Self.terms(env: env)"))

@@ -97,7 +97,7 @@ final class HomeTotalsTests: XCTestCase {
     /// its opening one) when Spot has none, and a Moment still collecting says "Not trading yet". Each section's figure
     /// is the totals' once its part of the wallet is read (`HomeReadState`), and the total is the four sections' sum.
     func testHomeCountsThroughHomeTotals() throws {
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         let model = try XCTUnwrap(home.range(of: "final class HomeModel {")).upperBound
         let modelEnd = try XCTUnwrap(home.range(of: "struct TokenDetailView: View {")).lowerBound
         let body = String(home[model..<modelEnd])

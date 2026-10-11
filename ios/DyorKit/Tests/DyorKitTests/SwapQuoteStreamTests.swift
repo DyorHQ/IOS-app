@@ -399,7 +399,7 @@ final class SwapQuoteStreamTests: XCTestCase {
     /// which are still asked, and "Best" waits for them; the route search is kept in the app's shared reads; Kuru Flow's
     /// token is asked for as Swap opens.
     func testSwapReviewsOnlyAFinalAnswerForWhatIsOnScreen() throws {
-        let swap = Self.squeezed(try DocsLinksTests.appSource("Swap/SwapView.swift"))
+        let swap = AppSource.squeezed(try AppSource.app("Swap/SwapView.swift"))
         XCTAssertTrue(swap.contains("var selectedQuote: VenueQuote? { guard currentResult?.isFinal == true else { return nil } return shownQuote }"))
         XCTAssertTrue(swap.contains("var currentResult: QuoteResult? { resultKey == quoteKey ? result : nil }"))
         XCTAssertTrue(swap.contains(#"var quoteKey: String { "\(tokenIn.address.hex)-\(tokenOut.address.hex)-\(amountIn)-\(slippageBps)-\(account?.hex ?? "")" }"#),
@@ -432,12 +432,10 @@ final class SwapQuoteStreamTests: XCTestCase {
         XCTAssertTrue(swap.contains("model.account = session.address"))
         XCTAssertTrue(swap.contains("async let prepared: Void = env.swap.prepare(for: SwapModel.quoteAccount(session.address))"))
 
-        let environment = Self.squeezed(try DocsLinksTests.appSource("App/AppEnvironment.swift"))
+        let environment = AppSource.squeezed(try AppSource.app("App/AppEnvironment.swift"))
         XCTAssertTrue(environment.contains("swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments, cache: chainCache)"))
         XCTAssertEqual(ChainCache.TTL.swapRoutes, 60)
     }
-
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 }
 
 /// MON ↔ USDC on chain, answered from memory: Uniswap v3 has one 0.05% WMON/USDC pool (either order), quoted by QuoterV2

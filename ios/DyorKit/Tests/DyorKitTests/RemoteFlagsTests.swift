@@ -115,26 +115,25 @@ final class RemoteFlagsTests: XCTestCase {
                        RemoteFlags(dyorVenuePrices: true, dyorBadges: false, perpsLiveOutcome: false, perpsApiActions: true))
         XCTAssertEqual(parse(#"[{"value":{"flags":{"perpsLiveOutcome":false,"perpsApiActions":false}}}]"#),
                        RemoteFlags(dyorVenuePrices: true, dyorBadges: true, perpsLiveOutcome: false, perpsApiActions: false))
-        let kit = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Sources/DyorKit/Services/Supabase/RemoteFlags.swift"), encoding: .utf8)
+        let kit = try AppSource.kit("Services/Supabase/RemoteFlags.swift")
         XCTAssertFalse(kit.contains("optIn"), "no opt-in reading left")
         XCTAssertEqual(kit.components(separatedBy: ": flag(flags[").count - 1, 5, "all five read as kill switches: the two DyorHQ ones, the server's history, the two Perps ones")
 
         // The app hands both to the Perps trading model and saves them, in the one place every check that read the row
         // applies its switches; a failed check calls nothing (`testTheAppAppliesTheSwitches`).
-        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let environment = try AppSource.app("App/AppEnvironment.swift")
         let apply = try XCTUnwrap(environment.range(of: "func apply(_ flags: RemoteFlags) {")).upperBound
         let body = String(environment[apply...].prefix(400))
         for part in ["perplTrading.liveOutcomes = flags.perpsLiveOutcome", "perplTrading.apiActions = flags.perpsApiActions", "PerpsSwitchStore.save(flags)"] {
             XCTAssertTrue(body.contains(part), part)
         }
         let app = try ["App/AppEnvironment.swift", "App/UpdateGate.swift", "App/RootView.swift", "Wallet/PerplTrading.swift", "Perps/PerpTradeView.swift"]
-            .map { try DocsLinksTests.appSource($0) }.joined(separator: "\n")
+            .map { try AppSource.app($0) }.joined(separator: "\n")
         XCTAssertEqual(app.components(separatedBy: "PerpsSwitchStore.save(").count - 1, 1, "saved only from a check that read the row")
 
         // The model starts from a launch argument (DEBUG only), else the last values read, else on; and a forced value
         // holds against the row in DEBUG.
-        let trading = try DocsLinksTests.appSource("Wallet/PerplTrading.swift")
+        let trading = try AppSource.app("Wallet/PerplTrading.swift")
         for part in ["@ObservationIgnored var liveOutcomes = PerplTrading.debugSwitch(\"perpsLiveOutcome\") ?? PerpsSwitchStore.last?.perpsLiveOutcome ?? RemoteFlags.on.perpsLiveOutcome {",
                      "didSet { if let forced = Self.debugSwitch(\"perpsLiveOutcome\"), liveOutcomes != forced { liveOutcomes = forced } }",
                      "@ObservationIgnored var apiActions = PerplTrading.debugSwitch(\"perpsApiActions\") ?? PerpsSwitchStore.last?.perpsApiActions ?? RemoteFlags.on.perpsApiActions {",
@@ -178,12 +177,12 @@ final class RemoteFlagsTests: XCTestCase {
     /// it before the flags are read again. The price service has the registry and the session's one clock, which every
     /// service that shows a time shares.
     func testTheAppAppliesTheSwitches() throws {
-        let gate = try DocsLinksTests.appSource("App/UpdateGate.swift")
+        let gate = try AppSource.app("App/UpdateGate.swift")
         XCTAssertTrue(gate.contains("guard let config = try? await client.iosAppConfig() else { return }\n        flags = config.flags\n        onFlags?(config.flags)"))
         XCTAssertTrue(gate.contains("private(set) var flags = RemoteFlags.on"))
         XCTAssertFalse(gate.contains("client.minimumBuild()"), "one read of the row")
 
-        let environment = try DocsLinksTests.appSource("App/AppEnvironment.swift")
+        let environment = try AppSource.app("App/AppEnvironment.swift")
         for part in ["clock = BlockClock(rpc: rpc)", "prices = PriceService(rpc: rpc, registry: registry, clock: clock, dyorVenues: true, cache: chainCache, store: chainStore)",
                      "launchpad = LaunchpadService(rpc: rpc, addresses: config.launchpad, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)",
                      "moments = MomentsService(rpc: rpc, addresses: config.moments, logsRPC: logsClient, clock: clock, cache: chainCache, store: chainStore)",
@@ -216,7 +215,7 @@ final class RemoteFlagsTests: XCTestCase {
         XCTAssertEqual(environment.components(separatedBy: "BlockClock(").count - 1, 1, "one clock")
         XCTAssertEqual(environment.components(separatedBy: "clock: clock").count - 1, 6, "prices, the launchpad, Moments, past cohorts, swap history, the wallet's history")
 
-        let coins = try DocsLinksTests.appSource("App/DyorCoinsModel.swift")
+        let coins = try AppSource.app("App/DyorCoinsModel.swift")
         XCTAssertTrue(coins.contains("var showsDyorBadges = true"))
         XCTAssertTrue(coins.contains("TokenBadge.of(token, coin: showsDyorBadges ? coins[token.address] : nil, receivedUnasked: receivedUnasked)"))
         XCTAssertEqual(coins.components(separatedBy: "TokenBadge.of(").count - 1, 1, "every label in one place")

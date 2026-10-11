@@ -134,34 +134,28 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     /// Send list, Swap's token rows and its picker), so a token stored with no name reads "Token with no name" in the
     /// app's language. A token's stored name is only copied as it is (`name: token.name`), never shown.
     func testEveryScreenShowsATokensNameAsDisplayed() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let read = try NSRegularExpression(pattern: #"(?:\w+\.)*token\.name\b"#)
-        let files = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
         var shown: [String] = []
         var copied = 0
-        for file in files where file.pathExtension == "swift" {
-            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+        for (path, text) in try AppSource.allAppFiles() {
+            let lines = text.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() where !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
                 for match in read.matches(in: line, range: NSRange(line.startIndex..., in: line)) {
                     if (line as NSString).substring(to: match.range.location).hasSuffix("name: ") { copied += 1; continue }
-                    shown.append("\(file.lastPathComponent):\(index + 1): \((line as NSString).substring(with: match.range))")
+                    shown.append("\((path as NSString).lastPathComponent):\(index + 1): \((line as NSString).substring(with: match.range))")
                 }
             }
         }
         XCTAssertEqual(shown, [], "a token's name is shown as `displayName`, in the app's language")
         XCTAssertGreaterThan(copied, 0, "the reader sees the copy into a new Token (Home's discovered tokens)")
 
-        func source(_ path: String) throws -> String { try String(contentsOf: app.appendingPathComponent(path), encoding: .utf8) }
-        let home = try source("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         XCTAssertTrue(home.contains("Text(row.token.displayName).font(.caption)"), "Home's row")
         XCTAssertTrue(home.contains(#"LabeledContent("Name", value: row.token.displayName)"#), "the token page")
         XCTAssertTrue(home.contains("? Token(address: token.address, symbol: token.symbol, name: token.name,"), "a discovered token is stored with its name as found")
-        XCTAssertTrue(try source("Portfolio/AssetsModel.swift").contains("(note ?? Text(verbatim: asset.token.displayName))"), "the Portfolio's Assets")
-        XCTAssertTrue(try source("Profile/ProfileView.swift").contains(#""\(asset.token.displayName) · \(asset.token.address.short)" : asset.token.displayName"#), "the Send list")
-        let swap = try source("Swap/SwapView.swift")
+        XCTAssertTrue(try AppSource.app("Portfolio/AssetsModel.swift").contains("(note ?? Text(verbatim: asset.token.displayName))"), "the Portfolio's Assets")
+        XCTAssertTrue(try AppSource.app("Profile/ProfileView.swift").contains(#""\(asset.token.displayName) · \(asset.token.address.short)" : asset.token.displayName"#), "the Send list")
+        let swap = try AppSource.app("Swap/SwapView.swift")
         XCTAssertTrue(swap.contains("Text(token.displayName).font(.footnote)"), "Swap's token rows")
         XCTAssertTrue(swap.contains("Text(verbatim: token.displayName) : Text(\"Past cohort · trading closed\")"), "Swap's picker")
     }
@@ -222,23 +216,19 @@ final class WalletTokenDiscoveryTests: XCTestCase {
     /// collections out and carries whether the scan was complete; the Send list and the Portfolio say when it wasn't, with
     /// Retry.
     func testTheWalletsTokenListLeavesCollectionsOutAndSaysWhenItIsIncomplete() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let source = try String(contentsOf: app.appendingPathComponent("Wallet/WalletTokens.swift"), encoding: .utf8)
+        let source = try AppSource.app("Wallet/WalletTokens.swift")
         XCTAssertTrue(source.contains("let collections = await env.walletDiscovery.collections(among: held)"))
         XCTAssertTrue(source.contains("tokens: held.filter { !collections.contains($0.address) }"))
         XCTAssertTrue(source.contains("return await env.walletDiscovery.held(wallet: address, incoming: snapshot.transfersIn, complete: snapshot.status(WalletHistoryScans.transfersInId).complete, known: known)"))
         XCTAssertTrue(source.contains("complete: (scan?.complete ?? true) && balancesComplete)"))
-        let profile = try String(contentsOf: app.appendingPathComponent("Profile/ProfileView.swift"), encoding: .utf8)
+        let profile = try AppSource.app("Profile/ProfileView.swift")
         XCTAssertTrue(profile.contains("assets = .loaded(ranked.tokens, complete: complete, pricesFailed: ranked.pricesFailed, readingHistory: readingHistory)"))
         XCTAssertTrue(profile.contains("show(ranked, complete: read.complete, readingHistory: false)"))
         XCTAssertTrue(profile.contains("if let gap = Self.readGap(complete: complete, pricesFailed: pricesFailed) { readNotice(gap) }"))
         XCTAssertTrue(profile.contains("readNotice(\"No tokens found, but part of your wallet couldn't be read"), "an incomplete empty read is never \"nothing to send\"")
         // The Portfolio says it too, with Retry, rather than present a part of the wallet as all of it: an empty read that
         // couldn't be read is never "No tokens in this wallet yet".
-        let assets = try String(contentsOf: app.appendingPathComponent("Portfolio/AssetsModel.swift"), encoding: .utf8)
+        let assets = try AppSource.app("Portfolio/AssetsModel.swift")
         XCTAssertTrue(assets.contains("complete = (read?.complete ?? false) && retired.complete"), "a retired cohort that couldn't be read is said too")
         XCTAssertTrue(assets.contains("balancesUnread = read == nil"))
         XCTAssertTrue(assets.contains("case (false, false): return tr(\"Part of your wallet couldn't be read, so a token may be missing from the list and the total.\")"))
@@ -246,7 +236,7 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertTrue(assets.contains("if kind == .assets, !model.loading, let gap = model.readGap {"))
         XCTAssertTrue(assets.contains("Button(\"Retry\", systemImage: \"arrow.clockwise\", action: retry)"))
         XCTAssertTrue(assets.contains("if kind == .assets, model.tokens.isEmpty, model.loading || model.readGap == nil {"))
-        let portfolio = try String(contentsOf: app.appendingPathComponent("Portfolio/PortfolioView.swift"), encoding: .utf8)
+        let portfolio = try AppSource.app("Portfolio/PortfolioView.swift")
         XCTAssertTrue(portfolio.contains("AssetsCard(model: assets) { Task { await assets.load(env: env, address: session.address, force: true) } }"))
     }
 

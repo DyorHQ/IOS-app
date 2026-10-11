@@ -86,18 +86,12 @@ final class KeeperFallbackTests: XCTestCase {
 
     /// No screen offers it: no source file of the app plans `graduateFallback`, encodes it or shows its old button.
     func testNoScreenOffersTheFallback() throws {
-        var app = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { app.deleteLastPathComponent() } // DyorKitTests → Tests → DyorKit → ios
-        app.appendPathComponent("DyorHQ")
-        guard FileManager.default.fileExists(atPath: app.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
-        let files = (FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)?.allObjects ?? [])
-            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        let files = try AppSource.allAppFiles()
         XCTAssertGreaterThan(files.count, 50, "the app's sources were found")
-        XCTAssertTrue(files.contains { $0.lastPathComponent == "LaunchpadView.swift" })
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(files.contains { ($0.path as NSString).lastPathComponent == "LaunchpadView.swift" })
+        for (path, text) in files {
             for banned in ["graduateFallbackPlan", "graduateFallback(address)", "Graduate on Uniswap v4", "appSendsGraduateFallback"] {
-                XCTAssertFalse(text.contains(banned), "\(file.lastPathComponent) mentions \(banned)")
+                XCTAssertFalse(text.contains(banned), "\((path as NSString).lastPathComponent) mentions \(banned)")
             }
         }
     }

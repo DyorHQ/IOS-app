@@ -64,9 +64,7 @@ final class HistoryServerClientTests: XCTestCase {
             struct Scan: Decodable { let id: String; let walletTopic: Int; let addresses: [String]; let events: [Event] }
             let scans: [Scan]
         }
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { root.deleteLastPathComponent() }
-        let spec = try JSONDecoder().decode(Spec.self, from: Data(contentsOf: root.appendingPathComponent("supabase/functions/_shared/history-scans.json")))
+        let spec = try JSONDecoder().decode(Spec.self, from: Data(contentsOf: AppSource.root.appendingPathComponent("supabase/functions/_shared/history-scans.json")))
         let app = Dictionary(uniqueKeysWithValues: HistoryDocs.scans().map { ($0.id, $0) })
         XCTAssertEqual(Set(spec.scans.map(\.id)), Set(HistoryServerClient.scanOrder))
         for scan in spec.scans {

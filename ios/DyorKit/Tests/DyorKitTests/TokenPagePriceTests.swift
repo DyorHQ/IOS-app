@@ -36,7 +36,7 @@ final class TokenPagePriceTests: XCTestCase {
     /// "$0.00", and a token Home didn't price is priced by its page, a Moment Home saw collecting included, whose page's
     /// own read then decides.
     func testThePageAndTheRowsSayIt() throws {
-        let home = try DocsLinksTests.appSource("Home/HomeView.swift")
+        let home = try AppSource.app("Home/HomeView.swift")
         let page = try XCTUnwrap(home.range(of: "struct TokenDetailView: View {")).upperBound
         let pageEnd = try XCTUnwrap(home.range(of: "struct PriceChart: View {")).lowerBound
         let body = String(home[page..<pageEnd])

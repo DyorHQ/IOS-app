@@ -23,7 +23,7 @@ final class AppSettings {
     /// wallet, enforced in the confirmation sheet. On by default for a new install (`appLockDefault`), and after this
     /// device's data is erased (`Session.eraseLocalData`). This device's own: it isn't mirrored to the backend (not in
     /// `snapshot`), so a change isn't reported (`onChange`), which would mark the settings changed and keep a restore out.
-    var requireBiometrics: Bool { didSet { defaults.set(requireBiometrics, forKey: "settings.biometrics") } }
+    var requireBiometrics: Bool { didSet { defaults.set(requireBiometrics, forKey: AppLockStore.key) } }
     /// Default leverage the perps ticket opens on.
     var defaultLeverage: Double { didSet { store(defaultLeverage, "settings.leverage") } }
     /// Max slippage for market orders and swaps, in basis points.
@@ -38,7 +38,7 @@ final class AppSettings {
         notifyFills = defaults.object(forKey: "settings.notifyFills") as? Bool ?? true
         notifyPriceAlerts = defaults.object(forKey: "settings.notifyPrice") as? Bool ?? false
         notifyMargin = defaults.object(forKey: "settings.notifyMargin") as? Bool ?? true
-        requireBiometrics = defaults.object(forKey: "settings.biometrics") as? Bool ?? Self.appLockDefault(defaults)
+        requireBiometrics = defaults.object(forKey: AppLockStore.key) as? Bool ?? Self.appLockDefault(defaults)
         defaultLeverage = defaults.object(forKey: "settings.leverage") as? Double ?? TradingDefaults.leverage
         slippageBps = defaults.object(forKey: "settings.slippageBps") as? Int ?? TradingDefaults.slippageBps
     }
@@ -53,16 +53,14 @@ final class AppSettings {
     private func store(_ value: Any, _ key: String) { defaults.set(value, forKey: key); AppSettings.onChange?() }
 
     /// App Lock where no choice was ever saved (security audit 2026-09-26, IOSK-4), decided once and saved so it never
-    /// flips later: ON for a new install on a device that can verify its owner, so a phone picked up unlocked can't sign
-    /// without Face ID or the passcode. An install from before this default — told apart by what earlier runs left in
-    /// UserDefaults — keeps the OFF it has always had. A device with no passcode starts OFF too: App Lock fails closed
-    /// there, and it would block every signature until one is set.
+    /// flips later: ON for a new install on a device that can verify its owner, so a phone picked up unlocked can't
+    /// sign without Face ID or the passcode. An install from before this default — told apart by what earlier runs left
+    /// in UserDefaults (`AppLockStore.isEarlierInstall`) — keeps the OFF it has always had. A device with no passcode
+    /// starts OFF too: App Lock fails closed there, and it would block every signature until one is set.
     private static func appLockDefault(_ defaults: UserDefaults) -> Bool {
-        let earlierRun = ["settings.", "session.", "mera.", "localWallet.", "venueTokens.", "activityLog.", "notifications.",
-                          "knownTokens.", "priceAlerts.", "bridge.", "perp."]
-        let isEarlierInstall = defaults.dictionaryRepresentation().keys.contains { key in earlierRun.contains { key.hasPrefix($0) } }
+        let isEarlierInstall = AppLockStore.isEarlierInstall(keys: defaults.dictionaryRepresentation().keys)
         let on = !isEarlierInstall && BiometricGate.canAuthenticateOwner
-        defaults.set(on, forKey: "settings.biometrics")
+        defaults.set(on, forKey: AppLockStore.key)
         return on
     }
 

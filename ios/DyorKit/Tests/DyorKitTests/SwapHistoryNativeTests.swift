@@ -37,13 +37,11 @@ final class SwapHistoryNativeTests: XCTestCase {
     /// The app shows an unknown amount as the token alone ("12.82 AUSD → MON") and keeps it out of P&L, which says it is
     /// incomplete; the scan reads the MON of the newest sales in one batch.
     func testTheAppNeverShowsZeroMON() throws {
-        let swap = Self.squeezed(try DocsLinksTests.appSource("Swap/SwapView.swift"))
+        let swap = AppSource.squeezed(try AppSource.app("Swap/SwapView.swift"))
         XCTAssertTrue(swap.contains("let bought = swap.boughtNativeUnknown ? (tokens[swap.boughtToken]?.symbol ?? Token.mon.symbol) : leg(swap.boughtToken, swap.boughtAmount)"))
-        let portfolio = Self.squeezed(try DocsLinksTests.appSource("Portfolio/PortfolioModel.swift"))
+        let portfolio = AppSource.squeezed(try AppSource.app("Portfolio/PortfolioModel.swift"))
         XCTAssertTrue(portfolio.contains("if swap.boughtNativeUnknown { stats.pnlComplete = false; continue }"))
         XCTAssertTrue(portfolio.contains("if !swap.boughtNativeUnknown, let price = prices[swap.boughtToken]"))
         XCTAssertEqual(SwapHistoryService.nativeReadLimit, 50)
     }
-
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 }

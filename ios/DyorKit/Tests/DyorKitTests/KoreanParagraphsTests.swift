@@ -8,9 +8,7 @@ import XCTest
 final class KoreanParagraphsTests: XCTestCase {
     /// The app's catalog: each key's Korean.
     private static func korean() throws -> [String: String] {
-        var ios = URL(fileURLWithPath: #filePath)
-        for _ in 0..<4 { ios.deleteLastPathComponent() }
-        let url = ios.appendingPathComponent("DyorHQ/Resources/Localizable.xcstrings")
+        let url = AppSource.appFolder.appendingPathComponent("Resources/Localizable.xcstrings")
         guard FileManager.default.fileExists(atPath: url.path) else { throw XCTSkip("ios/DyorHQ is not in this checkout") }
         let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         let strings = try XCTUnwrap(catalog["strings"] as? [String: Any])
@@ -105,7 +103,7 @@ final class KoreanParagraphsTests: XCTestCase {
     /// a label made for one (`ParagraphLabel`), never a label with a `String` or `Text` title, and the order sheet's
     /// warnings are paragraphs too.
     func testTheOrderResultWrapsByWord() throws {
-        let outcome = try DocsLinksTests.appSource("Perps/PerpOrderOutcomeView.swift")
+        let outcome = try AppSource.app("Perps/PerpOrderOutcomeView.swift")
         XCTAssertNil(outcome.range(of: #"(?<![\w.])Label\(\s*(Text\(|"|[a-z]\w*\s*,)"#, options: .regularExpression), "no label with a String or Text title")
         XCTAssertGreaterThanOrEqual(outcome.components(separatedBy: "Paragraph(verbatim:").count - 1, 6)
         XCTAssertGreaterThanOrEqual(outcome.components(separatedBy: ".modifier(ParagraphLabel())").count - 1, 2)
@@ -113,7 +111,7 @@ final class KoreanParagraphsTests: XCTestCase {
         // cut off what to check: none anywhere in the order's result views (the status bar, the receipt bar, the row).
         XCTAssertFalse(outcome.contains(".lineLimit("), "no line limit on an order result")
         XCTAssertFalse(outcome.contains(".minimumScaleFactor("), "no scale factor on an order result")
-        let trade = try DocsLinksTests.appSource("Perps/PerpTradeView.swift")
+        let trade = try AppSource.app("Perps/PerpTradeView.swift")
         let sheet = String(trade[try XCTUnwrap(trade.range(of: "struct AuthedOrderSheet: View {")).lowerBound...])
         XCTAssertFalse(sheet.contains("Label(message, systemImage:"), "the sheet's warnings are paragraphs")
         XCTAssertTrue(sheet.contains("Label { Paragraph(verbatim: message) } icon: { Image(systemName: \"exclamationmark.triangle.fill\") }"))
@@ -123,7 +121,7 @@ final class KoreanParagraphsTests: XCTestCase {
     /// I28): their failure, sending and waiting lines are paragraphs, their results go through the outcome views, and no line
     /// is a label with a `String` or `Text` title, or held to a line limit or a scale factor.
     func testTheAPIActionSheetsWrapByWord() throws {
-        let trade = try DocsLinksTests.appSource("Perps/PerpTradeView.swift")
+        let trade = try AppSource.app("Perps/PerpTradeView.swift")
         func slice(_ text: String, from start: String, to end: String) throws -> String {
             let from = try XCTUnwrap(text.range(of: start), start)
             let to = try XCTUnwrap(text.range(of: end, range: from.upperBound..<text.endIndex), end)
@@ -146,7 +144,7 @@ final class KoreanParagraphsTests: XCTestCase {
         XCTAssertTrue(margin.contains("Paragraph(verbatim: PerpActionCopy.marginCanClose)"))
         XCTAssertTrue(close.contains("Paragraph(verbatim: perplTrading.nothingSentLine(for: route))"), "the wallet's line after a refusal for forwarding")
 
-        let sheets = try DocsLinksTests.appSource("Perps/PerpTriggerSheets.swift")
+        let sheets = try AppSource.app("Perps/PerpTriggerSheets.swift")
         let cancel = try slice(sheets, from: "struct CancelOrderSheet: View {", to: "private struct CancelTriggerRow: View {")
         XCTAssertTrue(cancel.contains("Paragraph(verbatim: failureLine)"))
         XCTAssertTrue(cancel.contains("Label { Paragraph(verbatim: line.text) }"))
@@ -158,11 +156,11 @@ final class KoreanParagraphsTests: XCTestCase {
     /// The TP/SL sheets' outcome and progress lines, and the Orders tab's TP/SL warnings, wrap by word in Korean (real-time
     /// spec I28): a paragraph in a label made for one, never a label with a `String` title.
     func testTheTPSLLinesWrapByWord() throws {
-        let sheets = try DocsLinksTests.appSource("Perps/PerpTriggerSheets.swift")
+        let sheets = try AppSource.app("Perps/PerpTriggerSheets.swift")
         XCTAssertFalse(sheets.contains("Label(line.text"), "an outcome line is a paragraph")
         XCTAssertTrue(sheets.contains("Label { Paragraph(verbatim: line.text) } icon: {"))
         XCTAssertTrue(sheets.contains("Label { Paragraph(verbatim: PerpTriggerCopy.step(kind, step)) } icon: { ProgressView().controlSize(.mini) }"))
-        let trade = try DocsLinksTests.appSource("Perps/PerpTradeView.swift")
+        let trade = try AppSource.app("Perps/PerpTradeView.swift")
         XCTAssertFalse(trade.contains(#"Label("\(orphans.count) TP/SL on"#), "the leftover banner is a paragraph")
         XCTAssertTrue(trade.contains(#"Paragraph("\(orphans.count) TP/SL on \(market.asset) have no position to close."#))
         XCTAssertFalse(trade.contains(#"Label("TP/SL can't be verified right now"#))
@@ -172,8 +170,7 @@ final class KoreanParagraphsTests: XCTestCase {
     /// `Paragraph` lays out word by word only in Korean, with no line limit or minimum scale, and only up to its limit;
     /// otherwise it is the `Text` it always was. A key's markdown is drawn as `Text` draws it.
     func testParagraphIsTextOutsideKorean() throws {
-        let paragraph = try DocsLinksTests.appSource("Design/Paragraph.swift")
-        let squeezed = paragraph.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let squeezed = AppSource.squeezed(try AppSource.app("Design/Paragraph.swift"))
         XCTAssertTrue(squeezed.contains("if WordWrap.keepsWordsWhole(locale.language), lineLimit == nil, minimumScaleFactor >= 1, text.characters.count <= Self.wordByWordLimit {"))
         XCTAssertTrue(squeezed.contains("} else { Text(text) }"))
         XCTAssertTrue(squeezed.contains("AttributedString(markdown: string, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))"))

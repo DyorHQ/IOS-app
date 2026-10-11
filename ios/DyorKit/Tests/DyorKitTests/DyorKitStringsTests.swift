@@ -12,28 +12,15 @@ import XCTest
 final class DyorKitStringsTests: XCTestCase {
     // MARK: Reading the sources
 
-    /// ios/DyorKit/Sources/DyorKit.
-    private static func root() -> URL {
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<3 { root.deleteLastPathComponent() } // DyorKitStringsTests.swift → DyorKitTests → Tests → DyorKit
-        return root.appendingPathComponent("Sources/DyorKit")
-    }
-
     /// Every Swift file of DyorKit's sources, by its path under Sources/DyorKit; a new file is read too. The BIP-39 word
     /// list is left out: its words are the standard's, never shown as text of the app's.
     private static func sources() throws -> [(path: String, text: String)] {
-        let root = root()
+        let root = AppSource.kitFolder
         let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
         let swift = files.filter { $0.pathExtension == "swift" && $0.lastPathComponent != "BIP39Wordlist.swift" }
         XCTAssertGreaterThan(swift.count, 100)
         return try swift.map { (String($0.path.dropFirst(root.path.count + 1)), try String(contentsOf: $0, encoding: .utf8)) }.sorted { $0.0 < $1.0 }
     }
-
-    private static func source(_ path: String) throws -> String {
-        try String(contentsOf: root().appendingPathComponent(path), encoding: .utf8)
-    }
-
-    private static func squeezed(_ text: String) -> String { text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
 
     /// The code lines of the sources with their literals; a doc or line comment is left out, and so is a line marked
     /// "not localized", or right under a comment line that marks it. A marker at the end of a line of code covers that
@@ -74,7 +61,7 @@ final class DyorKitStringsTests: XCTestCase {
         let compiled = L10n.bundle.url(forResource: "Localizable", withExtension: "strings", subdirectory: nil, localization: "en")
             ?? L10n.bundle.url(forResource: "Localizable", withExtension: "stringsdict", subdirectory: nil, localization: "en")
         XCTAssertTrue(raw != nil || compiled != nil, "DyorKit's catalog is in its resource bundle")
-        let l10n = Self.squeezed(try Self.source("Core/L10n.swift"))
+        let l10n = AppSource.squeezed(try AppSource.kit("Core/L10n.swift"))
         XCTAssertTrue(l10n.contains("static var bundle: Bundle { .module }"), "DyorKit's own bundle, in the app and under swift test")
         XCTAssertTrue(l10n.contains("static var kit: LocalizedStringResource.BundleDescription { .atURL(bundle.bundleURL) }"))
         XCTAssertTrue(l10n.contains("public static func tr(_ value: String.LocalizationValue) -> String { string(LocalizedStringResource(value, bundle: kit)) }"))
@@ -225,7 +212,7 @@ final class DyorKitStringsTests: XCTestCase {
         let start = "LocalizedStringResource(".count
         return resourceCalls(in: text).compactMap { open in
             let own = ownArguments(chars, from: open)
-            if let own, squeezed(own).contains("bundle: L10n.kit") { return nil }
+            if let own, AppSource.squeezed(own).contains("bundle: L10n.kit") { return nil }
             return String(chars[(open - start) ..< min(open - start + 80, chars.count)])
         }
     }
@@ -316,7 +303,7 @@ final class DyorKitStringsTests: XCTestCase {
         for (path, text) in try Self.sources() {
             XCTAssertNil(bare.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)), "\(path): an ambiguous label without a translator comment")
         }
-        let code = Self.squeezed(try Self.sources().map(\.text).joined(separator: "\n"))
+        let code = AppSource.squeezed(try Self.sources().map(\.text).joined(separator: "\n"))
         for key in [#""Claim fees""#, #""Swap on Kuru Flow""#, #""Launch $\(input.symbol)""#, #""Collect \(quantity) editions of \(symbol)""#,
                     #""Claim \(momentIds.count) Moments""#, #""Open Perpl account""#, #""Order filled""#, #""Close order filled""#, #""Graduate""#,
                     #""Close \(symbol)""#, #""Long \(symbol)""#, #""All""#] {
@@ -328,7 +315,7 @@ final class DyorKitStringsTests: XCTestCase {
     /// "Deleted" (iOS 18 and later; "Recently Deleted" is the Photos album), and its translators are told to use iOS's
     /// own names for the app and the list.
     func testThePasswordsAppsListIsNamedAsIOSNamesIt() throws {
-        let deletion = Self.squeezed(try Self.source("Services/Mera/MeraAccountDeletion.swift"))
+        let deletion = AppSource.squeezed(try AppSource.kit("Services/Mera/MeraAccountDeletion.swift"))
         XCTAssertTrue(deletion.contains(#"recentlyDeleted = L10n.string(LocalizedStringResource("If your passkey is in iCloud Keychain, Passwords may keep it in Deleted for up to 30 days.", bundle: L10n.kit, comment: "Passwords is iOS's Passwords app and Deleted its list of deleted passwords and passkeys (iOS 18 and later): use iOS's own names for them in this language."))"#))
         XCTAssertFalse(deletion.contains("Recently Deleted for up to 30 days"), "iOS 18's Passwords app has no Recently Deleted")
     }
@@ -340,16 +327,16 @@ final class DyorKitStringsTests: XCTestCase {
         for (path, text) in try Self.sources() {
             XCTAssertNil(frozen.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)), "\(path): text kept in a static let")
         }
-        let curves = try Self.source("Services/Launchpad/LaunchpadCurves.swift")
+        let curves = try AppSource.kit("Services/Launchpad/LaunchpadCurves.swift")
         XCTAssertTrue(curves.contains("public static var tradeOnLaunchPage: String { L10n.tr("))
-        let retired = try Self.source("Services/Launchpad/RetiredLaunchpads.swift")
+        let retired = try AppSource.kit("Services/Launchpad/RetiredLaunchpads.swift")
         XCTAssertTrue(retired.contains("public static var notice: String { L10n.tr(\"This coin's launchpad is retired: you can sell, but not buy.\") }"))
-        XCTAssertTrue(try Self.source("Core/RPCClient.swift").contains("public static var unconfirmed: String { L10n.tr("))
-        XCTAssertTrue(try Self.source("Chain/Transactions.swift").contains("static var fundsArriving: String { L10n.tr("))
-        XCTAssertTrue(try Self.source("Services/Perpl/PerplTriggers.swift").contains("public static var liquidationUnknownMessage: String {"))
-        XCTAssertTrue(try Self.source("Services/Mera/MeraAccountDeletion.swift").contains("public static var manualSteps: [String] {"))
+        XCTAssertTrue(try AppSource.kit("Core/RPCClient.swift").contains("public static var unconfirmed: String { L10n.tr("))
+        XCTAssertTrue(try AppSource.kit("Chain/Transactions.swift").contains("static var fundsArriving: String { L10n.tr("))
+        XCTAssertTrue(try AppSource.kit("Services/Perpl/PerplTriggers.swift").contains("public static var liquidationUnknownMessage: String {"))
+        XCTAssertTrue(try AppSource.kit("Services/Mera/MeraAccountDeletion.swift").contains("public static var manualSteps: [String] {"))
         // The revert map writes each sentence when it is shown; only the selectors are worked out once.
-        let transactions = Self.squeezed(try Self.source("Chain/Transactions.swift"))
+        let transactions = AppSource.squeezed(try AppSource.kit("Chain/Transactions.swift"))
         XCTAssertTrue(transactions.contains("static var knownErrors: [String: String] { knownErrorSentences.mapValues { $0() } }"))
         XCTAssertTrue(transactions.contains("if let named = knownErrorSentences[selector] { return named() }"))
         XCTAssertTrue(transactions.contains(#"("NothingToClaim", { L10n.tr("There is nothing to claim yet.") }),"#))
@@ -359,14 +346,14 @@ final class DyorKitStringsTests: XCTestCase {
     /// key-request statement, the Simulator stub's title), identifiers (a price's source, a fill's dedup key, a link's
     /// slug) and names.
     func testIdentifiersAndNamesStayAsTheyAre() throws {
-        let supabase = try Self.source("Services/Supabase/SupabaseClient.swift")
+        let supabase = try AppSource.kit("Services/Supabase/SupabaseClient.swift")
         for line in [#""\(signInDomain) wants you to sign in with your Ethereum account:","#, #""Sign in to DyorHQ.","#, #""Nonce: \(nonce)","#,
                      #""Issued At: \(iso8601(millis: issuedAt))","#] {
             XCTAssertTrue(supabase.contains(line), line)
         }
-        XCTAssertTrue(try Self.source("Services/Perpl/PerplEnrollment.swift")
+        XCTAssertTrue(try AppSource.kit("Services/Perpl/PerplEnrollment.swift")
             .contains(#"public static let statement = "I authorize the creation of Perpl API key with the specified scope and parameters""#))
-        let venue = try Self.source("Services/Prices/DyorVenue.swift")
+        let venue = try AppSource.kit("Services/Prices/DyorVenue.swift")
         XCTAssertTrue(venue.contains(#"static let curveLabel = "DyorHQ curve""#))
         XCTAssertEqual(PriceInfo(usd: 1, change24h: nil, source: DyorListing.curveLabel, pairSymbol: "MON").sourceLine, "Priced from its DyorHQ curve")
         XCTAssertEqual(PriceInfo(usd: 1, change24h: nil, source: DyorListing.momentLabel, pairSymbol: "USDC").sourceLine, "Priced from its Moment pool")
@@ -467,10 +454,10 @@ final class DyorKitStringsTests: XCTestCase {
         XCTAssertEqual(PerpAlertText.positionName(asset: "ETH", side: .short), "ETH-PERP short")
         XCTAssertEqual(PerpAlertText.usageText(10), "All")
         XCTAssertTrue(PerpAlertText.usageIsAll(.nan) && PerpAlertText.usageIsAll(10) && !PerpAlertText.usageIsAll(9.99))
-        let alerts = try Self.source("Services/Perpl/PerpRisk.swift")
+        let alerts = try AppSource.kit("Services/Perpl/PerpRisk.swift")
         XCTAssertFalse(alerts.contains(#"side == .long ? "long" : "short""#), "no side chosen inside a sentence")
         XCTAssertTrue(alerts.contains(#"LocalizedStringResource("marginUsage.all", defaultValue: "All", bundle: L10n.kit, comment: "#))
-        XCTAssertTrue(try Self.source("Services/SwapHistory.swift")
+        XCTAssertTrue(try AppSource.kit("Services/SwapHistory.swift")
             .contains(#"LocalizedStringResource("All", bundle: L10n.kit, comment: "[tight] A history window: every swap, as far back as the app reads.")"#))
     }
 
@@ -482,7 +469,7 @@ final class DyorKitStringsTests: XCTestCase {
         let value = try NSRegularExpression(pattern: #"\\\([^)]*\)"#)
         var comments: [String: Set<String>] = [:]
         for (_, text) in try Self.sources() {
-            let code = Self.squeezed(text)
+            let code = AppSource.squeezed(text)
             for match in site.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
                 guard let key = Range(match.range(at: 1), in: code), let comment = Range(match.range(at: 2), in: code) else { continue }
                 let written = String(code[key])
@@ -500,37 +487,37 @@ final class DyorKitStringsTests: XCTestCase {
     /// The nodes', Perpl's, Kuru's, Aurora's and DyorHQ's servers' own English, which the code matches, is never
     /// translated: each matcher reads as written, and still recognises the server's text while the app is in French.
     func testTheEnglishMatchersAreUntouched() throws {
-        let transactions = try Self.source("Chain/Transactions.swift")
+        let transactions = try AppSource.kit("Chain/Transactions.swift")
         XCTAssertTrue(transactions.contains(#"static func isNonceUsed(_ error: RPCError) -> Bool { error.message.lowercased().contains("nonce too low") }"#))
         XCTAssertTrue(transactions.contains(#""insufficient funds", "insufficient balance", "intrinsic gas too low", "exceeds block gas limit", "underpriced","#))
         XCTAssertTrue(transactions.contains(#""nonce too low", "invalid sender", "invalid chain id", "transaction type not supported", "oversized data","#))
         XCTAssertTrue(transactions.contains(#"error.message.localizedCaseInsensitiveContains("insufficient balance")"#))
         XCTAssertTrue(transactions.contains(#"if message.localizedCaseInsensitiveContains("insufficient funds") { return L10n.tr("Not enough MON to pay for gas.") }"#))
         XCTAssertTrue(transactions.contains(##"message.range(of: #"custom error (0x[0-9a-fA-F]{8})"#, options: .regularExpression)"##))
-        let rpc = try Self.source("Core/RPCClient.swift")
+        let rpc = try AppSource.kit("Core/RPCClient.swift")
         XCTAssertTrue(rpc.contains(#"return message.contains("request limit") || message.contains("rate limit") || message.contains("too many requests")"#))
         XCTAssertTrue(rpc.contains(#"|| message.contains("per second") || message.contains("throughput")"#))
         XCTAssertTrue(rpc.contains(#"if message.contains("already known") || message.contains("known transaction") || message.contains("already imported") { return hash }"#))
         XCTAssertTrue(rpc.contains(#"if message.contains("nonce too low"), let known = try? await call("eth_getTransactionByHash""#))
         XCTAssertTrue(rpc.contains(#"message: "Missing response""#))
-        XCTAssertTrue(try Self.source("Core/Multicall.swift").contains(#"message: "Call reverted""#))
-        XCTAssertTrue(try Self.source("Chain/ERC20.swift").contains(#"return error.code == 3 || message.contains("revert") || message.contains("out of gas") || message.contains("gas required exceeds")"#))
-        XCTAssertTrue(try Self.source("Chain/TokenTransfer.swift").contains(#"|| error.message.localizedCaseInsensitiveContains("insufficient funds")"#))
-        let logs = try Self.source("Core/Logs.swift")
+        XCTAssertTrue(try AppSource.kit("Core/Multicall.swift").contains(#"message: "Call reverted""#))
+        XCTAssertTrue(try AppSource.kit("Chain/ERC20.swift").contains(#"return error.code == 3 || message.contains("revert") || message.contains("out of gas") || message.contains("gas required exceeds")"#))
+        XCTAssertTrue(try AppSource.kit("Chain/TokenTransfer.swift").contains(#"|| error.message.localizedCaseInsensitiveContains("insufficient funds")"#))
+        let logs = try AppSource.kit("Core/Logs.swift")
         XCTAssertTrue(logs.contains(#"let sizes = ["response size", "block range", "too large", "limited to a", "returned more than", "too many logs", "too many results"]"#))
         XCTAssertTrue(logs.contains(#"return message.contains("beyond current head") || message.contains("beyond the current head")"#))
         XCTAssertTrue(logs.contains(#"|| message.contains("not yet available on the node") || message.contains("errupstreamblockunavailable")"#))
         XCTAssertTrue(logs.contains(#"|| (error.code == -32014 && message.contains("block not available"))"#))
-        let perpl = try Self.source("Services/Perpl/PerplTradeClient.swift")
+        let perpl = try AppSource.kit("Services/Perpl/PerplTradeClient.swift")
         XCTAssertTrue(perpl.contains(#"public var isConnectionCap: Bool { code == 1008 && reason.localizedCaseInsensitiveContains("too many connections") }"#))
         XCTAssertTrue(perpl.contains(#"public var isRateLimit: Bool { code == 1008 && reason.localizedCaseInsensitiveContains("too many requests") }"#))
-        let supabase = try Self.source("Services/Supabase/SupabaseClient.swift")
+        let supabase = try AppSource.kit("Services/Supabase/SupabaseClient.swift")
         XCTAssertTrue(supabase.contains(#"if reason.contains("nonce") { return L10n.tr("That sign-in expired or was already used. Please try again.") }"#))
         XCTAssertTrue(supabase.contains(#"return reason == "the verified email does not match" || reason == "no verified email on this Privy account""#))
         XCTAssertTrue(supabase.contains(#"(object["error"] as? String) == "Duplicate""#))
-        XCTAssertTrue(try Self.source("Services/Swap/SwapTypes.swift").contains(#"message.range(of: "user rejected|user denied", options: [.regularExpression, .caseInsensitive])"#))
-        XCTAssertTrue(try Self.source("Services/Aurora/AuroraIntents.swift").contains("body?.message ?? body?.error ??"), "Aurora's own message, as it sends it")
-        XCTAssertTrue(try Self.source("Services/Swap/KuruFlowClient.swift").contains(#"Self.text(json["message"]) ?? Self.text(json["error"]) ??"#), "Kuru's own message")
+        XCTAssertTrue(try AppSource.kit("Services/Swap/SwapTypes.swift").contains(#"message.range(of: "user rejected|user denied", options: [.regularExpression, .caseInsensitive])"#))
+        XCTAssertTrue(try AppSource.kit("Services/Aurora/AuroraIntents.swift").contains("body?.message ?? body?.error ??"), "Aurora's own message, as it sends it")
+        XCTAssertTrue(try AppSource.kit("Services/Swap/KuruFlowClient.swift").contains(#"Self.text(json["message"]) ?? Self.text(json["error"]) ??"#), "Kuru's own message")
 
         // The servers' English, as they send it, is still recognised with the app in French.
         let saved = L10n.locale
@@ -615,7 +602,7 @@ final class DyorKitStringsTests: XCTestCase {
     /// once, after every L2 lane merges: while DyorKit's is still empty this is skipped, except under the release gate
     /// (`DYORHQ_RELEASE_GATE=1`), where an empty catalog refuses the release.
     func testThePluralKeysHaveEnglishPluralForms() throws {
-        let url = Self.root().appendingPathComponent("Resources/Localizable.xcstrings")
+        let url = AppSource.kitFolder.appendingPathComponent("Resources/Localizable.xcstrings")
         let catalog = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         let strings = catalog["strings"] as? [String: Any] ?? [:]
         if strings.isEmpty {
