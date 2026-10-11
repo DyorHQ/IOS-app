@@ -37,6 +37,26 @@ ios/
    └─ Tests/              unit tests with fixtures recorded against Monad mainnet
 ```
 
+## Where to start reading
+
+- `DyorHQ/App/AppEnvironment.swift`: the composition root. It builds every service once, in order, and hands them to
+  the screens.
+- `DyorHQ/App/RootView.swift`: what shows in each session state (onboarding, the update gate, the tabs), incoming
+  links, and the services that follow the signed-in account.
+- `DyorHQ/Wallet/TransactionRun.swift`: every write goes through it: the confirmation sheet, and the run that takes a
+  plan's steps through signing, sending and confirmation.
+- `DyorHQ/Wallet/HistoryModel.swift`, then `DyorKit/Sources/DyorKit/Core/HistoryStore.swift` and `Core/LogsRouter.swift`:
+  how a wallet's history is read from Monad's logs, kept on the device and shared by Home and Portfolio.
+- `DyorHQ/Home/HomeModel.swift`: what Home loads, and from where.
+
+## Pinned source tests
+
+The app has no test target of its own. Instead, many DyorKit tests read the app's Swift files as text and check that
+they keep their wiring (an alert is raised, a string is localized, a write goes through the confirmation sheet). They
+find files through `DyorKit/Tests/DyorKitTests/AppSource.swift`. When you move, rename or split an app file, update
+those tests in the same commit, so they check the same thing where the code now lives; `swift test` in `DyorKit`
+tells you which ones.
+
 ## Build and run
 
 1. Install XcodeGen once: `brew install xcodegen`.
