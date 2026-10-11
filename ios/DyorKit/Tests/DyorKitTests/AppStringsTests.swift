@@ -364,7 +364,7 @@ final class AppStringsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(tight, 40, "the tight labels say so")
         // A position's side reads as the Perps screens' own key and comment, which also name the order button.
         let alerts = try AppSource.app("Notifications/AlertCenter.swift")
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         for side in [#"LocalizedStringResource("Long", comment: "Opens a long position: a bet that the price rises. Also a position's side. [tight]")"#,
                      #"LocalizedStringResource("Short", comment: "Opens a short position: a bet that the price falls. Also a position's side. [tight]")"#] {
             XCTAssertTrue(alerts.contains(side), side)

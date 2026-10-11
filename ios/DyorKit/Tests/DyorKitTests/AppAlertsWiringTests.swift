@@ -109,7 +109,7 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertTrue(squeezed.contains("func forgetUserClose(_ perpId: Int) { alerts?.forgetUserClose(perpId) }"))
         XCTAssertFalse(squeezed.contains("sawEnding"))
         // The ticket notes every order that closes the position, reduce-only or on its other side, decided at Review.
-        let ticket = AppSource.squeezed(try AppSource.app("Perps/PerpTradeView.swift"))
+        let ticket = AppSource.squeezed(try AppSource.appFiles(AppSource.perpTradeViewFiles))
         XCTAssertTrue(ticket.contains("reviewCloses = PerpCloseOrder.closes(orderSide: side, reduceOnly: ticket.effectiveReduceOnly, held: position?.side)"))
         XCTAssertEqual(ticket.components(separatedBy: "if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) }").count - 1, 2,
                        "the one-click sheet and the on-chain sheet")
@@ -121,7 +121,7 @@ final class AppAlertsWiringTests: XCTestCase {
         XCTAssertFalse(ticket.contains("if ticket.effectiveReduceOnly { model.noteUserClose"))
         XCTAssertEqual(ticket.components(separatedBy: "model.noteUserClose(").count - 1, 3)
 
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let ended = try function("private func positionEnded(_ position: PerplLivePosition) {", in: trading)
         XCTAssertTrue(ended.contains("if position.endedByProtocol { explainedEndings[position.marketId] = Date()"), "a liquidation, ADL or unwind explains the ending")
         let trigger = try function("private func triggerChanged(_ event: PerplTriggerEvent) {", in: trading)

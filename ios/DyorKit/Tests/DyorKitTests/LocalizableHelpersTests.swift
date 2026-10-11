@@ -69,13 +69,13 @@ final class LocalizableHelpersTests: XCTestCase {
         // amount with its symbol is verbatim.
         let help = try AppSource.app("Support/GetHelpView.swift")
         XCTAssertTrue(help.contains(".accessibilityLabel(title + Text(verbatim: \". \") + detail)"), "HelpRow's VoiceOver label")
-        XCTAssertTrue(try AppSource.app("Perps/PerpTradeView.swift").contains(
+        XCTAssertTrue(try AppSource.appFiles(AppSource.perpTradeViewFiles).contains(
             ".accessibilityLabel(Text(\"\\(Text(side)) \\(NumberStyle.number(level.price)), total \\(NumberStyle.number(level.total, compact: true)) \\(symbol)\"))"),
             "the order book row's VoiceOver label")
         XCTAssertTrue(components.contains("Text(verbatim: \"\\(NumberStyle.units(amount, decimals: token.decimals, compact: compact)) \\(token.symbol)\")"), "AmountText")
 
         // The trigger sheet's title and note are written where the request is made, as resources.
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         XCTAssertTrue(trade.contains("let title: LocalizedStringResource\n    let note: LocalizedStringResource?"), "TriggerCancelRequest")
         let triggers = try AppSource.app("Perps/PerpTriggerSheets.swift")
         XCTAssertTrue(triggers.contains(".navigationTitle(tr(title))"))
@@ -110,7 +110,7 @@ final class LocalizableHelpersTests: XCTestCase {
         let runTime: Set<String> = [
             "Launchpad/LaunchpadProfileView.swift claimRow caption", // the claimable's own caption, from the model
             "Perps/PerpTradeView.swift stepperField placeholder", // the mark price, a number
-            "Perps/PerpTradeView.swift optionRow title", // the size unit's symbol: the market's asset or AUSD
+            "Perps/PerpPickerSheets.swift optionRow title", // the size unit's symbol: the market's asset or AUSD
             "Portfolio/AssetsModel.swift tokenRow note", // the run-time overload: a curve route's note from DyorKit
             "Profile/AccountDeletion.swift DeletionNoticeView message", // the deletion's notice, worded by the Session
         ]

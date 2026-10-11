@@ -49,9 +49,20 @@ enum AppSource {
     /// was written: My Launchpad's screen (with its rows), then its model.
     static let launchpadProfileViewFiles = ["Launchpad/LaunchpadProfileView.swift", "Launchpad/LaunchpadProfileModel.swift"]
 
+    /// The files the code of Perps/PerpTradeView.swift sits in, each in ios/DyorHQ/Perps: the trade screen itself, then
+    /// its parts (the order book, the size slider, the trades tape), the picker sheets, the cards, the Close Position and
+    /// Add Margin sheets, and the order sheet with the ticket's state.
+    static let perpTradeViewFiles = ["Perps/PerpTradeView.swift", "Perps/PerpTradeParts.swift", "Perps/PerpPickerSheets.swift",
+                                     "Perps/PerpCards.swift", "Perps/ClosePositionSheet.swift", "Perps/AddMarginSheet.swift",
+                                     "Perps/AuthedOrderSheet.swift"]
+
+    /// The files the code of Wallet/PerplTrading.swift sits in, each in ios/DyorHQ/Wallet: the trading model, then what it
+    /// keeps on the device (the forwarding memory, the kill switches, the census and the Keychain).
+    static let perplTradingFiles = ["Wallet/PerplTrading.swift", "Wallet/PerplTradingStores.swift"]
+
     /// The app's files at `paths` under ios/DyorHQ, one after the other, a line apart: a check of code split over several
-    /// files (`homeViewFiles`, `launchpadViewFiles`, `launchpadProfileViewFiles`) reads all of it at once. A skip when this
-    /// checkout has only the package.
+    /// files (`homeViewFiles`, `launchpadViewFiles`, `launchpadProfileViewFiles`, `perpTradeViewFiles`, `perplTradingFiles`)
+    /// reads all of it at once. A skip when this checkout has only the package.
     static func appFiles(_ paths: [String]) throws -> String {
         try paths.map { try app($0) }.joined(separator: "\n")
     }

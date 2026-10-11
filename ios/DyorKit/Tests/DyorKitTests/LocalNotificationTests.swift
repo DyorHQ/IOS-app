@@ -44,7 +44,7 @@ final class LocalNotificationTests: XCTestCase {
         XCTAssertTrue(AppSource.squeezed(notifications).contains("post(kind: .perp, title: notice.title, body: \"\\(side) \\(market)\", route: .perps, reference: perpId.map { PerpAlertText.reference(perpId: $0) }, deliver: deliver, owner: owner)"))
         XCTAssertFalse(notifications.contains("\"Order filled\""), "the titles live in PerpOrderNotice")
 
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         let legacy = try function("private func placeLegacy(approval: MeraSession.StepUp? = nil) async {", in: trade)
         XCTAssertTrue(legacy.contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side:"), "the switch-off sheet")
         let live = try function("private func place(approval: MeraSession.StepUp? = nil) async {", in: trade)
@@ -62,13 +62,13 @@ final class LocalNotificationTests: XCTestCase {
             let calls = text.components(separatedBy: "Notifications.perpOrder(").dropFirst()
             for call in calls {
                 let notice = call.prefix { $0 != "," }
-                XCTAssertTrue((notice == "PerpOrderNotice(acknowledged: input.kind)" && path == "Perps/PerpTradeView.swift")
+                XCTAssertTrue((notice == "PerpOrderNotice(acknowledged: input.kind)" && path == "Perps/AuthedOrderSheet.swift")
                               || (notice == "notice" && path == "Wallet/PerplOrderTracker.swift")
                               || (notice == ".filled" && path == "Notifications/AlertCenter.swift"),
                               "\(path): perpOrder(\(notice), …)")
             }
         }
-        XCTAssertEqual(try AppSource.app("Perps/PerpTradeView.swift").components(separatedBy: "Notifications.perpOrder(").count - 1, 1, "the switch-off sheet only")
+        XCTAssertEqual(try AppSource.appFiles(AppSource.perpTradeViewFiles).components(separatedBy: "Notifications.perpOrder(").count - 1, 1, "the switch-off sheet only")
         XCTAssertEqual(tracker.components(separatedBy: "Notifications.perpOrder(").count - 1, 1)
         // A close from the position's Close sheet names the POSITION (p4 spec #16); margin over the trading connection
         // posts from PerplTrading only, when no sheet shows its result.
@@ -377,7 +377,7 @@ final class LocalNotificationTests: XCTestCase {
         // A Perps notice opens the market its record names (`PerpAlertText.reference`); any other reference opens Perps.
         XCTAssertTrue(AppSource.squeezed(open).contains("case .perps: if let market = PerpAlertText.market(reference: reference) { pendingPerpMarket = market } tradeMode = .perps; tab = .trade"))
         XCTAssertTrue(hub.contains("func item(_ id: UUID) -> AppNotification? { items.first { $0.id == id } }"))
-        XCTAssertTrue(AppSource.squeezed(try AppSource.app("Perps/PerpTradeView.swift")).contains("market: \"\\(market.asset)-PERP\", perpId: market.id)"), "the acknowledgement names its market too")
+        XCTAssertTrue(AppSource.squeezed(try AppSource.appFiles(AppSource.perpTradeViewFiles)).contains("market: \"\\(market.asset)-PERP\", perpId: market.id)"), "the acknowledgement names its market too")
         for (path, text) in try AppSource.allAppFiles() where path != "App/Router.swift" && path != "App/RootView.swift" {
             XCTAssertFalse(text.contains("deliverPendingNotificationRoute()"), path)
             XCTAssertFalse(text.contains("pendingNotificationRoute ="), path)

@@ -170,7 +170,7 @@ final class PerpsWalletStringsTests: XCTestCase {
             XCTAssertNil(shown.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)), "\(path): a raw value shown as text")
             XCTAssertFalse(text.contains(".capitalized"), path)
         }
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         XCTAssertTrue(trade.contains("ForEach(ChartDataTab.allCases) { $0.title.tag($0) }"))
         // The bottom tabs (Positions / Orders / Assets / Trade History): the shown title and the reserved selected width are
         // both the written key (p4 spec E).
@@ -276,7 +276,7 @@ final class PerpsWalletStringsTests: XCTestCase {
     /// The Perps order's notification names its side in the app's language; Activity rows and notifications are written
     /// in the language in use when they are recorded.
     func testRecordsAndNotificationsAreWrittenInTheAppLanguage() throws {
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         XCTAssertFalse(trade.contains("side: input.side == .long ? \"Long\" : \"Short\""))
         XCTAssertTrue(AppSource.squeezed(trade).contains("Notifications.perpOrder(PerpOrderNotice(acknowledged: input.kind), side: side, market: \"\\(market.asset)-PERP\", perpId: market.id)"))
         // The live outcome's notice names the side the same way, from the order the tracker follows.
@@ -298,7 +298,7 @@ final class PerpsWalletStringsTests: XCTestCase {
     /// resting close order are keys of their own. "Market" is the order type; the review row naming the market traded is
     /// a key of its own.
     func testAWordWithTwoMeaningsIsTwoKeys() throws {
-        let trade = AppSource.squeezed(try AppSource.app("Perps/PerpTradeView.swift"))
+        let trade = AppSource.squeezed(try AppSource.appFiles(AppSource.perpTradeViewFiles))
         XCTAssertTrue(trade.contains(#"Button(action: onClose) { Text(verbatim: tr(LocalizedStringResource("position.close", defaultValue: "Close", comment: "Closes the open position (a verb), a button on the position. [tight]"))) }"#))
         XCTAssertTrue(trade.contains(#"order.reduceOnly ? tr(LocalizedStringResource("chartLine.close", defaultValue: "Close", comment: "#))
         XCTAssertEqual(trade.components(separatedBy: ##"DetailRow(Text(verbatim: tr(LocalizedStringResource("orderReview.market", defaultValue: "Market", comment: "A review row: the Perps market the order is on, next to its name (BTC-PERP) [tight]"))), Text(verbatim: "##).count - 1, 3)

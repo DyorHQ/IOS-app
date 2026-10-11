@@ -16,7 +16,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
     }
 
     func testTheLiveSheetRecordsAndAnnouncesOnlyAtTheOutcome() throws {
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         let live = try function("private func place(approval: MeraSession.StepUp? = nil) async {", in: trade)
         XCTAssertFalse(live.contains("Activity.record"), "no row at the acknowledgement")
         XCTAssertFalse(live.contains("Notifications."), "no notice at the acknowledgement")
@@ -74,7 +74,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         // API rows: no hash, the order's own id (never the relayer's batch transaction).
         XCTAssertTrue(AppSource.squeezed(tracker).contains("Self.record(outcome, order, kindName: Self.kindName(order), hash: nil, id: order.id, owner: order.owner, positionEnded: positionEnded)"))
         XCTAssertFalse(tracker.contains("txid"), "never at.txid")
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         XCTAssertTrue(AppSource.squeezed(trading).contains("let id = PerplOrderTracker.activityID(accountId: t.accountId, rq: t.entryRq, sentAt: sentAt)"))
         XCTAssertTrue(AppSource.squeezed(trading).contains("PerplOrderTracker.record(entry, latest, kindName: PerplOrderTracker.kindName(latest), hash: nil, id: latest.id, owner: latest.owner)"),
                       "the reconcile's no-volume row for a result never confirmed")
@@ -83,7 +83,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
     }
 
     func testEverySentEntryIsFollowedUnderBackgroundTime() throws {
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let track = AppSource.squeezed(try function("func track(_ t: PerplOrderTracking, input: OrderInput, takeProfit: Double?, stopLoss: Double?, closes: PositionSide?,", in: trading))
         XCTAssertTrue(track.contains("let done = operation(\"Perpl order outcome\")"), "background time, and a draining socket waits (GL-1)")
         XCTAssertTrue(track.contains("defer { done() }"))
@@ -148,7 +148,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertTrue(outcome.contains("Label { Paragraph(verbatim: line.text) } icon: {"), "Korean wraps by word (I28)")
         XCTAssertTrue(outcome.contains(".modifier(ParagraphLabel())"))
 
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let confirm = AppSource.squeezed(try function("func cancelAndConfirm(orders: [PerplOpenOrder], approval: MeraSession.StepUp? = nil,", in: trading))
         XCTAssertTrue(confirm.contains("try requireCancelApproval(approval) let done = operation(\"Perpl cancel\") defer { done() }"),
                       "MERA-PLAN §3, and one operation across the sends and the wait (GL-1)")
@@ -189,7 +189,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
 
         // The trade screen: a suspect stream's rows are "Last seen on Perpl" (I10); a card whose cancel is on its way shows
         // it instead of a second Cancel; the leftover banner says what is being cancelled (I32).
-        let trade = AppSource.squeezed(try AppSource.app("Perps/PerpTradeView.swift"))
+        let trade = AppSource.squeezed(try AppSource.appFiles(AppSource.perpTradeViewFiles))
         XCTAssertTrue(trade.contains("let live = perplTrading.ordersAreLive && !perplTrading.streamSuspect"))
         XCTAssertTrue(trade.contains("TriggerCard(row: row, mark: mark, cancelling: row.order.map { perplTrading.cancellingKeys.contains($0.id) } ?? false)"))
         XCTAssertTrue(trade.contains("Paragraph(verbatim: PerpTriggerCopy.cancellingLeftovers(count: cancelling.count, asset: market.asset))"))
@@ -221,7 +221,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
 
         // The on-chain order sheet: the noted close stays (pinned in AppAlertsWiringTests), the row at the receipt has no
         // volume and no notice, the read follows; no notional is recorded as volume anywhere on the trade screen.
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         let squeezedTrade = AppSource.squeezed(trade)
         XCTAssertFalse(trade.contains("usd: notional"), "never the size ordered as volume")
         XCTAssertFalse(trade.contains("position.notional > 0 ? position.notional"), "a close's volume is what it filled")
@@ -254,7 +254,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertEqual(trade.components(separatedBy: ".sensoryFeedback(.success, trigger: run.isDone)").count - 1, 0, "close and margin feel the result's tone")
 
         // PerplTrading: the read, its follow-up, and the stream's reloads (the live socket's own reports only).
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let decode = AppSource.squeezed(try function("private func decodeOnChain(_ id: UUID, notify: Bool) async -> PerplOrderOutcome? {", in: trading))
         XCTAssertTrue(decode.contains("let requests = try? await receiptRequests?(hash)"))
         XCTAssertTrue(decode.contains("if orders.order(id)?.entry == nil { settle(id, .unconfirmed(.timedOut), notify: false) }"), "unread: said so, never guessed")
@@ -290,7 +290,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
     /// the order is followed — in the sheet and on the trade screen's status row, whatever the entry is doing, never only
     /// once the entry filled or rests — and an entry Perpl never answered says not to place it again, there too.
     func testATriggerWarningShowsFromTheStartEverywhere() throws {
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         let lines = try function("private func outcomeLines(_ order: PerplTrackedOrder) -> [PerpOrderOutcomeLine] {", in: trade)
         XCTAssertTrue(AppSource.squeezed(lines).contains("if let warning = PerpOrderCopy.triggerWarning(order) { lines.append(PerpOrderOutcomeLine(text: warning, tone: .warning)) }"))
         XCTAssertFalse(lines.contains("entry != nil"), "never gated on the entry's result")
@@ -327,10 +327,10 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         let tracker = try AppSource.app("Wallet/PerplOrderTracker.swift")
         XCTAssertTrue(tracker.contains("TriggerStore.remove(ids: [echo], owner: order.owner)"))
         XCTAssertFalse(tracker.contains("TriggerStore.remove(perpId:"), "never every echo of that kind on that side")
-        let trade = AppSource.squeezed(try AppSource.app("Perps/PerpTradeView.swift"))
+        let trade = AppSource.squeezed(try AppSource.appFiles(AppSource.perpTradeViewFiles))
         XCTAssertTrue(trade.contains("let echoes = recordTriggerEchoes(result)"))
         XCTAssertTrue(trade.contains("echoes: echoes, expectation: expectation)"))
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let track = AppSource.squeezed(try function("func track(_ t: PerplOrderTracking, input: OrderInput, takeProfit: Double?, stopLoss: Double?, closes: PositionSide?,", in: trading))
         XCTAssertTrue(track.contains("notSent: !triggersSent, echoId: triggersSent ? echoes[kind] : nil)"))
         let check = AppSource.squeezed(try function("private func checkLeftTriggers(_ id: UUID, sentOn sender: PerplTradeClient?) async {", in: trading))
@@ -348,7 +348,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
     /// decided meanwhile, and the chain is read as the order's only while its result could still be arriving, never after
     /// a relaunch.
     func testTheFallbackReadsNeverOverwriteOrMisattribute() throws {
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let resolve = AppSource.squeezed(try function("private func resolveOnce(_ id: UUID, notify: Bool) async {", in: trading))
         let history = try XCTUnwrap(resolve.range(of: "if let events = try? await orderHistory(key) {"))
         let ledger = try XCTUnwrap(resolve.range(of: "var ledger = PerplOrderLedger(account: accountId)"))
@@ -362,14 +362,14 @@ final class PerpsOutcomeWiringTests: XCTestCase {
     /// The watcher waits for an order from before its frames are written (the sheet registers it, `track` takes it
     /// over), and a wallet-signed order's window and the watcher's notices count from before it was signed.
     func testTheWatchersWaitStartsBeforeTheSend() throws {
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         let live = AppSource.squeezed(try function("private func place(approval: MeraSession.StepUp? = nil) async {", in: trade))
         let expect = try XCTUnwrap(live.range(of: "let expectation = perplTrading.expectOrder(input, held: held)"))
         let send = try XCTUnwrap(live.range(of: "submitBracket("))
         XCTAssertLessThan(expect.lowerBound, send.lowerBound, "before the first frame")
         XCTAssertTrue(live.contains("defer { if !followed { perplTrading.releaseOrderExpectation(expectation) } }"))
         XCTAssertEqual(live.components(separatedBy: "followed = true").count - 1, 2, "both tracked paths take it over")
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let track = AppSource.squeezed(try function("func track(_ t: PerplOrderTracking, input: OrderInput, takeProfit: Double?, stopLoss: Double?, closes: PositionSide?,", in: trading))
         let release = try XCTUnwrap(track.range(of: "if let expectation { releaseFill(expectation.id) }"))
         let rekey = try XCTUnwrap(track.range(of: "if let expected { expectFill(id, input.market.id, input.side, expected, deadline.wallClock) }"))
@@ -384,7 +384,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
     /// The automatic leftover clean-up never leaves a "Cancelling…" behind for a cancel that never went out or that Perpl
     /// refused: those may be offered (and swept) again.
     func testTheLeftoverCleanUpLetsGoOfCancelsThatDidntGoOut() throws {
-        let trading = AppSource.squeezed(try AppSource.app("Wallet/PerplTrading.swift"))
+        let trading = AppSource.squeezed(try AppSource.appFiles(AppSource.perplTradingFiles))
         XCTAssertTrue(trading.contains("let noted = self.notePendingCancels(leftovers.map(\\.id), on: client)"))
         XCTAssertTrue(trading.contains("for order in leftovers where self.cancelsPending[order.id]?.at == noted { self.cancelsPending[order.id] = nil self.cancelsSent.remove(order.id) } return }"))
         XCTAssertTrue(trading.contains("for (order, ack) in zip(leftovers, acks) where !ack.accepted && !ack.outcomeUnknown && self.cancelsPending[order.id]?.at == noted { self.cancelsPending[order.id] = nil self.cancelsSent.remove(order.id) }"))
@@ -392,7 +392,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
 
     /// The switch-off sheet's notional volume is a documented exception awaiting the owner's decision, not an oversight.
     func testTheSwitchOffVolumeIsADocumentedException() throws {
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         let legacy = try function("private func placeLegacy(approval: MeraSession.StepUp? = nil) async {", in: trade)
         XCTAssertTrue(legacy.contains("KNOWN EXCEPTION to \"volume only from what filled\" (owner decision pending"))
     }

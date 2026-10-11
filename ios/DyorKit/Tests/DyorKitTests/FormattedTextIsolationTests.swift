@@ -51,7 +51,7 @@ final class FormattedTextIsolationTests: XCTestCase {
         for (path, line) in writes {
             for formatter in Self.displayFormatters { XCTAssertFalse(line.contains(formatter), "\(path): \(line)") }
         }
-        let perps = try XCTUnwrap(sources.first { $0.path == "Perps/PerpTradeView.swift" }).text
+        let perps = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         for writer in ["private func plainSize(_ value: Double) -> String {", "private func plainAmount(_ value: Double) -> String {"] {
             let start = try XCTUnwrap(perps.range(of: writer), writer)
             let end = try XCTUnwrap(perps.range(of: "\n    }\n", range: start.upperBound..<perps.endIndex))

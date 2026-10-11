@@ -32,8 +32,8 @@ final class PerpsApiActionsWiringTests: XCTestCase {
         }
     }
 
-    private var trading: String { get throws { try AppSource.app("Wallet/PerplTrading.swift") } }
-    private var trade: String { get throws { try AppSource.app("Perps/PerpTradeView.swift") } }
+    private var trading: String { get throws { try AppSource.appFiles(AppSource.perplTradingFiles) } }
+    private var trade: String { get throws { try AppSource.appFiles(AppSource.perpTradeViewFiles) } }
 
     /// A.2: the route needs both switches, this socket's own forwarding report (never the on-chain grant) for the account
     /// at the tap, and no refusal on this socket; a locked passkey account only for Close / Add Margin, only when its last
@@ -224,7 +224,8 @@ final class PerpsApiActionsWiringTests: XCTestCase {
         XCTAssertTrue(add.contains("let id = PerplOrderTracker.marginActivityID(accountId: account.accountId, rq: rq, sentAt: writtenAt)"))
         XCTAssertTrue(AppSource.squeezed(try function("private static func overAvailable(_ amountCNS: BigUInt, on client: PerplTradeClient) -> Bool {", in: trading))
                         .contains("let available = balance > locked ? balance - locked : 0"), "saturating (#12)")
-        for (path, text) in [("Wallet/PerplTrading.swift", trading), ("Perps/PerpTradeView.swift", try trade)] {
+        for path in AppSource.perplTradingFiles + AppSource.perpTradeViewFiles {
+            let text = try AppSource.app(path)
             XCTAssertFalse(text.contains("balanceCNS - lockedBalanceCNS") || text.contains("balance - locked)"), path)
         }
         let evidence = AppSource.squeezed(try function("private func marginEvidence(_ pending: PendingMargin, on client: PerplTradeClient) async -> MarginResult {", in: trading))

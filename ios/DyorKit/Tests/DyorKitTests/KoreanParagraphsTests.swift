@@ -111,7 +111,7 @@ final class KoreanParagraphsTests: XCTestCase {
         // cut off what to check: none anywhere in the order's result views (the status bar, the receipt bar, the row).
         XCTAssertFalse(outcome.contains(".lineLimit("), "no line limit on an order result")
         XCTAssertFalse(outcome.contains(".minimumScaleFactor("), "no scale factor on an order result")
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         let sheet = String(trade[try XCTUnwrap(trade.range(of: "struct AuthedOrderSheet: View {")).lowerBound...])
         XCTAssertFalse(sheet.contains("Label(message, systemImage:"), "the sheet's warnings are paragraphs")
         XCTAssertTrue(sheet.contains("Label { Paragraph(verbatim: message) } icon: { Image(systemName: \"exclamationmark.triangle.fill\") }"))
@@ -121,7 +121,7 @@ final class KoreanParagraphsTests: XCTestCase {
     /// I28): their failure, sending and waiting lines are paragraphs, their results go through the outcome views, and no line
     /// is a label with a `String` or `Text` title, or held to a line limit or a scale factor.
     func testTheAPIActionSheetsWrapByWord() throws {
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         func slice(_ text: String, from start: String, to end: String) throws -> String {
             let from = try XCTUnwrap(text.range(of: start), start)
             let to = try XCTUnwrap(text.range(of: end, range: from.upperBound..<text.endIndex), end)
@@ -160,7 +160,7 @@ final class KoreanParagraphsTests: XCTestCase {
         XCTAssertFalse(sheets.contains("Label(line.text"), "an outcome line is a paragraph")
         XCTAssertTrue(sheets.contains("Label { Paragraph(verbatim: line.text) } icon: {"))
         XCTAssertTrue(sheets.contains("Label { Paragraph(verbatim: PerpTriggerCopy.step(kind, step)) } icon: { ProgressView().controlSize(.mini) }"))
-        let trade = try AppSource.app("Perps/PerpTradeView.swift")
+        let trade = try AppSource.appFiles(AppSource.perpTradeViewFiles)
         XCTAssertFalse(trade.contains(#"Label("\(orphans.count) TP/SL on"#), "the leftover banner is a paragraph")
         XCTAssertTrue(trade.contains(#"Paragraph("\(orphans.count) TP/SL on \(market.asset) have no position to close."#))
         XCTAssertFalse(trade.contains(#"Label("TP/SL can't be verified right now"#))

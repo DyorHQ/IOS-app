@@ -127,13 +127,13 @@ final class RemoteFlagsTests: XCTestCase {
         for part in ["perplTrading.liveOutcomes = flags.perpsLiveOutcome", "perplTrading.apiActions = flags.perpsApiActions", "PerpsSwitchStore.save(flags)"] {
             XCTAssertTrue(body.contains(part), part)
         }
-        let app = try ["App/AppEnvironment.swift", "App/UpdateGate.swift", "App/RootView.swift", "Wallet/PerplTrading.swift", "Perps/PerpTradeView.swift"]
+        let app = try (["App/AppEnvironment.swift", "App/UpdateGate.swift", "App/RootView.swift"] + AppSource.perplTradingFiles + AppSource.perpTradeViewFiles)
             .map { try AppSource.app($0) }.joined(separator: "\n")
         XCTAssertEqual(app.components(separatedBy: "PerpsSwitchStore.save(").count - 1, 1, "saved only from a check that read the row")
 
         // The model starts from a launch argument (DEBUG only), else the last values read, else on; and a forced value
         // holds against the row in DEBUG.
-        let trading = try AppSource.app("Wallet/PerplTrading.swift")
+        let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         for part in ["@ObservationIgnored var liveOutcomes = PerplTrading.debugSwitch(\"perpsLiveOutcome\") ?? PerpsSwitchStore.last?.perpsLiveOutcome ?? RemoteFlags.on.perpsLiveOutcome {",
                      "didSet { if let forced = Self.debugSwitch(\"perpsLiveOutcome\"), liveOutcomes != forced { liveOutcomes = forced } }",
                      "@ObservationIgnored var apiActions = PerplTrading.debugSwitch(\"perpsApiActions\") ?? PerpsSwitchStore.last?.perpsApiActions ?? RemoteFlags.on.perpsApiActions {",
