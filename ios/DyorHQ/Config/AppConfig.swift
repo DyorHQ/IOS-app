@@ -11,14 +11,15 @@ struct AppConfig: Sendable {
     let rpcURLs: [URL]
     /// The primary endpoint (Settings display, Privy's embedded-wallet chain).
     var rpcURL: URL { rpcURLs[0] }
-    /// Apple / Google sign-in through Privy. Off unless `SocialLoginsEnabled=YES` in Secrets.xcconfig; the methods must
-    /// also be enabled in the Privy dashboard. When off, onboarding hides them so no one taps a disallowed method.
+    /// Apple / Google sign-in through Privy. Off unless `SOCIAL_LOGINS_ENABLED=YES` in Secrets.xcconfig, which
+    /// project.yml passes in as the Info.plist key `SocialLoginsEnabled`; the methods must also be enabled in the Privy
+    /// dashboard. When off, onboarding hides them so no one taps a disallowed method.
     let enableSocialLogins: Bool
-    /// Mera passkey accounts next to the other sign-in methods. Off unless `PasskeysEnabled=YES` in Secrets.xcconfig —
-    /// passkeys need Associated Domains on the App ID and the AASA served at `Mera.relyingParty` (owner steps), none
-    /// live yet, so the UI hides passkey options until then rather than offering a flow that can't complete.
+    /// Mera passkey accounts next to the other sign-in methods. Off unless `PASSKEYS_ENABLED=YES` in Secrets.xcconfig,
+    /// which project.yml passes in as the Info.plist key `PasskeysEnabled` — passkeys need Associated Domains on the App
+    /// ID and the AASA served at `Mera.relyingParty` (owner steps), none live yet, so the UI hides passkey options until
+    /// then rather than offering a flow that can't complete.
     let enablePasskeys: Bool
-    let perplBuilderID: Int
     /// The live launchpad: the v2 stack baked into DyorKit (`LaunchpadAddresses.monadMainnet`). The retired stacks come
     /// from DyorKit whatever this is.
     let launchpad: LaunchpadAddresses
@@ -37,7 +38,6 @@ struct AppConfig: Sendable {
     let auroraFeeRecipient: String?
 
     var hasPrivy: Bool { !privyAppID.isEmpty && !privyClientID.isEmpty }
-    var hasBridge: Bool { hasSupabase }
     /// Mera passkey accounts, one sign-in method among the others. The rpId is the constant `Mera.relyingParty`, so
     /// only the flag decides.
     var hasMera: Bool { enablePasskeys }
@@ -97,7 +97,6 @@ struct AppConfig: Sendable {
             rpcURLs: rpcURLs,
             enableSocialLogins: bool("SocialLoginsEnabled"),
             enablePasskeys: bool("PasskeysEnabled"),
-            perplBuilderID: Int(string("PerplBuilderID")) ?? 0,
             // The audited v2 stacks are baked into DyorKit (checked against contracts/deployments/143.json and
             // moments-143.json by its tests). In a Debug build, LAUNCHPAD_FACTORY / MOMENTS_FACTORY in Secrets.xcconfig
             // point it at another v2 deployment (a fork rehearsal), and then every module address comes from the xcconfig.

@@ -682,11 +682,7 @@ struct EmailPasswordView: View {
                         PasswordField(title: "Confirm password", text: $confirm, focused: $confirmFocused)
                     }
                 } footer: {
-                    if reset {
-                        if !password.isEmpty, !confirm.isEmpty, password != confirm {
-                            Text("Passwords don’t match.").foregroundStyle(Color.negative)
-                        }
-                    } else if mode == .logIn {
+                    if mode == .logIn && !reset {
                         VStack(alignment: .leading, spacing: 10) {
                             Paragraph("Log in with the email and password you signed up with. Your wallet is recreated on this device — no code needed.")
                             Button("Forgot password?") { beginReset() }.font(.footnote)
@@ -1084,7 +1080,7 @@ struct EmailPasswordView: View {
     private func runBind(replacing current: Address?) async {
         guard let verified, verified.isFresh else {
             self.verified = nil; conflict = nil
-            self.error = tr("Your email verification expired. Send a new code to continue.")
+            self.error = EmailAuthError.expiredMessage
             return
         }
         busy = true; error = nil
@@ -1108,7 +1104,7 @@ struct EmailPasswordView: View {
             await readConflictHoldings()
         } catch EmailAuthError.verificationExpired {
             self.verified = nil; conflict = nil
-            self.error = tr("Your email verification expired. Send a new code to continue.")
+            self.error = EmailAuthError.expiredMessage
         } catch {
             // A failed Replace Wallet is retried with its own button, which stays on screen.
             if !SupabaseError.isOutage(error) {
@@ -1255,9 +1251,13 @@ enum EmailAuthError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .bindFailed(let message): return message
-        case .verificationExpired: return tr("Your email verification expired. Send a new code to continue.")
+        case .verificationExpired: return Self.expiredMessage
         }
     }
+
+    /// What the email screen says when its verification is too old for the bind: refused as expired by `email-rebind`,
+    /// or older than `VerifiedEmail.isFresh` allows before the bind is sent. A new code is needed either way.
+    static var expiredMessage: String { tr("Your email verification expired. Send a new code to continue.") }
 }
 
 /// A password field with a reveal toggle — reveal matters here because a mistyped password derives a different

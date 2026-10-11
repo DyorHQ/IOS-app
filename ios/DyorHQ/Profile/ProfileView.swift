@@ -158,7 +158,7 @@ struct ProfileView: View {
                     }
                     .disabled(signingOut)
                 } footer: {
-                    Paragraph("DyorHQ \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") · \(SupportLinks.tagline) · Self-custodial.")
+                    Paragraph("DyorHQ \(AppInfo.version) · \(SupportLinks.tagline) · Self-custodial.")
                 }
             }
             .listStyle(.insetGrouped)

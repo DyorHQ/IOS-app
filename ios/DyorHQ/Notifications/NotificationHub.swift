@@ -65,7 +65,8 @@ struct AppNotification: Codable, Identifiable, Hashable {
 /// Per-wallet persistence of the notification center (UserDefaults; public text only).
 enum NotificationStore {
     private static func key(_ owner: Address?) -> String { "notifications.v1." + (owner?.hex.lowercased() ?? "none") }
-    private static let cap = 300
+    /// The most notifications a center keeps: the newest ones.
+    static let cap = 300
 
     static func all(owner: Address?) -> [AppNotification] {
         guard let data = UserDefaults.standard.data(forKey: key(owner)) else { return [] }
@@ -110,8 +111,7 @@ final class NotificationHub {
     func post(_ notification: AppNotification, deliver: Bool = true, owner account: Address? = nil) {
         if let account, account != owner {
             var list = NotificationStore.all(owner: account)
-            if let recent = list.first, recent.title == notification.title, recent.body == notification.body,
-               notification.time.timeIntervalSince(recent.time) < 8 { return }
+            if Self.isRepeat(notification, of: list.first) { return }
             list.insert(notification, at: 0)
             NotificationStore.save(list, owner: account, mirror: false)
             if deliver, Self.bannersEnabled { Self.deliverLocally(notification, account: account) }
@@ -120,14 +120,20 @@ final class NotificationHub {
         // Dedupe: a settled action recorded through two paths, or a retried transaction, can post twice. The activity
         // log already dedupes by tx hash, so the center must not double either — drop a repeat of the same
         // title+body that arrived within the last few seconds.
-        if let recent = items.first, recent.title == notification.title, recent.body == notification.body,
-           notification.time.timeIntervalSince(recent.time) < 8 { return }
+        if Self.isRepeat(notification, of: items.first) { return }
         items.insert(notification, at: 0)
-        if items.count > 300 { items = Array(items.prefix(300)) }
+        if items.count > NotificationStore.cap { items = Array(items.prefix(NotificationStore.cap)) }
         NotificationStore.save(items, owner: owner)
         // The system BANNER respects the in-app "Enable Notifications" toggle (Profile → Notifications), not just OS
         // permission — so turning notifications off silences banners while the center still logs every event.
         if deliver, Self.bannersEnabled { Self.deliverLocally(notification, account: owner) }
+    }
+
+    /// Whether `notification` repeats `recent`, the newest one in its center: the same title and body, with a time less
+    /// than 8 seconds after `recent`'s.
+    private static func isRepeat(_ notification: AppNotification, of recent: AppNotification?) -> Bool {
+        guard let recent else { return false }
+        return recent.title == notification.title && recent.body == notification.body && notification.time.timeIntervalSince(recent.time) < 8
     }
 
     /// The in-app notifications master toggle, persisted by AppSettings under this key (default on).

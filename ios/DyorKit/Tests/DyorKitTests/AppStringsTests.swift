@@ -18,7 +18,7 @@ final class AppStringsTests: XCTestCase {
     /// The Swift files of the folders, by their path under ios/DyorHQ.
     private static func sources() throws -> [(path: String, text: String)] {
         let all = try FormattedTextIsolationTests.appSources().filter { source in folders.contains { source.path.hasPrefix($0 + "/") } }
-        XCTAssertEqual(all.count, 30, "the folders' files")
+        XCTAssertEqual(all.count, 31, "the folders' files")
         return all
     }
 

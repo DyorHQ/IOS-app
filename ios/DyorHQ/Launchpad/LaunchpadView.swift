@@ -1086,10 +1086,15 @@ struct LaunchDetailView: View {
             .compactMap { label, value in URL(string: value).flatMap { ["https", "http"].contains($0.scheme?.lowercased() ?? "") && $0.host() != nil ? (label, $0) : nil } }
     }
 
+    /// The slippage a curve trade allows: the review's Minimum and the minimum the trade signs are 1% under the quote,
+    /// rounded down (`LaunchpadMath.minimumOut`).
+    private static let curveSlippageBps = 100
+
     @ViewBuilder private var confirmation: some View {
         if let address = session.address {
             if side == .buy, buysOpen, let q = buyQuote {
-                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { try await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: q.tokensOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; reloads += 1 }, onCompleted: { hash in
+                let minimum = q.minimumOut(slippageBps: Self.curveSlippageBps)
+                ConfirmationSheet(title: "Buy \(launch.symbol)", confirmTitle: "Buy", build: { try await env.launchpad.buyPlan(launch: launch, quoteIn: rawAmount, minTokensOut: minimum, recipient: address) }, onDone: { amountText = ""; reloads += 1 }, onCompleted: { hash in
                     // Bought here, so chosen here: never shown as Unverified, as a swap into a token isn't.
                     KnownTokenStore.add(token, owner: session.address)
                     KnownTokenStore.markChosen(launch.token, owner: session.address)
@@ -1100,16 +1105,17 @@ struct LaunchDetailView: View {
                 }, intent: .launchpadBuy(token: launch.token, pay: .init(token: launch.pairToken, amount: rawAmount), usd: pairUSD.map { Amount.units(rawAmount, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You pay", verbatim: "\(NumberStyle.units(rawAmount, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
                     DetailRow("You receive", verbatim: "\(NumberStyle.units(q.tokensOut, decimals: 18, compact: true)) \(launch.symbol)")
-                    DetailRow("Minimum", "\(NumberStyle.units(q.tokensOut * 99 / 100, decimals: 18, compact: true)) \(launch.symbol) (1% slippage)")
+                    DetailRow("Minimum", "\(NumberStyle.units(minimum, decimals: 18, compact: true)) \(launch.symbol) (1% slippage)")
                 }
             } else if side == .sell, let q = sellQuote {
-                ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: q.quoteOut * 99 / 100, recipient: address) }, onDone: { amountText = ""; reloads += 1 }, onCompleted: { hash in
+                let minimum = q.minimumOut(slippageBps: Self.curveSlippageBps)
+                ConfirmationSheet(title: "Sell \(launch.symbol)", confirmTitle: "Sell", build: { await env.launchpad.sellPlan(launch: launch, tokensIn: rawAmount, minQuoteOut: minimum, recipient: address) }, onDone: { amountText = ""; reloads += 1 }, onCompleted: { hash in
                     Activity.record(ActivityRecord(kind: .sell, title: tr("Sold \(launch.symbol)"), subtitle: tr("\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol) for \(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals, compact: true)) \(launch.pair.symbol)"), hash: hash, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 }), owner: session.address)
                     env.history.kick(env: env)
                 }, intent: .launchpadSell(token: launch.token, amount: rawAmount, usd: pairUSD.map { Amount.units(q.quoteOut, decimals: launch.pair.decimals) * $0 })) {
                     DetailRow("You sell", verbatim: "\(NumberStyle.units(rawAmount, decimals: 18, compact: true)) \(launch.symbol)")
                     DetailRow("You receive", verbatim: "\(NumberStyle.units(q.quoteOut, decimals: launch.pair.decimals)) \(launch.pair.symbol)")
-                    DetailRow("Minimum", "\(NumberStyle.units(q.quoteOut * 99 / 100, decimals: launch.pair.decimals)) \(launch.pair.symbol) (1% slippage)")
+                    DetailRow("Minimum", "\(NumberStyle.units(minimum, decimals: launch.pair.decimals)) \(launch.pair.symbol) (1% slippage)")
                 }
             }
         }

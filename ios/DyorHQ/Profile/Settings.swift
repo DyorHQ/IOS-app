@@ -72,7 +72,7 @@ struct ManageWalletsView: View {
             }
             Section("Network") {
                 LabeledContent("Chain", value: tr("Monad mainnet"))
-                LabeledContent("Chain ID", value: "143")
+                LabeledContent("Chain ID", value: String(Monad.chainId))
                 LabeledContent("RPC", value: env.config.rpcURL.host() ?? "—")
             }
         }

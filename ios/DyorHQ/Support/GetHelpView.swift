@@ -22,10 +22,8 @@ enum SupportLinks {
     /// A mail link with the subject and the app / device details support asks for. The subject and the details are for
     /// the support team and stay in English; the body is the user's to write, so its prompts are in the app's language.
     static func mail(subject: String, body: String = "") -> URL? {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
         // not localized: for the support team
-        let details = "\n\n—\nDyorHQ iOS \(version) (\(build)) · iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)"
+        let details = "\n\n—\nDyorHQ iOS \(AppInfo.version) (\(AppInfo.build)) · iOS \(UIDevice.current.systemVersion) · \(UIDevice.current.model)"
         var components = URLComponents()
         components.scheme = "mailto"
         components.path = supportEmail

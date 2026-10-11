@@ -125,8 +125,7 @@ final class AppEnvironment {
         let isFork = host == "127.0.0.1" || host == "localhost"
         chainStore = isFork ? ChainStore(directory: nil) : ChainStore.applicationSupport()
         // A saved screen is shown only by the build that saved it (its version and build number).
-        let info = Bundle.main.infoDictionary
-        let build = "\(info?["CFBundleShortVersionString"] as? String ?? "")-\(info?["CFBundleVersion"] as? String ?? "")"
+        let build = "\(AppInfo.version)-\(AppInfo.build)"
         savedScreens = isFork ? SavedScreens(directory: nil, build: build) : SavedScreens.applicationSupport(build: build)
         // History reads go across the public endpoints, in ranges each answers, through one gate (`LogsRouter`): one
         // client for every reader. A local fork keeps its own logs, so a development build pointed at 127.0.0.1 scans the

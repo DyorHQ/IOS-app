@@ -59,17 +59,9 @@ final class SocialSession {
         boundWallet = target
 
         // Full wallet sign-out: the stored token goes now, the sign-out time is recorded on the still-authed session,
-        // then that session (only that one) ends.
+        // then that session (only that one) ends. `previous` is a wallet here: the guard above returns when both are nil.
         if target == nil {
-            let token = adoptedToken, rowId = currentSessionRowId
-            state = .signedOut; profile = nil; error = nil
-            cancelExpiry()
-            adoptedToken = nil; currentSessionRowId = nil
-            if previous != nil { SupabaseSessionStore.clear() }
-            Task {
-                if let previous { await closeSession(wallet: previous, id: rowId) }
-                if let token { await client.signOut(ifAccessToken: token) }
-            }
+            endSession(wallet: previous)
             return
         }
 
@@ -231,10 +223,19 @@ final class SocialSession {
     /// Full sign-out: the stored token is cleared at once, the sign-out time is recorded on the still-authed session,
     /// then that session ends — only that one, so a sign-in that finishes meanwhile keeps its session (RS-6).
     func signOut() {
-        let wallet = boundWallet, token = adoptedToken, rowId = currentSessionRowId
+        let wallet = boundWallet
+        boundWallet = nil
+        endSession(wallet: wallet)
+    }
+
+    /// The sign-out `signOut` and `bind(address: nil)` share, once `boundWallet` is cleared: `wallet` is the wallet it
+    /// was bound to. The state and the stored token are cleared at once; then the sign-out time is recorded on the
+    /// still-authed session and that session ends — only the one this object adopted (RS-6).
+    private func endSession(wallet: String?) {
+        let token = adoptedToken, rowId = currentSessionRowId
         state = .signedOut; profile = nil; error = nil
         cancelExpiry()
-        boundWallet = nil; adoptedToken = nil; currentSessionRowId = nil
+        adoptedToken = nil; currentSessionRowId = nil
         SupabaseSessionStore.clear()
         Task {
             if let wallet { await closeSession(wallet: wallet, id: rowId) } // on the still-authed session
@@ -271,15 +272,10 @@ final class SocialSession {
     private func closeSession(wallet: String, id: String?) async {
         guard let id = id ?? UserDefaults.standard.string(forKey: Self.sessionKey(wallet)) else { return }
         struct Row: Encodable { let id: String; let wallet: String; let signed_out_at: String }
-        let _: SessionRow? = try? await client.upsert("sessions", Row(id: id, wallet: wallet, signed_out_at: Self.iso(Date())), onConflict: "id")
+        let _: SessionRow? = try? await client.upsert("sessions", Row(id: id, wallet: wallet, signed_out_at: BackendTimestamp.string(Date())), onConflict: "id")
         // Only this row's record: a sign-in since may have opened (and persisted) a newer one.
         if UserDefaults.standard.string(forKey: Self.sessionKey(wallet)) == id { UserDefaults.standard.removeObject(forKey: Self.sessionKey(wallet)) }
     }
-
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
-    }()
-    private static func iso(_ date: Date) -> String { isoFormatter.string(from: date) }
 
     func loadProfile() async {
         guard let wallet = await client.signedInWallet else { return }

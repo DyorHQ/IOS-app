@@ -79,7 +79,7 @@ final class BackendSync {
     private static func row(_ record: ActivityRecord, owner: Address) -> ActivityRow {
         ActivityRow(id: stableID(record).uuidString.lowercased(), wallet: owner.checksummed.lowercased(), kind: record.kind.rawValue,
                     section: record.section ?? "wallet", title: String(record.title.prefix(120)), subtitle: String(record.subtitle.prefix(300)),
-                    tx_hash: record.txHashHex?.lowercased(), usd: record.usd, fee_usd: record.feeUsd, occurred_at: iso(record.time))
+                    tx_hash: record.txHashHex?.lowercased(), usd: record.usd, fee_usd: record.feeUsd, occurred_at: BackendTimestamp.string(record.time))
     }
 
     /// The same settled transaction always maps to the same row, so re-recording it can never double a row. The row
@@ -136,7 +136,7 @@ final class BackendSync {
 
     private func uploadNotifications(_ items: [AppNotification], owner: Address, delay: Double) {
         let wallet = owner.checksummed.lowercased()
-        let rows = items.prefix(200).map { NotificationRow(wallet: wallet, id: $0.id.uuidString.lowercased(), kind: $0.kind.rawValue, title: $0.title, body: $0.body, read: $0.read, data: $0, created_at: Self.iso($0.time)) }
+        let rows = items.prefix(200).map { NotificationRow(wallet: wallet, id: $0.id.uuidString.lowercased(), kind: $0.kind.rawValue, title: $0.title, body: $0.body, read: $0.read, data: $0, created_at: BackendTimestamp.string($0.time)) }
         schedule(.notifications, owner: owner, delay: delay) { [social] in
             if rows.isEmpty {
                 try await social.client.delete("notifications", query: [URLQueryItem(name: "wallet", value: "eq.\(wallet)")])
@@ -188,7 +188,7 @@ final class BackendSync {
         let wallet = owner.checksummed.lowercased()
         let data = settings.snapshot.compactMapValues(JSONValue.init(any:))
         schedule(.settings, owner: owner, delay: delay) { [social] in
-            try await social.client.upsertRows("user_settings", [SettingsRow(wallet: wallet, data: data, updated_at: Self.iso(Date()))], onConflict: "wallet")
+            try await social.client.upsertRows("user_settings", [SettingsRow(wallet: wallet, data: data, updated_at: BackendTimestamp.string(Date()))], onConflict: "wallet")
         }
     }
 
@@ -346,9 +346,16 @@ final class BackendSync {
         guard dirty ? set.insert(store).inserted : set.remove(store) != nil else { return }
         UserDefaults.standard.set(set.map(\.rawValue).sorted(), forKey: dirtyKey(owner))
     }
+}
 
-    private static let isoFormatter: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
-    private static func iso(_ date: Date) -> String { isoFormatter.string(from: date) }
+/// How the app writes a time into the backend's timestamp columns (`BackendSync`'s rows, `SocialSession`'s sign-out
+/// time): ISO 8601 with fractional seconds.
+enum BackendTimestamp {
+    private static let formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+
+    static func string(_ date: Date) -> String { formatter.string(from: date) }
 }
 
 /// A JSON scalar/collection for `jsonb` columns without a fixed schema (the settings snapshot).
