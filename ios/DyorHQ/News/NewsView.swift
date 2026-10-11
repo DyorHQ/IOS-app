@@ -20,11 +20,11 @@ struct NewsView: View {
         NavigationStack {
             Group {
                 // The full-screen spinner is for the first load only. Once the list is on screen it stays there while a
-                // refresh runs: swapping out the list a pull started would cancel that pull's reload (UI-6).
+                // refresh runs: swapping out the list a pull started would cancel that pull's reload.
                 if model.articles.isEmpty, model.loading, model.error == nil {
                     ProgressView("Loading headlines…").controlSize(.large)
                 } else {
-                    // A list even when empty, so the empty state can be pulled to refresh as it says (UI-6).
+                    // A list even when empty, so the empty state can be pulled to refresh as it says.
                     List {
                         if model.articles.isEmpty {
                             ContentUnavailableView {

@@ -60,7 +60,7 @@ public actor NewsService {
     /// The latest headlines across every source, newest first. Feeds are fetched concurrently; one failing feed
     /// never hides the others. Each feed's answer is kept for two minutes and only the others are asked again: a feed
     /// that failed (or a cancellation cut short) is never kept, so it is asked on the next call instead of its gap being
-    /// served as fresh (security audit 2026-09-26, RS-10), and a feed that keeps failing — one behind bot protection
+    /// served as fresh, and a feed that keeps failing — one behind bot protection
     /// answering 403 — costs its own request, not a refetch of every feed.
     public func latest(limit: Int = 120, force: Bool = false) async -> [NewsArticle] {
         let asked = now()

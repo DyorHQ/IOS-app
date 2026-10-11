@@ -1,7 +1,7 @@
 import Foundation
 
-/// Runs at most `limit` operations at once; the rest wait their turn, first come first served (security audit
-/// 2026-09-26, RI-5: a screen full of hostile images must not download and decode all of them at the same time). A
+/// Runs at most `limit` operations at once; the rest wait their turn, first come first served (a screen
+/// full of hostile images must not download and decode all of them at the same time). A
 /// waiter whose task is cancelled leaves the queue at once and throws `CancellationError`.
 public actor AsyncLimiter {
     public let limit: Int

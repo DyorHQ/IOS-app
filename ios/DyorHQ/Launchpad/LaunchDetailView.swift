@@ -335,7 +335,7 @@ struct LaunchDetailView: View {
         }
     }
 
-    /// Why the trade can't go ahead on this balance (UI-4): the amount is more than the wallet holds. Nil while the
+    /// Why the trade can't go ahead on this balance: the amount is more than the wallet holds. Nil while the
     /// balance is unknown; the network still refuses what the wallet can't pay.
     private var shortfall: String? {
         guard let account, rawAmount > 0 else { return nil }
@@ -379,7 +379,7 @@ struct LaunchDetailView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 if launch.phase == .graduated {
-                    // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes (GP-6).
+                    // As MemeHook and MondayFeeVault pay them, and as the docs' FAQ describes.
                     Paragraph(launch.graduationVenue == .monday
                          ? "The curve's liquidity is permanently locked in a Monday Trade pool — trades now route through the Swap screen. The pool's 1% swap fee is harvested to a DyorHQ fees wallet; it isn't paid to holders or the creator, and there is no creator tax on the pool."
                          : "The curve's liquidity is permanently locked in a Uniswap v4 pool — trades now route through the Swap screen. Each swap pays the pool fee plus the creator tax to the DyorHQ hook: part of the pool fee goes to DyorHQ, and the rest, with the creator tax, to the creator, or to holders when fee sharing is on. \(v4FeeTiming)")

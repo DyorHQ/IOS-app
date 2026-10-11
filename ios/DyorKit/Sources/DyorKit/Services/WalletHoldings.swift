@@ -10,7 +10,7 @@ public struct HeldToken: Hashable, Sendable, Identifiable {
     /// USD per whole token; nil when no pool prices it.
     public let usd: Double?
     /// Reached the wallet without being chosen in the app (sent, airdropped): its name and symbol prove nothing, so it
-    /// is marked Unverified wherever it is listed (security audit 2026-09-26, IOST-12).
+    /// is marked Unverified wherever it is listed.
     public let unverified: Bool
 
     public init(token: Token, balance: BigUInt, usd: Double?, unverified: Bool = false) {

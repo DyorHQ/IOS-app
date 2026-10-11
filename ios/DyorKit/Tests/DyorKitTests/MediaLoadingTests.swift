@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// Remote images load a few at a time (security audit 2026-09-26, RI-5). A load every viewer left is cancelled unless a
+/// Remote images load a few at a time. A load every viewer left is cancelled unless a
 /// trusted download is under way: `ImagePipelineTests`.
 final class MediaLoadingTests: XCTestCase {
     private final class Gauge: @unchecked Sendable {

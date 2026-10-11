@@ -15,7 +15,7 @@ final class LaunchpadModel {
     private(set) var pairUSD: [Address: Double] = [:]
     /// The retired launchpads' sell-only coins the signed-in wallet holds, which the board doesn't list: its "Your
     /// Sell-Only Coins" (`LaunchBoard.heldSellOnly`). Cleared on an account change; a read that failed, of a factory
-    /// or a balance, keeps it (RS-10: a held coin never drops from the section unsaid).
+    /// or a balance, keeps it (a held coin never drops from the section unsaid).
     private(set) var heldSellOnly: [Launch] = []
     /// When `heldSellOnly` was read, while it is what was saved for the wallet when the board was last read in full
     /// (`restoreSaved`); nil once a read of the wallet's sell-only coins landed in this session. Apart from `savedAt`: the
@@ -56,7 +56,7 @@ final class LaunchpadModel {
     /// (`restoreSaved`). So the tab opens on the coins it last showed rather than on a spinner until its first read's
     /// task starts.
     func showSaved(env: AppEnvironment, account: Address?) {
-        // Another account: none of the previous one's coins may stay on screen, even when a read below fails (RS-10), nor
+        // Another account: none of the previous one's coins may stay on screen, even when a read below fails, nor
         // its terms (`protocolInfo` carries whether that account may launch), which a failed read would otherwise keep.
         if account != loadedFor {
             heldSellOnly = []
@@ -130,7 +130,7 @@ final class LaunchpadModel {
     /// account or such a coin, and nil when a balance couldn't be read.
     private static func heldSellOnly(env: AppEnvironment, account: Address?, listing: LaunchListing) async -> [Launch]? {
         // A factory that couldn't be read left its coins out of the listing: nothing can be decided from the rest, or a
-        // held coin of a retired stack that failed would drop from the section (RS-10).
+        // held coin of a retired stack that failed would drop from the section.
         guard listing.complete else { return nil }
         let sellOnly = listing.launches.filter { !$0.listsOnBoard }
         guard let account, !sellOnly.isEmpty else { return [] }

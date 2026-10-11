@@ -774,7 +774,7 @@ final class LaunchpadTests: XCTestCase {
         } catch { XCTAssertEqual(error as? LaunchpadError, .notDeployed) }
     }
 
-    /// A launch carries the terms hash read with the terms the screen showed (IOST-2): one that changed since is refused
+    /// A launch carries the terms hash read with the terms the screen showed: one that changed since is refused
     /// before anything is signed, and one that didn't is what the launch carries.
     func testLaunchTermsAreBoundToWhatWasShown() throws {
         let shown = Data(repeating: 0xaa, count: 32)

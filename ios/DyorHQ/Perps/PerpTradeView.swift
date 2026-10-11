@@ -23,7 +23,7 @@ struct PerpTradeView: View {
     @State private var candles: [PerpCandle] = []
     @State private var resolution = 3600
     @State private var loadingCandles = true
-    /// The timeframe `candles` belong to: another timeframe's candles are never shown under this one's name (RS-10).
+    /// The timeframe `candles` belong to: another timeframe's candles are never shown under this one's name.
     @State private var candlesResolution: Int?
     /// The last candle read failed: the chart says so rather than "no history".
     @State private var candlesFailed = false
@@ -45,7 +45,7 @@ struct PerpTradeView: View {
     /// Which path the open order confirmation uses, fixed when Long/Short is tapped: non-nil is the one-click
     /// (keeper-forwarded) path for that Perpl account, nil the on-chain path. The socket's status changes in the
     /// background (keep-alive, reconnects, drops), and re-deciding inside the sheet would swap a sheet with an order in
-    /// flight for a fresh one with an enabled button — a second order (security audit 2026-09-26).
+    /// flight for a fresh one with an enabled button — a second order.
     @State private var authedOrderAccount: Int?
     /// The order as it stood when Review was tapped: the review renders it and the plan signs it, so a mark that moves
     /// under an open review (a USD-sized order re-derives its size from the price) can't change one without the other.
@@ -197,7 +197,7 @@ struct PerpTradeView: View {
         }
         .onChange(of: ticket.tpslEnabled) { _, on in
             guard on else { return }
-            // TP/SL and Reduce Only exclude each other (security audit GT-6): a reduce-only order's triggers would close
+            // TP/SL and Reduce Only exclude each other: a reduce-only order's triggers would close
             // the side the account doesn't hold.
             ticket.reduceOnly = false
             Task { await perplTrading.ensureConnected() }
@@ -365,7 +365,7 @@ struct PerpTradeView: View {
             TradingViewChart(candles: shownCandles, levels: chartLevels)
                 .frame(height: 300)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                // The chart is a canvas in a web view: VoiceOver gets a spoken summary instead (security audit AI-10).
+                // The chart is a canvas in a web view: VoiceOver gets a spoken summary instead.
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(market.asset) price chart")
                 .accessibilityValue(chartSummary)
@@ -586,7 +586,7 @@ struct PerpTradeView: View {
 
             // Summary
             VStack(spacing: 8) {
-                // Named in words, not told apart by green and red alone (security audit AI-3): the side isn't chosen
+                // Named in words, not told apart by green and red alone: the side isn't chosen
                 // until Long or Short is tapped, so both are shown.
                 summaryRow("Liq. if long", liquidationLong.map { NumberStyle.number($0) } ?? liquidationFallback, tint: liquidationLong == nil ? nil : .positive)
                 summaryRow("Liq. if short", liquidationShort.map { NumberStyle.number($0) } ?? liquidationFallback, tint: liquidationShort == nil ? nil : .negative)
@@ -772,12 +772,11 @@ struct PerpTradeView: View {
 
     /// A take-profit must sit on the profit side of the entry and a stop-loss on the loss side for the chosen
     /// direction. A wrong-sided trigger is what the keeper rejects or fires instantly, which would leave the position
-    /// unprotected — so block it before placing (and before recording it as if it were live). Also refused (security
-    /// audit GT-7, GT-8): a price that isn't a number (it would silently be left off), zero or below one tick (sent as
+    /// unprotected — so block it before placing (and before recording it as if it were live). Also refused: a price that isn't a number (it would silently be left off), zero or below one tick (sent as
     /// `tp: 0`, a close that fires at once), off the market's tick, and a stop-loss at or beyond the liquidation price.
     private func triggerProblem(side: PositionSide) -> String? {
         guard ticket.effectiveTPSL else { return nil }
-        // An order that only shrinks the position on the other side opens nothing for its triggers to close (GT-6).
+        // An order that only shrinks the position on the other side opens nothing for its triggers to close.
         let wantsTriggers = [ticket.takeProfitText, ticket.stopLossText].contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         if wantsTriggers, let position, PerplTriggerRules.onlyReduces(side: side, size: baseSize, positionSide: position.side, positionSize: position.size) {
             return PerplTriggerRules.Problem.reducesPosition(position.side).message(market: market)
@@ -888,7 +887,7 @@ struct PerpTradeView: View {
         .accessibilityAddTraits(active ? .isSelected : [])
     }
 
-    /// Says when the TP/SL list can't be verified (security audit GT-3): the trading stream isn't live, so rows are
+    /// Says when the TP/SL list can't be verified: the trading stream isn't live, so rows are
     /// the last list Perpl sent or this device's own record, and triggers set elsewhere don't show — or it is live but a
     /// heartbeat gap means some of Perpl's updates may have been missed (I10).
     @ViewBuilder private func ordersFreshnessBanner(rows: [TriggerRow]) -> some View {
@@ -909,7 +908,7 @@ struct PerpTradeView: View {
             .background(Color.attention.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    /// TP/SL left on this market with no position to close (security audit GT-2): left armed, they would fire on the
+    /// TP/SL left on this market with no position to close: left armed, they would fire on the
     /// next position on that side. Offered for cancelling in one tap (the app cancels them itself for a key account
     /// once it sees the position close; a passkey account's cancel needs Face ID, so it lands here). Never those a
     /// cancel is already on its way for, or that the automatic clean-up is about to cancel: a tap would send a second.
@@ -962,7 +961,7 @@ struct PerpTradeView: View {
         }
     }
 
-    /// A fired or failed TP/SL, or a liquidation, reported by the trading stream (security audit GT-9) — shown here as
+    /// A fired or failed TP/SL, or a liquidation, reported by the trading stream — shown here as
     /// well as in notifications, until dismissed.
     @ViewBuilder private var protectionBanner: some View {
         if let notice = perplTrading.protectionNotice {
@@ -1109,7 +1108,7 @@ struct PerpTradeView: View {
             Task { await model.load(env: env, address: session.address) }
         }, onCompleted: { hash in
             if let reviewCloses { model.noteUserClose(market.id, closing: reviewCloses) }
-            // At the receipt (GL-3): its row says it was sent and its result isn't read yet (no volume until a fill is), and
+            // At the receipt: its row says it was sent and its result isn't read yet (no volume until a fill is), and
             // it is followed until its receipt is read, even if the app is killed first.
             let id = onChainOrder ?? UUID()
             onChainOrder = id
@@ -1132,7 +1131,7 @@ struct PerpTradeView: View {
             } else {
                 DetailRow("Type", ticket.kind == .market ? "Market · \(NumberStyle.basisPoints(ticket.slippageBps)) slippage" : "Limit at \(NumberStyle.number(signed.price ?? mark, maximumFractionDigits: market.priceDecimals))")
             }
-            // The parsed values this order signs, not the typed text (audit F4), at the market's full precision.
+            // The parsed values this order signs, not the typed text, at the market's full precision.
             DetailRow("Size", verbatim: "\(NumberStyle.number(signed.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
             DetailRow("Leverage", verbatim: "\(NumberStyle.number(ticket.leverage, maximumFractionDigits: 1))×")
             DetailRow("Margin", PriceFormat.usdValue(notional / max(ticket.leverage, 1)))
@@ -1217,7 +1216,7 @@ struct PerpTradeView: View {
     /// briefly after placement, or while the trading socket is offline — the app's local echo for a kind the
     /// authoritative feed hasn't reflected yet. Once the feed confirms a trigger, the echo for that kind drops out.
     /// "Live" means the stream is signed in and has sent its snapshot (one-click on or not); otherwise every row says it
-    /// can't be verified (security audit GT-3).
+    /// can't be verified.
     private func triggerRows(for market: PerpMarket) -> [TriggerRow] {
         let priceScale = pow(10.0, Double(market.priceDecimals))
         let sizeScale = pow(10.0, Double(market.lotDecimals))
@@ -1245,7 +1244,7 @@ struct PerpTradeView: View {
         return perplTrading.openOrders.filter { $0.marketId == market.id && $0.isTrigger && $0.isReduceOnly && $0.protectsLong == (position.side == .long) }
     }
 
-    /// This market's TP/SL with no position left to close (security audit GT-2).
+    /// This market's TP/SL with no position left to close.
     private var orphanedTriggers: [PerplOpenOrder] {
         perplTrading.orphanedTriggers(onChainPositions: model.positions, onChainOrders: model.orders).filter { $0.marketId == market.id }
     }
@@ -1260,7 +1259,7 @@ struct PerpTradeView: View {
         perplTrading.orphansBeingCancelled(onChainPositions: model.positions, onChainOrders: model.orders).filter { $0.marketId == market.id }
     }
 
-    /// Leftover TP/SL on this side of the market (security audit GT-2) would act on the position this order opens: a
+    /// Leftover TP/SL on this side of the market would act on the position this order opens: a
     /// stop-loss left from an earlier position can fire the moment it exists. They are cancelled first. Checked again
     /// where the order is sent: `PerplTrading.submitBracket` for a one-click order, `checkedOrderPlan` on-chain.
     private func leftoverTriggerProblem(side: PositionSide) -> String? {
@@ -1269,7 +1268,7 @@ struct PerpTradeView: View {
         return PerplTrading.leftoverMessage(count: leftovers.count, asset: market.asset, side: side)
     }
 
-    /// The on-chain order's plan, once the leftover TP/SL check has run on Perpl's live lists (GT-2). The stream is
+    /// The on-chain order's plan, once the leftover TP/SL check has run on Perpl's live lists. The stream is
     /// brought up first when it can be without a prompt; a passkey account's stays down until its session opens, and
     /// the review says the check couldn't run (`leftoversUnchecked`).
     private func checkedOrderPlan() async throws -> [TransactionStep] {
@@ -1292,7 +1291,7 @@ struct PerpTradeView: View {
     }
     private var sideColor: Color { ticket.side == .long ? .positive : .negative }
 
-    /// For an order that turns the position around (GT-6): what its triggers act on, in the app's language. The order is
+    /// For an order that turns the position around: what its triggers act on, in the app's language. The order is
     /// on the other side of the position, so a long turns into a short or a short into a long.
     private var turnaroundNote: String? {
         guard wantsTriggers, let position, let residual = invertedSize(side: ticket.side) else { return nil }
@@ -1309,7 +1308,7 @@ struct PerpTradeView: View {
     private var tpslStatus: (text: String, warning: Bool) {
         switch perplTrading.status {
         case .connected:
-            // Sized to this order, and they stay that size (security audit GT-5): say so, rather than "linked to this
+            // Sized to this order, and they stay that size: say so, rather than "linked to this
             // position", and point at the position's own TP/SL for the whole of it.
             let size = "\(NumberStyle.number(baseSize)) \(market.asset)"
             if let position {
@@ -1410,9 +1409,9 @@ struct PerpTradeView: View {
         let margin = notional / max(ticket.leverage, 1)
         return PerplService.liquidationPrice(side: .short, entry: refPrice, size: baseSize, margin: margin, premium: 0, maintenanceFraction: market.maintMarginFraction)
     }
-    /// The liquidation price the position will have after this order, to check a stop-loss against (security audit
-    /// GT-8): the order's own when it opens a position, the combined one when it adds to a position on the same side,
-    /// and the new side's when it turns a position around (GT-6: its triggers act on what is left on that side).
+    /// The liquidation price the position will have after this order, to check a stop-loss against:
+    /// the order's own when it opens a position, the combined one when it adds to a position on the same side,
+    /// and the new side's when it turns a position around (its triggers act on what is left on that side).
     private func projectedLiquidation(side: PositionSide) -> Double? {
         guard baseSize > 0, refPrice > 0 else { return nil }
         let margin = notional / max(ticket.leverage, 1)
@@ -1541,7 +1540,7 @@ struct PerpTradeView: View {
     }
 
     /// Reads the current timeframe's candles. The answer only counts for the timeframe it was asked for; a failed read
-    /// keeps that timeframe's last candles (marked not updating) but never another timeframe's (RS-10).
+    /// keeps that timeframe's last candles (marked not updating) but never another timeframe's.
     private func loadCandles(showSpinner: Bool = true) async {
         let requested = resolution
         if showSpinner { loadingCandles = true }

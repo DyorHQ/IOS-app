@@ -281,7 +281,7 @@ final class PerplTriggerTests: XCTestCase {
         XCTAssertEqual(PerplTriggerCleanup.siblings(of: closed, orders: [firing, longSL], positions: []).map(\.oid), [1])
     }
 
-    // MARK: Security audit review (GT-1, GT-2, GT-3, GT-6, GT-9)
+    // MARK: Security audit review
 
     func testRestingEntryExemptsOnlyItsOwnSide() {
         let longSL = order(oid: 1, type: 3)                              // CloseLong stop on BTC, no BTC long open

@@ -326,7 +326,7 @@ public struct MomentPolicy: Sendable, Hashable {
 /// anyone can apply it (`applyPolicy` is permissionless) at any moment, also between a creator's review and their
 /// publish landing. On v2 the publish carries the hash of the reviewed terms, so it is then refused (`TermsChanged`)
 /// and the creator reviews again: the terms never change silently. A v2 proposal nobody applied within
-/// `MomentsConstants.policyApplyWindowSeconds` lapses (security audit 2026-09-26, MO-4).
+/// `MomentsConstants.policyApplyWindowSeconds` lapses.
 public struct PendingMomentPolicy: Sendable, Hashable {
     public let threshold: BigUInt
     public let minPrice: BigUInt

@@ -14,7 +14,7 @@ enum WalletTokens {
         /// The tokens held (balance above zero), in universe order. Never an NFT collection.
         let tokens: [Token]
         let balances: [Address: BigUInt]
-        /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12),
+        /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified,
         /// except the DyorHQ coins that turn out to be its own (`ranked`).
         let unverified: Set<Address>
         /// False when part of the wallet's history (`WalletTokenDiscovery.Scan`) or of its balances couldn't be read: a
@@ -141,7 +141,7 @@ enum WalletTokens {
     /// it deployed, a Moment it collected or created) — as chosen, so no list marks them Unverified. The one way every
     /// screen does it: the Portfolio and the Send sheet from the launchpads' and cohorts' records (`ranked`), Home from the
     /// coins the registry says the wallet made (`DyorCoinsModel.created`). A coin the wallet was only sent is never in
-    /// `own`, and stays Unverified (IOST-12).
+    /// `own`, and stays Unverified.
     static func markOwnCoins(_ own: Set<Address>, among tokens: [Token], owner: Address) {
         for token in tokens where own.contains(token.address) {
             KnownTokenStore.add(token, owner: owner)

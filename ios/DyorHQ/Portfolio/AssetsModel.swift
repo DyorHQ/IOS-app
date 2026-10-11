@@ -11,7 +11,7 @@ final class AssetsModel {
     typealias TokenAsset = HeldToken
 
     private(set) var tokens: [TokenAsset] = []
-    /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified (IOST-12).
+    /// Tokens the wallet was sent rather than chose in the app — found in its history — shown as Unverified.
     private(set) var unverified: Set<Address> = []
     /// The NFTs the wallet holds, newest received first (`WalletNFTDiscovery.held`), from the transfers into it that its
     /// history store holds — the scan its tokens are found in, no scan of their own.

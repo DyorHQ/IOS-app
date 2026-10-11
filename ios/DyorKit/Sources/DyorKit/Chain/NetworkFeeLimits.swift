@@ -1,7 +1,7 @@
 import BigInt
 import Foundation
 
-/// The most network fee a transaction may commit to, whatever wallet signs it (security audit 2026-09-26, IOST-1).
+/// The most network fee a transaction may commit to, whatever wallet signs it.
 /// The gas limit, the base fee and the tip all come from the RPC, and Monad bills the gas LIMIT, so a buggy or hostile
 /// node could otherwise have even a plain transfer commit the balance to gas. `TransactionSender.prepare` refuses —
 /// never clamps — a transaction outside these bounds, for the Privy wallet, an imported key and a passkey account

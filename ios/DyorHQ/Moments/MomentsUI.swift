@@ -50,7 +50,7 @@ struct MomentArtwork: View {
     /// Where to look for a Moment's image, best first, through `ImageSourcePolicy` (`momentSources`), as a Moment coin's
     /// icon loads it: only DyorHQ's `launch-media` bucket and the fixed IPFS gateways, never a host the creator chose
     /// (another https link shows the placeholder). The Supabase mirror derived from the creator + media hash is a
-    /// DyorHQ-hosted object, so it is never shown on trust (security audit 2026-09-26, PR-2):
+    /// DyorHQ-hosted object, so it is never shown on trust:
     /// - a photo Moment's provenance hash is the keccak-256 of the very JPEG in the mirror, so the mirror goes first (it
     ///   is fast and DyorHQ-run) but its bytes count only while they still match that hash — and the cache keys the
     ///   picture by its sources with that hash, so what a hash-checked list kept never answers for one without it;

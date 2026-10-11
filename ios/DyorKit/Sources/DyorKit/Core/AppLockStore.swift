@@ -8,8 +8,8 @@ public enum AppLockStore {
     public static let key = "settings.biometrics"
 
     /// The prefixes of the UserDefaults keys an earlier run of the app writes. A store holding a key with one of them
-    /// is an install from before App Lock's default, which keeps the OFF it has always had (security audit 2026-09-26,
-    /// IOSK-4); a new install starts ON where the device can verify its owner (`AppSettings.appLockDefault`). So a key
+    /// is an install from before App Lock's default, which keeps the OFF it has always had; a new
+    /// install starts ON where the device can verify its owner (`AppSettings.appLockDefault`). So a key
     /// written on a first launch before that decision must never start with one of them (rule R4).
     public static let earlierRunPrefixes = ["settings.", "session.", "mera.", "localWallet.", "venueTokens.", "activityLog.",
                                             "notifications.", "knownTokens.", "priceAlerts.", "bridge.", "perp."]
@@ -24,7 +24,7 @@ public enum AppLockStore {
     /// ON where the device can verify its owner, OFF where it can't (App Lock fails closed there, and would block every
     /// signature). A launch decides App Lock only where nothing is saved, and takes a store holding what an earlier run
     /// writes (`session.`, `mera.`, `localWallet.`, `settings.`…: `isEarlierInstall`) for an install from before App
-    /// Lock's default, which stays OFF (security audit 2026-09-26, IOSK-4). The next sign-in in this process writes
+    /// Lock's default, which stays OFF. The next sign-in in this process writes
     /// those keys, so without this save the next launch would start App Lock OFF. Returns what was saved, for the
     /// setting in memory.
     @discardableResult

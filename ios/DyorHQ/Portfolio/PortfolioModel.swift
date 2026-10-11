@@ -85,7 +85,7 @@ final class PortfolioModel {
     private(set) var perpsNote: String?
     private(set) var loadedFor: Address?
     /// The wallet the latest load is for. A load started for another (a refresh or a reload that outlived an account
-    /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back (RS-10).
+    /// switch) publishes nothing: `reset` cleared that wallet's data, and this one's must not come back.
     private var loadingFor: Address?
     /// The on-chain history as the history model has it (`applyHistory`): how far each period's figures have been read
     /// (`historyFilling`, `historyProgress`), and whether the chain could be reached.
@@ -440,8 +440,8 @@ final class PortfolioModel {
         loadEpoch = env.savedScreens.epoch
         loading = true
         defer { loading = false }
-        // Nothing is published until every read is back, and a failed read never replaces what the last good one showed
-        // (security audit 2026-09-26, RS-10): the history comes from the store, which only ever grows, and a load for a
+        // Nothing is published until every read is back, and a failed read never replaces what the last good one showed:
+        // the history comes from the store, which only ever grows, and a load for a
         // wallet that is no longer the latest one asked for publishes nothing, so what is kept is always this wallet's.
 
         // Reference data first: the launch list (curves + pair assets), the Moments list (coins + pools), the token universe.
@@ -526,7 +526,7 @@ final class PortfolioModel {
 
     /// Takes in what was saved for `address` before Home's first frame (`HomeView`'s `onAppear`), while nothing of it is on
     /// hand — no load for it has landed or begun, and its saved figures weren't taken in — after another wallet's figures
-    /// go (RS-10): a small file on the device, read on the spot (`restoreSaved`). So Total Volume opens on the figure saved
+    /// go: a small file on the device, read on the spot (`restoreSaved`). So Total Volume opens on the figure saved
     /// for the wallet, said to be ("Updated 3 hr ago"), rather than on a placeholder until the load's task starts; the load
     /// takes it in again as it begins.
     func showSaved(env: AppEnvironment, address: Address?) {

@@ -210,7 +210,7 @@ final class MeraPolicyTests: XCTestCase {
             ("a Permit2 allowance for a stranger", [permit2(usdc, usdcIn, spender: stranger, expiration: unix + 60)], uni, .approval(.spender)),
             ("a Permit2 allowance outside a Uniswap swap", [permit2(usdc, usdcIn, expiration: unix + 60)], swapIntent(.monday, pay: usdc, usdcIn), .notAllowlisted),
             // MON.
-            // A Universal Router swap carries exactly its input in MON when MON pays it, and none otherwise (IOSK-10).
+            // A Universal Router swap carries exactly its input in MON when MON pays it, and none otherwise.
             ("more MON than declared", [call(Uniswap.universalRouter, monSwap, value: monIn + 1)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .notAllowlisted),
             ("MON with an ERC-20 input", [call(Uniswap.universalRouter, universalRouterSwap, value: 1)], uni, .notAllowlisted),
             ("MON beyond what a v4 swap settles", [call(Uniswap.universalRouter, urSwap(Monad.native, monIn - 1, usdc), value: monIn)], swapIntent(.uniswap, pay: Monad.native, monIn, receive: usdc), .notAllowlisted),
@@ -256,7 +256,7 @@ final class MeraPolicyTests: XCTestCase {
         }
     }
 
-    /// Router and Perpl payloads are read in full (IOSK-10): exactly the shape the app builds is prompt-free, and a
+    /// Router and Perpl payloads are read in full: exactly the shape the app builds is prompt-free, and a
     /// payload that does anything more — or that the decoder can't read in full — asks.
     func testRouterAndOrderPayloadsAreReadInFull() {
         typealias V4 = SwapCalldata.V4
@@ -600,7 +600,7 @@ final class MeraPolicyTests: XCTestCase {
         XCTAssertNotEqual(reread.recipient, account)
     }
 
-    /// The fee tuple (IOST-7), decoded as the web's `decodeKuruFlowSwap` and judged as its `kuruFeeAllowed`: only zero
+    /// The fee tuple, decoded as the web's `decodeKuruFlowSwap` and judged as its `kuruFeeAllowed`: only zero
     /// basis points on both sides is a swap the wallet signs; the recipient and referrer are not pinned (at 0 bps they
     /// receive nothing); a dirty address word or a fee flag that isn't a clean bool decodes to nothing.
     func testKuruFeeTuple() throws {

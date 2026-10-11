@@ -18,7 +18,7 @@ final class TransactionRun {
     var isRunning: Bool { phase == .running }
     /// Whether any step of this run reached the network. `start` replays a plan from its first step, so a run that
     /// sent something is never started again from the same sheet: a call that already landed (a swap, a send, a buy)
-    /// would be signed with the next nonce and land twice (security audit 2026-09-26).
+    /// would be signed with the next nonce and land twice.
     var sentSomething: Bool { events.contains { if case .sent = $0 { return true } else { return false } } }
     var isDone: Bool { if case .done = phase { return true } else { return false } }
     /// The settled transaction hash once the plan's final step confirms, for callers that record or route on it.
@@ -43,11 +43,11 @@ final class TransactionRun {
         events = []
         lastConfirmed = nil
         // An approved plan keeps a passkey account's session until its last step, even if the app leaves the
-        // foreground meanwhile (GL-1): its later steps never ask for the passkey again.
+        // foreground meanwhile: its later steps never ask for the passkey again.
         mera.beginAction()
         Task {
             // A lock or an app switch mid-plan suspends it: ask for the time iOS grants so the step in flight can still
-            // broadcast and see its receipt (GL-2).
+            // broadcast and see its receipt.
             let background = BackgroundTime("Transaction") // not localized: the background task's name, never shown
             defer { background.end(); mera.endAction() }
             do {
@@ -70,7 +70,7 @@ final class TransactionRun {
     /// Each sent step is a pending Activity row (`PendingActivity`), so a plan that fails or is killed after a broadcast
     /// never loses the transaction. Seen confirmed, the row says so and stays: an earlier step's goes when the next step is
     /// sent, and the last one's is replaced by the caller's own record of the action (same hash) — or stays, when the
-    /// sheet is gone before it records (GL-2).
+    /// sheet is gone before it records.
     private func record(_ event: TransactionEvent, owner: Address?) {
         events.append(event)
         switch event {
@@ -161,7 +161,7 @@ struct ConfirmationSheet<Details: View>: View {
     /// swiped away.
     let onDone: () -> Void
     /// Fired once with the settled transaction hash the moment the plan settles, for callers that log the action or
-    /// record it — not on Done, so a swipe-dismiss or an OS kill on the Done screen can't lose it (GL-3).
+    /// record it — not on Done, so a swipe-dismiss or an OS kill on the Done screen can't lose it.
     var onCompleted: ((Data) -> Void)? = nil
     /// When set, the confirmed step's "View" control calls this with the tx hash instead of opening the block
     /// explorer — the launch flow uses it to route to the in-app coin page.
@@ -175,7 +175,7 @@ struct ConfirmationSheet<Details: View>: View {
     /// Reads what the settled transaction did, when the caller can tell (a Perpl order's receipt). With it, "done" waits for
     /// the result: the bottom bar says the result is being read (Done held for up to 2 s, then offered), then shows it;
     /// the confirmed step reads as a plain confirmation on Monad (the result carries the tone), and the haptic follows the
-    /// result's tone instead of a plain success. It runs in a task of its own that outlives the sheet (GL-3).
+    /// result's tone instead of a plain success. It runs in a task of its own that outlives the sheet.
     var settle: ((Data) async -> SettledLine?)? = nil
     @ViewBuilder var details: Details
 
@@ -209,9 +209,9 @@ struct ConfirmationSheet<Details: View>: View {
     /// `onCompleted` fired / `onDone` ran: each once per sheet.
     @State private var completed = false
     @State private var cleanedUp = false
-    /// The most the plan's network fees can come to at today's fees, read once the plan is built (IOST-1).
+    /// The most the plan's network fees can come to at today's fees, read once the plan is built.
     @State private var fee: TransactionSender.FeePreview?
-    /// Who the plan's exact approvals take a standing unlimited allowance away from, read once the plan is built (IOST-14).
+    /// Who the plan's exact approvals take a standing unlimited allowance away from, read once the plan is built.
     @State private var replacedUnlimited: [String] = []
     /// What the settled transaction did (`settle`), once read; nil while it is read, or without `settle`.
     @State private var settled: SettledLine?
@@ -326,7 +326,7 @@ struct ConfirmationSheet<Details: View>: View {
                 holdingDone = false
             }
             // Its own task, with its own background time: a dismissed sheet or a phone locked now still reads the result
-            // and upgrades what `onCompleted` recorded (GL-3).
+            // and upgrades what `onCompleted` recorded.
             Task { @MainActor in
                 let background = BackgroundTime("Perpl result") // not localized: the background task's name, never shown
                 defer { background.end() }
@@ -358,7 +358,7 @@ struct ConfirmationSheet<Details: View>: View {
         .task(id: scopeKey) { await reassess() }
     }
 
-    /// Who the plan approves for an effectively unlimited amount (IOST-14). The app's own plans approve exact amounts;
+    /// Who the plan approves for an effectively unlimited amount. The app's own plans approve exact amounts;
     /// this keeps one that doesn't from being signed unseen.
     private var unlimitedApprovals: [String] {
         steps.compactMap { step in

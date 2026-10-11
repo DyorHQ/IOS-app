@@ -4,7 +4,7 @@ import XCTest
 /// App Lock across an erase of this device's data (`AppLockStore`). The re-review's finding, from before build 17: the
 /// erase removed App Lock's saved setting with everything else, and signing back in without a relaunch wrote `session.`,
 /// `mera.`, `localWallet.` and `settings.` keys, so the next launch took the device for an install from before App
-/// Lock's default and started it OFF (security audit 2026-09-26, IOSK-4).
+/// Lock's default and started it OFF.
 final class AppLockStoreTests: XCTestCase {
     /// A store in memory, as `UserDefaults` keeps one domain.
     private final class Store: AppLockDefaults {

@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// A picked video is hashed from its file a chunk at a time (security audit 2026-09-26, RI-5): the digest must be the
+/// A picked video is hashed from its file a chunk at a time: the digest must be the
 /// one `hash256(Data)` gives for the same bytes, at every block boundary.
 final class KeccakFileTests: XCTestCase {
     func testFileDigestMatchesTheInMemoryDigest() throws {

@@ -70,7 +70,7 @@ struct WalletExportView: View {
                 // Hidden while the screen is being recorded or mirrored; no system text selection (its Copy has no
                 // expiry and syncs to other devices) — the Copy button below is the only, expiring, local-only path.
                 (isCaptured ? Text("Hidden while the screen is being recorded") : Text(verbatim: key))
-                    .speechSpellsOutCharacters(!isCaptured) // a key read out character by character, not as words (AI-13)
+                    .speechSpellsOutCharacters(!isCaptured) // a key read out character by character, not as words
                     .font(.footnote.monospaced())
                     .privacySensitive()
                     .padding(.vertical, 4)

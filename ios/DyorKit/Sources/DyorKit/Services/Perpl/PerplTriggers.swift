@@ -30,8 +30,8 @@ public enum PerplTriggerRules {
         case reducesPosition(PositionSide)
     }
 
-    /// Whether an order of `size` on `side` only shrinks an open position of `positionSize` on the other side
-    /// (security audit GT-6): Perpl activates the order's triggers when it trades, and they would then close a position
+    /// Whether an order of `size` on `side` only shrinks an open position of `positionSize` on the other side:
+    /// Perpl activates the order's triggers when it trades, and they would then close a position
     /// on `side` the account doesn't hold. An order larger than the position turns it around, and its triggers close
     /// what is left on the new side (Perpl clamps a close to the position).
     public static func onlyReduces(side: PositionSide, size: Double, positionSide: PositionSide?, positionSize: Double) -> Bool {

@@ -3,8 +3,7 @@ import Foundation
 /// The mark a token carries where it is listed: where it came from, or a warning. It changes only what a row shows:
 /// which tokens are Unverified (received, not chosen in the app) stays `HeldToken.unverified` and
 /// `KnownTokenStore.unverified`, so a send's default (`WalletHoldings.defaultChoice`), the list order (`precedes`), Top
-/// Tokens, "funds arriving" and the Swap picker's main list treat a DyorHQ coin sent to the wallet exactly as before
-/// (security audit 2026-09-26, IOST-12).
+/// Tokens, "funds arriving" and the Swap picker's main list treat a DyorHQ coin sent to the wallet exactly as before.
 public enum TokenBadge: Hashable, Sendable {
     /// Nothing to say: MON, a curated token, or a token the user chose that is none of the below.
     case none

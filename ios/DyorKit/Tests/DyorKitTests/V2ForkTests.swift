@@ -304,7 +304,7 @@ final class V2ForkTests: V2ForkCase {
 
     // MARK: Refusals, decoded before anything is signed
 
-    /// MO-4: a proposal applied between the review and the publish. The publish carries the reviewed hash, so the
+    /// A proposal applied between the review and the publish. The publish carries the reviewed hash, so the
     /// factory refuses it (`TermsChanged`), `prepare` says so, and the wallet never signs.
     func testTermsChangedBetweenReviewAndPublishIsRefusedUnsigned() async throws {
         let fork = try moments()

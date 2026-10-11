@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// PriceService remembers pool lookups for a while, not for the app's lifetime (security audit 2026-09-26, RS-12).
+/// PriceService remembers pool lookups for a while, not for the app's lifetime.
 final class PoolLookupCacheTests: XCTestCase {
     private let token = Address(literal: "0x00000000000000000000000000000000000000aa")
     private let start = Date(timeIntervalSince1970: 1_800_000_000)

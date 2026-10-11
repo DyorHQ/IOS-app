@@ -156,12 +156,12 @@ struct PerpOrderStatusRow: View {
     }
 
     /// The detail under the headline: what to check when the result can't be read or Perpl never answered the entry
-    /// (never place it again blindly, GL-1), else the result's own detail.
+    /// (never place it again blindly), else the result's own detail.
     private func detail(_ entry: PerplOrderOutcome, _ text: PerplOutcomeText) -> String? {
         guard PerplTracker.isUnconfirmed(entry) else { return text.detail }
         // A wallet-signed order whose receipt couldn't be read: what to check (Perpl has no report of it).
         if order.isOnChain { return PerpOnChainCopy.unreadable }
-        // A close Perpl never answered: it may have gone through (GL-1), so Positions is checked before closing again.
+        // A close Perpl never answered: it may have gone through, so Positions is checked before closing again.
         if !order.acknowledged, order.isClose { return PerpActionCopy.closeUnknown }
         if !order.acknowledged { return PerpOrderCopy.unknown(takeProfit: order.takeProfit != nil, stopLoss: order.stopLoss != nil) }
         return text.detail
@@ -314,7 +314,7 @@ enum PerpOrderCopy {
             : tr(LocalizedStringResource("Perpl hasn't listed the stop-loss yet. Check Orders before placing it again.", comment: "A Perps order sheet's warning: Perpl took the order's stop-loss but its answer didn't arrive in time. Orders is a tab of the Perps screen."))
     }
 
-    /// Perpl never answered the entry: it may have been placed, and its triggers were not sent (GL-1). Never place it
+    /// Perpl never answered the entry: it may have been placed, and its triggers were not sent. Never place it
     /// again blindly. `takeProfit` / `stopLoss`: they were asked for.
     static func unknown(takeProfit: Bool, stopLoss: Bool) -> String {
         var message = tr("Order status unknown — Perpl didn't confirm this order, so it may have been placed. Check Open Orders and Positions before placing it again.")
@@ -361,7 +361,7 @@ enum PerpOrderCopy {
             : tr(LocalizedStringResource("Stop-loss cancelled.", comment: "A Perps order sheet's line: the order's stop-loss was cancelled some time after it was placed (from Orders, or by Perpl after the take-profit fired). The position may no longer be protected by it."))
     }
 
-    /// The order's take-profit / stop-loss fired some time after it was placed (the security audit's GT-9 words).
+    /// The order's take-profit / stop-loss fired some time after it was placed.
     static func triggeredLater(_ kind: PerplTriggerKind) -> String {
         kind == .takeProfit ? tr("Take-profit triggered") : tr("Stop-loss triggered")
     }

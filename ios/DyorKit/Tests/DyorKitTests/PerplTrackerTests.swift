@@ -109,7 +109,7 @@ final class PerplTrackerTests: XCTestCase {
         XCTAssertEqual(text(.unconfirmed(.timedOut)).detail, "Perpl accepted the order for forwarding but hasn't reported what happened to it yet. Your positions and orders are reloading: check them before placing it again.")
         XCTAssertEqual(text(.unconfirmed(.connectionLost)).detail, "The connection to Perpl dropped before it reported the result. Your positions and orders are reloading: check them before placing it again.")
         XCTAssertEqual(text(.unconfirmed(.foreignReport)).detail, "Perpl reported a different order under this order's request number, so its result can't be shown. Check Positions and Orders before placing it again.")
-        // An order Perpl never answered: no detail at all, and nothing that says it was accepted (GL-1, I4).
+        // An order Perpl never answered: no detail at all, and nothing that says it was accepted.
         for why in [PerplOrderOutcome.Unconfirmed.timedOut, .connectionLost, .foreignReport] {
             let unanswered = text(.unconfirmed(why), context(acknowledged: false))
             XCTAssertNil(unanswered.detail)
@@ -290,7 +290,7 @@ final class PerplTrackerTests: XCTestCase {
         XCTAssertEqual(PerplTracker.markCheckedNotListed(&live, kind: .takeProfit, now: now), [])
     }
 
-    /// The echo an order removes is its own (by id), never another order's of the same kind on that side (GT-1, GT-3):
+    /// The echo an order removes is its own (by id), never another order's of the same kind on that side:
     /// nothing for a trigger that never had one (refused, never sent), nothing on "armed", and the effect names only that
     /// child's echo.
     func testAnOrderRemovesOnlyItsOwnTriggerEcho() {

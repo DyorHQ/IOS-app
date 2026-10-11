@@ -6,7 +6,7 @@ import XCTest
 /// Build 17: DyorHQ's coins in every screen — their pictures, their labels and the create guard. The rules are tested
 /// here directly (`TokenPickerList`, `CoinIcon`, `SymbolSafety`, `LaunchImage`); the app's wiring of them is read from
 /// its sources (R10: update these with the code they pin). A DyorHQ coin sent to the wallet is labelled for what it is
-/// and is still what IOST-12 protects against: never where a send starts, never in Top Tokens, never funds arriving,
+/// and is still treated as a token sent unasked: never where a send starts, never in Top Tokens, never funds arriving,
 /// never in the picker's main list.
 final class DyorCoinWiringTests: XCTestCase {
     private let creator = Address(literal: "0x6115cAF237026B45B037191B20056d1e4AfAfFa3")

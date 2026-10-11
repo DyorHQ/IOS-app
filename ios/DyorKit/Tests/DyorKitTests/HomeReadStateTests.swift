@@ -88,7 +88,7 @@ final class HomeReadStateTests: XCTestCase {
         let home = try AppSource.declaration(of: "HomeModel").text
         let model = try Self.homeModel(home)
         XCTAssertTrue(model.contains("perpEquity = nil; momentRows = []; updatedAt = nil; reads = HomeReadState()"), "another account starts unread")
-        // Each read publishes its part as it lands, only while the load stands (RS-10), never held back by the slowest.
+        // Each read publishes its part as it lands, only while the load stands, never held back by the slowest.
         XCTAssertTrue(model.contains("await withTaskGroup(of: Answer.self) { group in"))
         XCTAssertTrue(model.contains("while let answer = await group.next() {\n                let stands = !Task.isCancelled && address == loadedFor"))
         for publish in ["if stands, balancesIn { publishSpot(tokens: tokens, priceMap: priceMap, balanceMap: balanceMap, notTrading: notTrading) }",

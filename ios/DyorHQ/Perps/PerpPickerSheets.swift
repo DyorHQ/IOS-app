@@ -193,7 +193,7 @@ struct LeverageRuler: View {
             )
         }
         // The tick labels and value pill are one adjustable control: swipe up or down for 1× steps, so any leverage
-        // can be chosen without dragging, not only the quick picks (security audit AI-4).
+        // can be chosen without dragging, not only the quick picks.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Leverage")
         .accessibilityValue("\(Int(value.rounded())) times")

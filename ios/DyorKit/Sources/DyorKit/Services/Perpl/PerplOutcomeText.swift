@@ -213,7 +213,7 @@ public struct PerplOutcomeText: Sendable, Equatable {
             }
             return L10n.string(LocalizedStringResource("Perpl's own report for this order hasn't arrived yet.", bundle: L10n.kit, comment: "The result of a Perps order the app sent, under 'Position grew by …' in the order sheet and the trade screen's status row: the growth was read from the position on Monad."))
         case .unconfirmed(let why):
-            // An order Perpl never answered: the sheet says why its result can't be known (GL-1), never "accepted".
+            // An order Perpl never answered: the sheet says why its result can't be known, never "accepted".
             guard c.acknowledged else { return nil }
             if close {
                 switch why {

@@ -1,10 +1,10 @@
 import XCTest
 @testable import DyorKit
 
-/// Email & Password safety rules from the 2026-09-26 audit: outages told apart from refusals (GE-6), password characters
-/// another keyboard may type differently (IOSK-9), and which email bindings may still be legacy (GE-1).
+/// Email & Password safety rules from the 2026-09-26 audit: outages told apart from refusals, password characters
+/// another keyboard may type differently, and which email bindings may still be legacy.
 final class AccountSafetyTests: XCTestCase {
-    // MARK: Outages (GE-6)
+    // MARK: Outages
 
     func testOutagesAreToldApartFromRefusals() {
         XCTAssertTrue(SupabaseError.isOutage(SupabaseError.http(503, "")))
@@ -19,7 +19,7 @@ final class AccountSafetyTests: XCTestCase {
         XCTAssertEqual(SupabaseError.http(503, "").errorDescription, "DyorHQ's server isn't answering right now (503). Try again in a minute.")
     }
 
-    // MARK: Email & Password inputs (IOSK-9, GE-1)
+    // MARK: Email & Password inputs
 
     func testHardToRetypePasswordCharactersAreFlagged() {
         for plain in ["Correct-Horse-9!", "a b\"c'd--e...f", "~!@#$%^&*()_+{}|:<>?`-=[]\\;',./"] {

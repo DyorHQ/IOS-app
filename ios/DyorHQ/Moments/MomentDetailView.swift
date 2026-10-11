@@ -474,8 +474,8 @@ struct MomentDetailView: View {
                 confirmTitle: quote?.terminal == true ? "Collect and Graduate" : LocalizedStringResource("Collect", comment: "Collect (buy) editions of this Moment, a verb: the section header on the Moment's page and its button"),
                 build: {
                     // Every account: an exact USDC approval of the collect contract, then collect. Nothing is signed when
-                    // the sheet opens — the Permit2 path signed its transfer here, before Confirm and App Lock (IOST-6) —
-                    // and Permit2 is never approved for unlimited USDC (IOST-14). The contract pulls at most the quoted
+                    // the sheet opens — the Permit2 path signed its transfer here, before Confirm and App Lock —
+                    // and Permit2 is never approved for unlimited USDC. The contract pulls at most the quoted
                     // gross, which the approval covers.
                     await env.moments.collectWithApprovalPlan(momentId: m.id, quantity: quantity, gross: collectGross, symbol: info.symbol)
                 },

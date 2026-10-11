@@ -653,7 +653,7 @@ public final class PerplTradeClient {
                 acks.append(Self.unanswered(error, fallback: L10n.tr("Perpl did not confirm this trigger."), requestId: rq))
                 continue
             case .failure(let error):
-                // The entry itself: the caller's catch (GL-1). It knows the entry's id from its reservation.
+                // The entry itself: the caller's catch. It knows the entry's id from its reservation.
                 throw error
             }
             acks.append(ack)
@@ -705,7 +705,7 @@ public final class PerplTradeClient {
 
     // MARK: Outcomes
 
-    /// Perpl's outcome for `rq` on THIS socket (a drained passkey socket still answers, GL-1). Returns when decided
+    /// Perpl's outcome for `rq` on THIS socket (a drained passkey socket still answers). Returns when decided
     /// (never on a provisional failure); at the deadline returns `outcome(final: continuityHeld(since: sent.writtenAt))`,
     /// else `.unconfirmed(.timedOut)`; when the socket closes, `.unconfirmed(.connectionLost)`. Counted in
     /// `hasRequestsInFlight` while it waits. Never throws, never resends.

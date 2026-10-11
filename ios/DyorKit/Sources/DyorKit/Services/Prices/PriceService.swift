@@ -148,8 +148,8 @@ public actor PriceService {
     /// test does.
     private let cache: ChainCache?
     /// Where the pools found are kept between launches (`ChainStore`, `pools.json`), each with the time it was found, so
-    /// a relaunch doesn't look every token up again and every lookup's time limit still runs from when it was made
-    /// (RS-12). Nil keeps them for the session only.
+    /// a relaunch doesn't look every token up again and every lookup's time limit still runs from when it was made.
+    /// Nil keeps them for the session only.
     private let store: ChainStore?
     /// `store`'s epoch when its pools were last read into `pools`; nil before.
     private var poolsEpoch: Int?
@@ -887,7 +887,7 @@ public actor PriceService {
     static func isUSD(_ token: Token) -> Bool { token.address == Monad.usdc || token.address == Monad.ausd }
 }
 
-/// Which tokens' pools are known, and for how long (security audit 2026-09-26, RS-12). A chosen pool is looked up again
+/// Which tokens' pools are known, and for how long. A chosen pool is looked up again
 /// after `hitTTL` — liquidity moves, and a deeper pool can appear — and a token with no pool after `missTTL`, rather than
 /// either lasting as long as the app runs. A market that is about to move elsewhere is looked up again after
 /// `unsettledTTL`. The pool last found keeps pricing its token until a new lookup says otherwise, and a lookup whose
@@ -924,7 +924,7 @@ struct PoolLookupCache<Source: Sendable>: Sendable {
     }
 
     /// Adds what an earlier session found (`entries`), each with the time its lookup was made, so its time limit runs on
-    /// from then (RS-12 holds across launches). A token this session already looked up keeps this session's answer.
+    /// from then (it holds across launches). A token this session already looked up keeps this session's answer.
     mutating func restore(hits restored: [(token: Address, source: Source, at: Date, settled: Bool)], misses restoredMisses: [(token: Address, at: Date)]) {
         for hit in restored where hits[hit.token] == nil && misses[hit.token] == nil {
             hits[hit.token] = (hit.source, hit.at, hit.settled)

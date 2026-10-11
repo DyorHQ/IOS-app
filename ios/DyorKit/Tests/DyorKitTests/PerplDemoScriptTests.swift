@@ -195,7 +195,7 @@ final class PerplDemoScriptTests: XCTestCase {
         let bracket = Task { try await client.placeAll(frames) }
         await wire.settle()
         if s.replies.first(where: { $0.match == .entry })?.ack == Script.Ack.none {
-            // Never answered: the triggers wait for the entry's ack (GL-1); a drop ends the wait as "outcome unknown".
+            // Never answered: the triggers wait for the entry's ack; a drop ends the wait as "outcome unknown".
             await wire.pump()
             XCTAssertEqual(wire.frames.count, 1, id)
             XCTAssertTrue(client.hasRequestsInFlight, id)

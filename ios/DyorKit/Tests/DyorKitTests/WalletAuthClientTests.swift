@@ -35,7 +35,7 @@ final class WalletAuthClientTests: XCTestCase {
 
     // MARK: Sign-in message
 
-    /// The IOSK-7 SIWE contract, byte for byte (the same text as wallet-auth's sign_in_test.ts).
+    /// The SIWE contract, byte for byte (the same text as wallet-auth's sign_in_test.ts).
     func testSignInMessageIsTheExactTemplate() {
         let address = "0x52908400098527886E0F7030069857D2E4169EE7" // an EIP-55 test vector
         let issued = 1_790_424_000_000 // 2026-09-26T12:00:00.000Z
@@ -153,7 +153,7 @@ final class WalletAuthClientTests: XCTestCase {
     }
 
     /// A sign-out that finishes late (after its network call) ends only the session it was for: a sign-in adopted
-    /// meanwhile keeps its session (RS-6).
+    /// meanwhile keeps its session.
     func testSignOutOnlyEndsTheSessionItWasFor() async {
         let old = SupabaseSession(accessToken: "old.jwt", wallet: "0xaa", expiresAt: Date().addingTimeInterval(3600))
         let new = SupabaseSession(accessToken: "new.jwt", wallet: "0xbb", expiresAt: Date().addingTimeInterval(3600))

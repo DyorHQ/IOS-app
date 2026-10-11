@@ -84,7 +84,7 @@ final class AppEnvironment {
     /// The app's language, decided before any screen: English on an install's first launch, then what the user chose
     /// (`LanguageStore`).
     let language = LanguageStore()
-    /// The minimum supported build: below it, "Update required" replaces the app (GP-2).
+    /// The minimum supported build: below it, "Update required" replaces the app.
     let updateGate = UpdateGate()
     /// Authenticated Perpl trading. A passkey account's trading key lives and dies with its session (`session.mera`).
     let perplTrading: PerplTrading

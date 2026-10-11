@@ -7,7 +7,7 @@ import XCTest
 /// The app's one image pipeline: one download per picture for every size, sizes decoded from the bytes already fetched
 /// or the thumbnail kept on the phone, what can't change kept for a week and anything else for an hour (shown at once
 /// either way), a picture its sources say is gone forgotten (by what each host's answer means), every check on the bytes
-/// kept, a load every view left cancelled unless a trusted download is under way (security audit 2026-09-26, RI-5) — and
+/// kept, a load every view left cancelled unless a trusted download is under way — and
 /// started again for a view that came back if that download fails — and an erase that keeps nothing. A list-sized
 /// thumbnail of an unchecked picture in DyorHQ's write-once bucket comes from Storage's resized copy at its size, the
 /// original after it; a board warms its latest next rows from DyorHQ's hosts and the gateways only.
@@ -304,7 +304,7 @@ final class ImagePipelineTests: XCTestCase {
 
     // MARK: Views that leave
 
-    /// Every view leaves before the bytes are in: a download from a stranger's host is cancelled (RI-5), and so is one
+    /// Every view leaves before the bytes are in: a download from a stranger's host is cancelled, and so is one
     /// from DyorHQ's host still silent; one from DyorHQ's host already sending its bytes finishes into the cache. (At this
     /// list size, DyorHQ's host is asked for Storage's resized copy.)
     func testALoadEveryViewLeftIsCancelledUnlessATrustedDownloadIsUnderWay() async throws {
@@ -335,7 +335,7 @@ final class ImagePipelineTests: XCTestCase {
     }
 
     /// Two views wait on one download from a stranger's host: one leaving cancels nothing — the other still gets the
-    /// picture — and the last one out cancels it (RI-5).
+    /// picture — and the last one out cancels it.
     func testALoadGoesOnForTheViewsStillWaiting() async throws {
         let host = FakeImageHost(), finish = TestGate()
         let jpeg = try Self.jpeg(width: 400, height: 400)
@@ -743,7 +743,7 @@ final class ImagePipelineTests: XCTestCase {
         XCTAssertEqual(host.requests.count, 1)
     }
 
-    /// No host but DyorHQ's and the app's gateways is asked for a picture nobody is looking at (RI-5): a prefetch of a
+    /// No host but DyorHQ's and the app's gateways is asked for a picture nobody is looking at: a prefetch of a
     /// stranger's picture, or of a list with one in it, does nothing.
     func testAPrefetchNeverAsksAStrangersHost() async throws {
         let host = FakeImageHost()

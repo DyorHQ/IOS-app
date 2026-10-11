@@ -85,7 +85,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
     func testEverySentEntryIsFollowedUnderBackgroundTime() throws {
         let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let track = AppSource.squeezed(try function("func track(_ t: PerplOrderTracking, input: OrderInput, takeProfit: Double?, stopLoss: Double?, closes: PositionSide?,", in: trading))
-        XCTAssertTrue(track.contains("let done = operation(\"Perpl order outcome\")"), "background time, and a draining socket waits (GL-1)")
+        XCTAssertTrue(track.contains("let done = operation(\"Perpl order outcome\")"), "background time, and a draining socket waits")
         XCTAssertTrue(track.contains("defer { done() }"))
         XCTAssertTrue(track.contains("group.addTask { await self.followEntry(id, t, deadline) }"), "the entry settles on its own (I23)")
         XCTAssertTrue(track.contains("guard let sent, sent.ack.accepted, let rq = sent.rq ?? sent.ack.requestId else { continue }"), "refused or unanswered triggers keep their lines")
@@ -121,7 +121,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
 
     /// Phase 2 (real-time spec §5.4): a cancel reads as done only once Perpl's live list shows it, on the socket that sent
     /// it, and the cancel sheet's rows stay in place; a TP/SL change sends its cancels in one go, waits once for them to
-    /// leave the list, and places a replacing trigger only after that wait (GT-1); the leftover clean-up counts what the
+    /// leave the list, and places a replacing trigger only after that wait; the leftover clean-up counts what the
     /// list confirmed; every wait sits under the drain's cap.
     func testCancelsAndTriggerChangesConfirmOnPerplsList() throws {
         let sheets = try AppSource.app("Perps/PerpTriggerSheets.swift")
@@ -151,7 +151,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         let trading = try AppSource.appFiles(AppSource.perplTradingFiles)
         let confirm = AppSource.squeezed(try function("func cancelAndConfirm(orders: [PerplOpenOrder], approval: MeraSession.StepUp? = nil,", in: trading))
         XCTAssertTrue(confirm.contains("try requireCancelApproval(approval) let done = operation(\"Perpl cancel\") defer { done() }"),
-                      "MERA-PLAN §3, and one operation across the sends and the wait (GL-1)")
+                      "one operation across the sends and the wait")
         XCTAssertTrue(confirm.contains("guard let result = client.cancelResult(of: key, cancelRq: rq) else { continue }"), "the sending socket's list")
         XCTAssertTrue(confirm.contains("let deadline = Date().addingTimeInterval(PerplTimeouts.removal)"))
         XCTAssertTrue(confirm.contains("for key in awaiting.keys { results[key] = .notConfirmed }"), "never called done in doubt")
@@ -162,7 +162,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertTrue(live.contains("client.lastTerminalStatus(of: key) != nil"))
 
         // One cancel batch, one wait for the removals and one for the new triggers' answers, outside the per-change loops;
-        // a replacing trigger only after the wait (GT-1).
+        // a replacing trigger only after the wait.
         let change = try function("func changeTriggers(_ changes: [TriggerChange], market: PerpMarket, position: PerplLivePosition,", in: trading)
         for call in ["remaining(of:", "awaitOutcomes(", "client.sendEach(replaced.map"] {
             XCTAssertEqual(change.components(separatedBy: call).count - 1, 1, call)
@@ -178,7 +178,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertTrue(AppSource.squeezed(before).contains("for change in ordered where change.replacing.isEmpty {"), "before the wait: only kinds that replace nothing")
         XCTAssertEqual(after.components(separatedBy: "placeTrigger(").count - 1, 1)
         XCTAssertTrue(AppSource.squeezed(after).contains("for change in awaitingRemoval { guard !change.replacing.contains(where: { stillListed.contains($0.id) }) else { outcomes[change.kind] = .cancelNotConfirmed; continue }"),
-                      "GT-1: placed only once every trigger it replaces left the list")
+                      "placed only once every trigger it replaces left the list")
         XCTAssertTrue(change.contains("let live = liveOutcomes"), "the switch, read at the tap")
         XCTAssertTrue(change.contains("cap: PerplTimeouts.triggerOutcome"))
 
@@ -209,7 +209,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertTrue(squeezedRun.contains("if run.isDone, settle != nil { // The result is read from the receipt: \"done\" says what the transaction did, not only that it ran. ReceiptResultBar(settled: settled?.text, reading: reading, holdingDone: holdingDone) { finish() }"))
         XCTAssertTrue(squeezedRun.contains(".disabled(run.isRunning || holdingDone)"))
         XCTAssertTrue(squeezedRun.contains("TransactionProgress(events: run.events, onView: onView, neutralConfirmation: settle != nil)"))
-        XCTAssertTrue(squeezedRun.contains("onCompleted?(hash) guard let settle else { return } reading = true holdingDone = true"), "the row first (GL-3), then the read")
+        XCTAssertTrue(squeezedRun.contains("onCompleted?(hash) guard let settle else { return } reading = true holdingDone = true"), "the row first, then the read")
         XCTAssertTrue(squeezedRun.contains("let background = BackgroundTime(\"Perpl result\")"), "the read outlives the sheet")
         XCTAssertEqual(run.components(separatedBy: "onStarted?()").count - 1, 2, "right before each run.start, after App Lock and any approval")
         let outcomeView = try AppSource.app("Perps/PerpOrderOutcomeView.swift")
@@ -300,7 +300,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         XCTAssertTrue(AppSource.squeezed(lines).contains("else { mayBeArmed.append(kind) }"))
         XCTAssertFalse(AppSource.squeezed(lines).contains("else { cancelledWith.append(kind) }"), "never assumed")
         XCTAssertTrue(AppSource.squeezed(lines).contains("child.settledDuringFollow ? PerpOrderCopy.triggeredAtOnce(kind, price: price) : PerpOrderCopy.triggeredLater(kind)"))
-        XCTAssertFalse(trade.contains("unknownMessage"), "one copy of the GL-1 words (PerpOrderCopy.unknown)")
+        XCTAssertFalse(trade.contains("unknownMessage"), "one copy of the unknown-outcome words (PerpOrderCopy.unknown)")
         XCTAssertTrue(AppSource.squeezed(trade).contains("detail: PerpOrderCopy.unknown(takeProfit: order.takeProfit != nil, stopLoss: order.stopLoss != nil)"))
         // The sheet scrolls to the warning when it starts following, and announces every new headline (not only the first).
         XCTAssertTrue(AppSource.squeezed(trade).contains(".onChange(of: isTracking) { _, tracking in guard tracking, let order = tracked, let warning = PerpOrderCopy.triggerWarning(order) else { return }"))
@@ -315,7 +315,7 @@ final class PerpsOutcomeWiringTests: XCTestCase {
         let row = String(outcome[try XCTUnwrap(outcome.range(of: "struct PerpOrderStatusRow: View {")).lowerBound...])
         XCTAssertTrue(AppSource.squeezed(row).contains("if let warning = PerpOrderCopy.triggerWarning(order) {"), "the status row says it too")
         XCTAssertTrue(AppSource.squeezed(row).contains("if !order.acknowledged { return PerpOrderCopy.unknown(takeProfit: order.takeProfit != nil, stopLoss: order.stopLoss != nil) }"),
-                      "GL-1 on the status row")
+                      "the unknown outcome on the status row")
         // The success that carries it stays on the status row (PerplTrackerTests pins the rule).
         XCTAssertTrue(AppSource.squeezed(try AppSource.kit("Services/Perpl/PerplTracker.swift")).contains("if entry.tone == .success, !order.hasTriggerWarning {"))
     }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The oldest iOS build the backend still supports (security audit 2026-09-26, GP-2): the public, read-only
+/// The oldest iOS build the backend still supports: the public, read-only
 /// `app_config` row 'ios', `{"min_build": 15, "message": "…", "url": "https://…"}` (supabase migration 28). A build whose
 /// CFBundleVersion is below `minBuild` shows "Update required": balances and key export stay reachable, and nothing
 /// signs. The app fails open — a row it can't read or parse blocks nothing — so a broken row can never lock anyone out

@@ -2,7 +2,7 @@ import BigInt
 import XCTest
 @testable import DyorKit
 
-/// The broadcast and receipt lifecycle (security audit 2026-09-26, PR-4 and GL-2): a signed transaction's hash is known
+/// The broadcast and receipt lifecycle: a signed transaction's hash is known
 /// before it is sent; a broadcast that gets no answer is followed by that hash and never signed again; the receipt wait
 /// counts polls rather than wall-clock time, survives failed reads, and always reads once more at the end.
 final class TransactionLifecycleTests: XCTestCase {
@@ -36,7 +36,7 @@ final class TransactionLifecycleTests: XCTestCase {
 
     private var request: TransactionRequest { TransactionRequest(to: target, data: Data([0x01]), value: 0) }
 
-    // MARK: Broadcast (PR-4)
+    // MARK: Broadcast
 
     /// The node took the transaction but its answer was lost: the hash, computed from the signed bytes, finds it.
     func testLostAnswerIsFoundByItsHash() async throws {
@@ -211,7 +211,7 @@ final class TransactionLifecycleTests: XCTestCase {
         }
     }
 
-    // MARK: Standing approvals (IOST-14)
+    // MARK: Standing approvals
 
     /// An exact approval whose amount a standing, effectively unlimited allowance already covers is sent anyway,
     /// replacing it, and the sheet can name it; an ordinary covering allowance still skips the step.
@@ -237,7 +237,7 @@ final class TransactionLifecycleTests: XCTestCase {
         XCTAssertNil(unlimited)
     }
 
-    // MARK: Receipt wait (GL-2)
+    // MARK: Receipt wait
 
     private func broadcastOne() async throws -> Data {
         try await sender().send(request, from: CountingWallet())

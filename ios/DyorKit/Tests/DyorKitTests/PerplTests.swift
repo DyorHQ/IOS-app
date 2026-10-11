@@ -317,7 +317,7 @@ final class PerplTests: XCTestCase {
         let alsoNone = try await service.account(exchange)
         XCTAssertNil(alsoNone)
 
-        // Only Perpl's AccountNotFound revert means "no account" (RI-4); any other revert or failure surfaces as an error.
+        // Only Perpl's AccountNotFound revert means "no account"; any other revert or failure surfaces as an error.
         XCTAssertTrue(PerplExchange.isAccountNotFound(RPCError(code: -32000, message: "execution reverted", data: "0x03A0E277" + String(repeating: "0", count: 64))))
         XCTAssertFalse(PerplExchange.isAccountNotFound(RPCError(code: -32000, message: "execution reverted")))
         XCTAssertFalse(PerplExchange.isAccountNotFound(RPCError(code: 3, message: "execution reverted", data: "0x")))

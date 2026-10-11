@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import DyorKit
 
-/// Moment media goes to a write-once bucket and is pinned before it goes on-chain (security audit 2026-09-26, PR-2,
-/// RI-9, RW-9): uploads never overwrite, an object already there reads as uploaded, and a pin that fails, is refused
+/// Moment media goes to a write-once bucket and is pinned before it goes on-chain: uploads
+/// never overwrite, an object already there reads as uploaded, and a pin that fails, is refused
 /// or times out comes back as an error the app can show.
 final class MomentMediaUploadTests: XCTestCase {
     private let base = URL(string: "https://project.supabase.co")!

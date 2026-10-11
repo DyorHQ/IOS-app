@@ -69,7 +69,7 @@ public actor MomentsService {
     ///
     /// With the app's shared reads (`cache`) the terms are read at most once a minute (`ChainCache.TTL.terms`): the board
     /// polls every 20 s, and their values change only through a proposal queued for 48 hours. A publish stays bound to the
-    /// terms its review showed (`publishPlan`'s `termsHash`, MO-4), so terms read a minute ago can never publish under
+    /// terms its review showed (`publishPlan`'s `termsHash`), so terms read a minute ago can never publish under
     /// others. A pull to refresh and a settled transaction read them again (`ChainCache.invalidate`); a read that fails is
     /// never kept.
     public func policy() async throws -> MomentPolicy? {

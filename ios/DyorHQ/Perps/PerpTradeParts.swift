@@ -89,7 +89,7 @@ struct SideOrderBook: View {
                 ratioBar
             }
         }
-        // Asks and bids are told apart by colour and position on screen; each row also says which it is (AI-10).
+        // Asks and bids are told apart by colour and position on screen; each row also says which it is.
         .accessibilityElement(children: .contain)
         .accessibilityLabel(bookSummary)
     }
@@ -219,7 +219,7 @@ struct PercentSizeSlider: View {
             .frame(height: 22)
         }
         // One adjustable control for VoiceOver and Switch Control, in the 25% steps the track snaps to, instead of a
-        // drag-only shape and a loose percentage text (security audit AI-4).
+        // drag-only shape and a loose percentage text.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Size, share of available margin")
         .accessibilityValue("\(Int(percent.rounded())) percent")
@@ -271,7 +271,7 @@ struct TradesTape: View {
                         Text(trade.time, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     .frame(height: 18)
-                    // Buy or sell is shown by colour only; say it (AI-10).
+                    // Buy or sell is shown by colour only; say it.
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(tapeLabel(trade))
                 }

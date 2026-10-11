@@ -460,7 +460,7 @@ final class VenueTokensTests: XCTestCase {
 
     /// The app reads the venues on rpc1, one request at a time, and reads the whole history once more: the list
     /// is kept, and the checkpoint is a new one, since build 16's moved past gaps, under a key that can't mark the install
-    /// as earlier than App Lock's default (`AppSettings`, security audit 2026-09-26, IOSK-4). The list is kept in memory
+    /// as earlier than App Lock's default (`AppSettings`). The list is kept in memory
     /// (`VenueTokenList`): the swap picker searches it there, never the store, and says while it is short.
     func testTheAppReadsTheVenuesOnRpc1AndReadsTheirHistoryOnceMore() throws {
         // Read with every run of whitespace as one space (`AppSource.squeezed`): the checks pin the code, not its

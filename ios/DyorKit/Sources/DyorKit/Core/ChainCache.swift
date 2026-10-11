@@ -23,7 +23,7 @@ public final class ChainCache: @unchecked Sendable {
         public static let listing: TimeInterval = 15
         /// A Moments cohort's terms (`MomentsService.policy`): set by governance, their values changed only through a
         /// proposal queued for 48 hours (the board says one is queued), so the board's 20 s poll reads them every third time.
-        /// A publish is bound to the terms its review showed (`termsHash`, MO-4) and the factory refuses it if they changed,
+        /// A publish is bound to the terms its review showed (`termsHash`) and the factory refuses it if they changed,
         /// so terms a minute old never publish under other terms; a pause or a new link base shows within the minute.
         public static let terms: TimeInterval = 60
         /// One token's price and 24h change.

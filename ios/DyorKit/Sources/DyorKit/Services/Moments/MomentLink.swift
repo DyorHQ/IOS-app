@@ -296,7 +296,7 @@ public enum MomentSlug {
 
 /// What to do with a Moment link that arrived, given where the app is. The link waits (on the App-level Router, which
 /// outlives sign-in) until a state that may navigate; it is dropped under the update gate, where nothing that signs may
-/// be reachable (GP-2); and it never tears down a running or open confirmation. Pure, so every row is a test.
+/// be reachable; and it never tears down a running or open confirmation. Pure, so every row is a test.
 public enum MomentLinkGate {
     public enum Phase: Hashable, Sendable {
         /// The session hasn't answered yet (a cold start lands here).

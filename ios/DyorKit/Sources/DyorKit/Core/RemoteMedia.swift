@@ -3,7 +3,7 @@ import Foundation
 import ImageIO
 
 /// Fetching and decoding images from hosts DyorHQ does not control — coin logos written on-chain by whoever launched
-/// the coin, Moment media, NFT art, news thumbnails, profile avatars (security audit 2026-09-26, RI-5). A few MB on the
+/// the coin, Moment media, NFT art, news thumbnails, profile avatars. A few MB on the
 /// wire can declare a 30 000 × 30 000 image that takes gigabytes to decode, and a server can stream forever, so every
 /// such image goes through here: the body is read up to a byte cap, the image's declared size is checked before any
 /// pixel is decoded, and only a thumbnail at the size the screen shows is ever decoded.

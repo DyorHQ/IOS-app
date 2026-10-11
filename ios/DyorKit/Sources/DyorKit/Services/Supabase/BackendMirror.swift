@@ -1,6 +1,6 @@
 import Foundation
 
-/// Rows waiting to reach the wallet's backend mirror (security audit 2026-09-26, RS-4). Kept on the device until an
+/// Rows waiting to reach the wallet's backend mirror. Kept on the device until an
 /// upload succeeds, so a record made while the backend session is down — a passkey account before its first
 /// ceremony, an expired token, no network — still arrives once the session is back. Bounded: at most `cap` rows (the
 /// newest; a row re-queued under the same id replaces its earlier version), and a row the server keeps refusing for a

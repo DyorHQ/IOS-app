@@ -134,7 +134,7 @@ public actor LaunchpadService {
         let econCalls = pairTokens.map { LaunchpadABI.call(factory, F.pairTokenEconomics, [.address($0)], returns: "uint256,uint256,uint8,bool") }
         let mondayOnlyCalls = pairTokens.map { LaunchpadABI.call(factory, F.pairMondayOnly, [.address($0)], returns: "bool") }
         // The terms hash for each pair, in the same multicall (one block) as the terms the screen shows, so a launch
-        // can be bound to exactly what was shown (IOST-2).
+        // can be bound to exactly what was shown.
         let hashCalls = pairTokens.map { LaunchpadABI.call(factory, F.previewLaunchEconomics, [.uint(configId), .address($0)], returns: "bytes32") }
         let calls = configCalls + econCalls + mondayOnlyCalls + hashCalls
         async let economics = multicall.readAll(calls)
@@ -842,7 +842,7 @@ public actor LaunchpadService {
     /// `launchPlan` with the launch fee and the economics hash read from the factory first, so the input only
     /// needs what the form collected. `expectedLaunchFee` is the fee the screen showed: the factory's owner can change
     /// `launchFee` at any time with no cap, and the transaction must pay exactly the current one, so a fee that moved
-    /// since the screen loaded is refused rather than signed unseen (security audit 2026-09-26, IOST-2).
+    /// since the screen loaded is refused rather than signed unseen.
     /// `expectedEconomics` is the terms hash read with the terms the screen showed (`PairEconomics.economicsHash`): the
     /// launch carries it, so the factory itself rejects terms changed after it was read, and a change seen here is
     /// refused before anything is signed. Without it the hash is read now, which binds nothing the screen showed.

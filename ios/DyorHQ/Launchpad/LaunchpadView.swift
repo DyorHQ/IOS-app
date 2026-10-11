@@ -133,7 +133,7 @@ struct LaunchpadView: View {
                     }
                     // Only the signed-in wallet's own: the retired launchpads' coins it still holds, which the board
                     // doesn't list, so the Launch tab is never a dead end for their holders. Saved with the board, and
-                    // kept when the balances can't be read again (RS-10), it says when it was read once the board's line
+                    // kept when the balances can't be read again, it says when it was read once the board's line
                     // has gone.
                     if !sellOnly.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {

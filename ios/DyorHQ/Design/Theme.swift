@@ -52,7 +52,7 @@ final class AppSettings {
 
     private func store(_ value: Any, _ key: String) { defaults.set(value, forKey: key); AppSettings.onChange?() }
 
-    /// App Lock where no choice was ever saved (security audit 2026-09-26, IOSK-4), decided once and saved so it never
+    /// App Lock where no choice was ever saved, decided once and saved so it never
     /// flips later: ON for a new install on a device that can verify its owner, so a phone picked up unlocked can't
     /// sign without Face ID or the passcode. An install from before this default — told apart by what earlier runs left
     /// in UserDefaults (`AppLockStore.isEarlierInstall`) — keeps the OFF it has always had. A device with no passcode

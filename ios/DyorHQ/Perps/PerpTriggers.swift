@@ -52,7 +52,7 @@ enum TriggerStore {
     }
 
     /// Record freshly-accepted triggers. Nothing earlier is dropped: a new entry's take-profit does NOT replace an older
-    /// one on Perpl — both stay live, each sized to its own entry — so both echoes stay too (security audit GT-1).
+    /// one on Perpl — both stay live, each sized to its own entry — so both echoes stay too.
     /// Returns what was recorded, so the order that placed them can later remove its own echoes only (`remove(ids:)`).
     @discardableResult
     static func record(_ new: [PlacedTrigger], owner: Address?) -> [PlacedTrigger] {
@@ -64,7 +64,7 @@ enum TriggerStore {
 
     /// Drop exactly these echoes: one order's own take-profit or stop-loss that will never be live (its own result said
     /// so, or a live list read after its entry executed nothing). Every other echo of that kind on that side stays: it
-    /// stands for another order's trigger, which is still live on Perpl (GT-1, GT-3).
+    /// stands for another order's trigger, which is still live on Perpl.
     static func remove(ids: Set<UUID>, owner: Address?) {
         guard !ids.isEmpty else { return }
         let list = all(owner: owner)
@@ -83,7 +83,7 @@ enum TriggerStore {
     /// Keep a trigger while its market still has an open position OR a resting entry order (or it is too fresh to have
     /// settled yet); drop it otherwise. Pruning needs `verified`: only while the trading stream is live can the app
     /// tell a trigger is gone — offline, a leftover echo may be the only trace of a trigger still armed at Perpl, so
-    /// it is kept and shown as unverified (security audit GT-3). Returns — and persists — the survivors.
+    /// it is kept and shown as unverified. Returns — and persists — the survivors.
     @discardableResult
     static func reconcile(owner: Address?, openPerpIds: Set<Int>, verified: Bool) -> [PlacedTrigger] {
         let now = Date()

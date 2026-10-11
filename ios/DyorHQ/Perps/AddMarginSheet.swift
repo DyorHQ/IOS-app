@@ -286,7 +286,7 @@ struct AddMarginSheet: View {
     }
 
     /// The margin over the trading connection: App Lock (as the wallet's margin asks it), the passkey session held for the
-    /// send (GL-1), the amount checks the device can make before any step-up, then `PerplTrading.addMargin` — a passkey
+    /// send, the amount checks the device can make before any step-up, then `PerplTrading.addMargin` — a passkey
     /// account's always asks first (MERA-PLAN §3) — which writes the row and, once this sheet is gone, the notice.
     private func addOverAPI(_ route: PerplTrading.ActionAccount, approval: MeraSession.StepUp? = nil) async {
         if approval == nil, settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm add margin")) {

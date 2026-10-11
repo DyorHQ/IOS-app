@@ -3,13 +3,13 @@ import DyorKit
 import Foundation
 import Observation
 
-/// A bridge deposit sent and not yet settled, persisted per account so tracking survives the app being killed (GL-5).
+/// A bridge deposit sent and not yet settled, persisted per account so tracking survives the app being killed.
 /// Public details only — hashes, addresses, symbols, amounts — never a key.
 struct PendingBridge: Codable, Equatable, Identifiable {
     var id: String { hash }
     /// The source-chain deposit transaction.
     let hash: String
-    /// The account that sent it: the only one it is ever tracked or credited for (RS-2).
+    /// The account that sent it: the only one it is ever tracked or credited for.
     let owner: Address
     let depositAddress: String
     let memo: String?
@@ -22,19 +22,19 @@ struct PendingBridge: Codable, Equatable, Identifiable {
     let destToken: AuroraToken
     /// The destination balance, asked for just before signing; set once that read answers (`setBaseline`), after the
     /// deposit is already persisted. Nil while it hasn't, or when it failed, which rules out confirming the arrival by
-    /// the balance (RI-3).
+    /// the balance.
     var baseline: BigUInt?
     let minOut: BigUInt?
     let usd: Double?
     let sentAt: Date
     /// Another bridge to the same asset was unsettled at some point while this one was: either one's credit could be
-    /// read as the other's arrival, so neither is ever confirmed by the balance, only by the bridge's status (RI-3).
+    /// read as the other's arrival, so neither is ever confirmed by the balance, only by the bridge's status.
     var overlapped = false
     /// The arrival was seen in the destination balance and recorded; the bridge's status is still watched for a refund.
     var arrivedByBalance = false
 }
 
-/// Tracks every bridge deposit until it settles, whether or not the Bridge screen is open (GL-5, RI-3, RS-2). A deposit
+/// Tracks every bridge deposit until it settles, whether or not the Bridge screen is open. A deposit
 /// is persisted the moment it is sent, so a relaunch or a return to the foreground resumes its tracking; completion
 /// (Portfolio volume, the "Bridge complete" notification) and refunds are recorded whenever they are seen.
 ///
@@ -80,7 +80,7 @@ final class BridgeTracker {
 
     // MARK: Lifecycle
 
-    /// Follows the signed-in account: stops every poll (RS-2), then resumes that account's own deposits.
+    /// Follows the signed-in account: stops every poll, then resumes that account's own deposits.
     func bind(owner: Address?) {
         guard owner != self.owner else { return }
         for poll in polls.values { poll.task.cancel() }
@@ -103,7 +103,7 @@ final class BridgeTracker {
     }
 
     /// A deposit just sent: persisted before anything else can go wrong, then polled. Any other unsettled bridge to the
-    /// same asset and this one are marked `overlapped` (RI-3).
+    /// same asset and this one are marked `overlapped`.
     func track(_ bridge: PendingBridge) {
         var bridge = bridge
         var list = Self.pending(owner: bridge.owner)
@@ -119,7 +119,7 @@ final class BridgeTracker {
         start(bridge)
     }
 
-    /// The destination balance asked for before `hash` was signed, once it answers (RI-3): recorded on the persisted
+    /// The destination balance asked for before `hash` was signed, once it answers: recorded on the persisted
     /// deposit unless it already has one. A read that failed (nil) leaves none. One that answers late can only be too
     /// high (it may include this bridge's own credit), which never confirms an arrival that didn't happen.
     func setBaseline(_ baseline: BigUInt?, for hash: String, owner: Address) {

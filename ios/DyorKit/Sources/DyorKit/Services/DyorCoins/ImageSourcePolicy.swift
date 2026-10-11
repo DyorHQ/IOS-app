@@ -12,7 +12,7 @@ public struct RemoteImageSource: Hashable, Sendable {
     }
 }
 
-/// Which hosts a coin's picture may be loaded from (security audit 2026-09-26, RI-5 area; pick 6, decision 10). Loading
+/// Which hosts a coin's picture may be loaded from. Loading
 /// an image tells its host the viewer's IP address and when they looked, so a coin's picture never loads from a host its
 /// creator chose. A picture written on chain by whoever made a coin — a launch token's logo, a Moment's media — is loaded
 /// only from infrastructure DyorHQ runs or content-addressed storage:
@@ -163,7 +163,7 @@ public struct ImageSourcePolicy: Hashable, Sendable {
 
     /// Whether a download from `url` already under way may finish into the image cache once no view waits for it:
     /// DyorHQ's own host or one of the app's gateways. A host a list, a news item or an NFT named is cancelled as soon
-    /// as nobody looks (security audit 2026-09-26, RI-5), as every download used to be.
+    /// as nobody looks, as every download used to be.
     public func mayFinishUnwatched(_ url: URL) -> Bool { isFirstParty(url) || isGateway(url) }
 
     /// Whether the sources of one picture may be asked side by side rather than strictly one after another
@@ -206,8 +206,8 @@ public struct ImageSourcePolicy: Hashable, Sendable {
     /// app writes the whole query after the picture's URL was classified, so no creator chooses a parameter of it.
     /// `resize=contain` because with a width alone Storage keeps the original's height and crops a strip out of it (a
     /// 1571 × 2048 photo asked for at 96 came back 96 × 2048, measured 2026-10-09). Never for a source with a `keccak`:
-    /// resized bytes can't be checked against the hash, and a Moment's mirror is never shown on trust (security audit
-    /// 2026-09-26, PR-2) — the pipeline asks only for unchecked sources (`ImagePipeline.asks`). Never for an avatar:
+    /// resized bytes can't be checked against the hash, and a Moment's mirror is never shown on trust — the
+    /// pipeline asks only for unchecked sources (`ImagePipeline.asks`). Never for an avatar:
     /// `avatars/<wallet>/avatar.jpg` is uploaded over, and a resized copy the CDN kept by its path alone could show the
     /// last one after the new upload, for an hour (`ImagePipeline.mutableLifetime`) — while an avatar is encoded at most
     /// 512 px already, so its copy would save next to nothing. Nil for anything else: another host, bucket or kind of

@@ -128,7 +128,7 @@ struct CreateLaunchView: View {
                 if let address = session.address, let info = protocolInfo {
                     // Use the async plan: it reads the launch fee and the on-chain economics hash the factory
                     // requires (`expectedEconomics`). The sync overload leaves that hash zero → LaunchEconomicsMismatch.
-                    // Both are bound to what this screen showed: the fee, and the terms hash read with the terms (IOST-2).
+                    // Both are bound to what this screen showed: the fee, and the terms hash read with the terms.
                     ConfirmationSheet(
                         title: "Launch \(symbol)", confirmTitle: "Launch \(symbol)",
                         build: {

@@ -23,7 +23,7 @@ struct TransferSheet: View {
     @State private var monUSD: Double?
     @State private var account: PerpAccount?
     @State private var loaded = false
-    /// A balance or account read that failed (RI-4). Nothing is planned on a read that failed: taken as zero AUSD or as
+    /// A balance or account read that failed. Nothing is planned on a read that failed: taken as zero AUSD or as
     /// "no account", it built a needless MON → AUSD swap and a second `createAccount`.
     @State private var loadError: String?
     @State private var quote: VenueQuote?
@@ -122,7 +122,7 @@ struct TransferSheet: View {
     }
 
     /// The wallet's AUSD and MON and the Perpl account. A read that fails is an error with a retry, never zero or "no
-    /// account" (RI-4): `account` returns nil only for an address Perpl says has none. The MON price may be missing;
+    /// account": `account` returns nil only for an address Perpl says has none. The MON price may be missing;
     /// `problem` already stops a swap that needs it.
     private func load() async {
         guard let address = session.address else { return }

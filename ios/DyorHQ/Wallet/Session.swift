@@ -157,7 +157,7 @@ final class Session {
             if suppressPrivyAdoption { return } // email verification only — don't adopt the Privy wallet
             if EmailCheckMarker.isSet {
                 // Left by an email check the app never finished (killed between the code and its logout): ended, never
-                // adopted as the user's wallet (GL-6).
+                // adopted as the user's wallet.
                 await user.logout()
                 EmailCheckMarker.clear()
                 return
@@ -445,15 +445,15 @@ final class Session {
         /// The email belongs to an account created before v2, bound to its legacy wallet at `legacy`, which still
         /// holds funds, so it can't upgrade yet (the email would leave them behind). Nothing was committed:
         /// `continueWithLegacyWallet()` signs in to that wallet so they can be moved out — no other signed-in device
-        /// needed (security audit 2026-09-26, GE-4) — and the upgrade follows at a later log-in, once it is empty.
+        /// needed — and the upgrade follows at a later log-in, once it is empty.
         case legacyHoldsFunds(legacy: Address)
     }
 
     /// Log in (no OTP): derive the v2 wallet, then sign in ONLY if `verify` confirms the email is a verified account
     /// bound to exactly this derived wallet. A wrong password derives a different wallet and fails verification. The
     /// derived account is handed to `verify` so the wallet can prove itself (sign in to the backend and read its own
-    /// binding) — there is no anonymous lookup that could confirm a guessed password. No legacy wallet is derived here
-    /// (IOSK-2): checking one means signing in with it, which hands the server an address anyone can test guesses of
+    /// binding) — there is no anonymous lookup that could confirm a guessed password. No legacy wallet is derived here:
+    /// checking one means signing in with it, which hands the server an address anyone can test guesses of
     /// this password against offline, so a v2 user's typo must never produce one. `logInToLegacyAccount` does that
     /// check, only when the user says the account predates v2.
     func logInWithPassword(email: String, password: String,
@@ -466,9 +466,9 @@ final class Session {
         return .signedIn
     }
 
-    /// Log in to an account created before v2, which the user said theirs is (IOSK-2): the password's legacy wallet (S
+    /// Log in to an account created before v2, which the user said theirs is: the password's legacy wallet (S
     /// alone — no pepper, so no request before the check), verified like `logInWithPassword`'s. Empty, it must upgrade
-    /// (`.needsUpgrade`). Still funded, it is held for `continueWithLegacyWallet` (`.legacyHoldsFunds`, GE-4). A balance
+    /// (`.needsUpgrade`). Still funded, it is held for `continueWithLegacyWallet` (`.legacyHoldsFunds`). A balance
     /// that can't be read stops here: an unknown balance is not an empty one.
     func logInToLegacyAccount(email: String, password: String,
                               verify: (_ email: String, _ account: Secp256k1Account) async throws -> Bool,
@@ -488,7 +488,7 @@ final class Session {
     }
 
     /// Signs in to the funded legacy wallet `logInToLegacyAccount` found and verified, as an Email & Password account,
-    /// so its funds can be moved out (GE-4). The binding doesn't change.
+    /// so its funds can be moved out. The binding doesn't change.
     func continueWithLegacyWallet() async {
         guard let pending = pendingLegacy else { return }
         pendingLegacy = nil
@@ -514,7 +514,7 @@ final class Session {
     ///
     /// The Privy session the check opens is ended on every path, a failure included, and a marker kept across launches
     /// covers a check the app never finished (killed in between): that session is ended at the next launch, never
-    /// adopted as the user's wallet (GL-6).
+    /// adopted as the user's wallet.
     func verifyEmailCapturingToken(email: String, code: String) async throws -> String {
         let privy = try requirePrivy()
         suppressPrivyAdoption = true
@@ -558,7 +558,7 @@ final class Session {
     /// differ from the old one (same password, same S, still guessable against that address), and that wallet must
     /// still be empty (`holdsFunds`) right before the email moves off it, so the move can never strand funds.
     ///
-    /// The email is never moved off another wallet unconfirmed (security audit 2026-09-26, GE-1): the server answers
+    /// The email is never moved off another wallet unconfirmed: the server answers
     /// `SessionError.emailAlreadyBound(current)` unless the request names that wallet (`replacing`, else the upgrade's
     /// legacy wallet), which the caller does only after the user saw what it holds and confirmed. Either way, a bound
     /// wallet that is this very password's legacy one is refused (`samePasswordLegacyBinding`): this password's S is
@@ -682,11 +682,11 @@ enum SessionError: LocalizedError {
     case upgradeNeedsNewPassword
     case appleSignInUnavailable
     case privyPasskeysDisabled
-    /// email-rebind refused to move the email off the wallet it is bound to (GE-1) until the user confirms.
+    /// email-rebind refused to move the email off the wallet it is bound to until the user confirms.
     case emailAlreadyBound(Address)
-    /// The wallet the email is bound to is this password's own legacy wallet (GE-1).
+    /// The wallet the email is bound to is this password's own legacy wallet.
     case samePasswordLegacyBinding
-    /// The user asked for an account from before v2, and none is bound to this email and password (IOSK-2).
+    /// The user asked for an account from before v2, and none is bound to this email and password.
     case legacyAccountNotFound
 
     /// The error in the app's language.
@@ -737,7 +737,7 @@ func authenticationServicesError(in error: Error) -> NSError? {
 
 /// An email one-time-code check in progress (`Session.verifyEmailCapturingToken`), remembered across launches: a Privy
 /// session found at launch while it is set was left by a check the app never finished, and is ended rather than adopted
-/// as the user's wallet (GL-6). Public flag only.
+/// as the user's wallet. Public flag only.
 private enum EmailCheckMarker {
     private static let key = "session.emailCheckInFlight"
     static var isSet: Bool { UserDefaults.standard.bool(forKey: key) }

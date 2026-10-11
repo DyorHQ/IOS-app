@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
-    /// No third-party keyboards anywhere in the app (security audit 2026-09-26, IOSK-8). A custom keyboard given "Allow
+    /// No third-party keyboards anywhere in the app. A custom keyboard given "Allow
     /// Full Access" can send whatever is typed with it — a recovery phrase or private key being imported, the password
     /// that is an Email & Password wallet — off the phone. The system keyboards stay available.
     func application(_ application: UIApplication,

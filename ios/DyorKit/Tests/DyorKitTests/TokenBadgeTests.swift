@@ -4,7 +4,7 @@ import XCTest
 
 /// The badge a token shows: DyorHQ's own coins say where they were made — "DyorHQ Launch" or "DyorHQ Moment", a Chinese,
 /// Japanese or Korean symbol included — instead of "Unverified", while a look-alike keeps its warning whatever made it,
-/// and what counts as received (a send's default, Top Tokens, the picker) is unchanged (IOST-12).
+/// and what counts as received (a send's default, Top Tokens, the picker) is unchanged.
 final class TokenBadgeTests: XCTestCase {
     private let creator = Address(literal: "0x90f3e7c3B4E32494b06814Fd2F4556671F5F4C47")
 
@@ -73,7 +73,7 @@ final class TokenBadgeTests: XCTestCase {
         }
     }
 
-    /// A DyorHQ coin sent to the wallet shows its DyorHQ label, and is still what IOST-12 protects against: never where a
+    /// A DyorHQ coin sent to the wallet shows its DyorHQ label, and is still treated as a token sent unasked: never where a
     /// send starts, ranked with the tokens the user chose.
     func testAReceivedDyorHQCoinIsLabelledButStaysReceived() {
         let qt = token("0x73F942e084Ab047a94e4E3B5D6ae571e23A51856", "QT", name: "Quet")

@@ -15,7 +15,7 @@ struct PriceAlert: Codable, Identifiable, Hashable, Sendable {
 }
 
 /// On-device storage for price alerts, per wallet like the activity log and the notification center: each account
-/// has its own alerts, and they are mirrored to that wallet's rows only (security audit 2026-09-26, RS-7). The app-wide
+/// has its own alerts, and they are mirrored to that wallet's rows only. The app-wide
 /// watcher (`AlertCenter`) checks them every 30 seconds while the app is open, fires a local notification when one
 /// crosses its target (`PriceAlertCheck`), and removes it: an alert fires once.
 enum PriceAlertStore {

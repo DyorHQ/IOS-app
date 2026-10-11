@@ -152,7 +152,7 @@ struct TokenBadgeView: View {
 }
 
 /// Marks an NFT that reached the wallet without the user choosing it in DyorHQ: anyone can send any NFT to any wallet,
-/// so its name and art prove nothing (security audit 2026-09-26, IOST-12). A token shows `TokenBadgeView`.
+/// so its name and art prove nothing. A token shows `TokenBadgeView`.
 struct UnverifiedBadge: View {
     var body: some View {
         Text("Unverified")
@@ -573,7 +573,7 @@ struct DetailRow: View {
     private let label: Text
     private let value: Text
     var tint: Color = .primary
-    /// VoiceOver reads the value character by character: an address, a hash (AI-13).
+    /// VoiceOver reads the value character by character: an address, a hash.
     var spellsOut = false
 
     init(_ label: LocalizedStringKey, _ value: LocalizedStringKey, tint: Color = .primary, spellsOut: Bool = false) {

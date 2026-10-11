@@ -6,7 +6,7 @@ import UIKit
 /// size, the notification center, price alerts and settings — and restores them on a fresh device
 /// after one sign-in (for a passkey account, which keeps nothing on the device, that is its whole local history). Every write goes through the wallet's backend session (row-level security by wallet);
 /// nothing here touches a key. Uploads are debounced and best-effort: the local stores stay the source of truth.
-/// Nothing waits on the session being up (security audit 2026-09-26, RS-4): each activity record joins a per-wallet
+/// Nothing waits on the session being up: each activity record joins a per-wallet
 /// queue kept on the device (`BackendMirrorQueue`) until an upload succeeds, and a store whose upload was skipped or
 /// failed stays marked for another try. Both are retried whenever the wallet's session connects (`restore`), the app
 /// returns to the foreground, and a new record arrives.
@@ -83,7 +83,7 @@ final class BackendSync {
     }
 
     /// The same settled transaction always maps to the same row, so re-recording it can never double a row. The row
-    /// is keyed by wallet and id together (`on_conflict=wallet,id`, security audit 2026-09-26, SB-5): the id comes from
+    /// is keyed by wallet and id together (`on_conflict=wallet,id`): the id comes from
     /// a public transaction hash, so another wallet claiming it first must not keep this wallet's row out.
     private static func stableID(_ record: ActivityRecord) -> UUID {
         guard let hash = record.txHash, hash.count >= 16 else { return record.id }
@@ -129,7 +129,7 @@ final class BackendSync {
 
     private func notifications(_ items: [AppNotification], owner: Address?) {
         guard let owner else { return }
-        // Marked, never dropped, while this wallet's restore runs (RS-4): its closing flush sends the store as it is then.
+        // Marked, never dropped, while this wallet's restore runs: its closing flush sends the store as it is then.
         guard restoring != owner else { Self.setDirty(.notifications, true, owner: owner); return }
         uploadNotifications(items, owner: owner, delay: 2)
     }
@@ -157,7 +157,7 @@ final class BackendSync {
         uploadAlerts(alerts, owner: owner, delay: 2)
     }
 
-    /// Mirrors the wallet's own alert list (security audit 2026-09-26, RS-7): upsert what the device has, then delete
+    /// Mirrors the wallet's own alert list: upsert what the device has, then delete
     /// what it no longer has — so the wallet's alerts are never missing server-side in between, and a failed request
     /// leaves the previous list rather than none.
     private func uploadAlerts(_ alerts: [PriceAlert], owner: Address, delay: Double) {
@@ -247,7 +247,7 @@ final class BackendSync {
 
     /// Once per wallet: the records this device holds that the server doesn't (`onServer`: the ids of its newest rows)
     /// join the queue. Builds before the queue sent a record only while the session was up, so anything recorded while
-    /// it was down was never uploaded (RS-4); from here on the queue keeps every new record until it is sent.
+    /// it was down was never uploaded; from here on the queue keeps every new record until it is sent.
     private func backfillActivity(owner: Address, onServer: Set<String>) {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: Self.backfilledKey(owner)) else { return }

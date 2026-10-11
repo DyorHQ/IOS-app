@@ -107,7 +107,7 @@ final class NotificationHub {
     /// Records the notification and delivers it as a system notification when `deliver` is true, the in-app master
     /// toggle is on, and OS permission is granted. The in-app center always keeps the record either way. `owner` is the
     /// account the action belongs to, when the caller knows it (`Activity.record`): an action that settles after the app
-    /// moved to another account is filed in its own account's center, not the one on screen (RS-9).
+    /// moved to another account is filed in its own account's center, not the one on screen.
     func post(_ notification: AppNotification, deliver: Bool = true, owner account: Address? = nil) {
         if let account, account != owner {
             var list = NotificationStore.all(owner: account)

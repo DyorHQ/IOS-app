@@ -114,7 +114,7 @@ final class PerpsModel {
     /// The user closed this market's position on `side`, or sent an order that closes it (`PerpCloseOrder.closes`: a
     /// reduce-only order, or one on the other side of the position), from this app: its disappearance is expected, and
     /// the app-wide watcher stays quiet about it. Noted when the close is sent, before the next poll can see the position
-    /// gone (GT-9).
+    /// gone.
     func noteUserClose(_ perpId: Int, closing side: PositionSide) { alerts?.noteUserClose(perpId, closing: side) }
 
     /// A close noted as sent never left the device: the position's disappearance is news again.
@@ -205,7 +205,7 @@ final class PerpsModel {
 
     /// What changed since the last good read (`PerpPositionWatch`): a position that opened or grew raises the fill
     /// signal, so the trade screen can jump to Positions; one the account no longer holds has Perpl trading cancel the
-    /// TP/SL it leaves behind, in case the stream's own report was missed (security audit GT-2). Neither posts a notice:
+    /// TP/SL it leaves behind, in case the stream's own report was missed. Neither posts a notice:
     /// the app-wide watcher (`AlertCenter`) posts the fill and the close on any screen, including this one.
     private func detectChanges(_ fresh: [PerpPosition], stillOpen: Set<Int>, trading: PerplTrading) {
         let changes = watch.update(fresh, stillOpen: stillOpen)

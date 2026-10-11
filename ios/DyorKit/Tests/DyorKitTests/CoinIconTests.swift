@@ -3,7 +3,7 @@ import XCTest
 
 /// Which picture a token shows, by address: a curated token's bundled logo, a DyorHQ coin's own art loaded only from
 /// DyorHQ's bucket or through DyorHQ's IPFS gateways, a list logo for anything else — and letters for a look-alike or a
-/// picture from a host nobody vouches for (RI-5 area: no creator-chosen host ever learns who looked).
+/// picture from a host nobody vouches for (no creator-chosen host ever learns who looked).
 final class CoinIconTests: XCTestCase {
     private let supabase = URL(string: "https://fmnjqrguvopusfufmirs.supabase.co")!
     private var policy: ImageSourcePolicy { ImageSourcePolicy(supabaseURL: supabase) }

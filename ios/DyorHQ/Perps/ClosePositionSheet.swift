@@ -14,13 +14,13 @@ struct ClosePositionSheet: View {
     let mark: Double
     /// The Perpl account the close is sent for: its own request is read from the receipt.
     var accountId: Int?
-    /// The live TP/SL closing this position's side, to say what happens to them (security audit GT-2).
+    /// The live TP/SL closing this position's side, to say what happens to them.
     var leftoverTriggers: [PerplOpenOrder] = []
     /// The trading connection's route for this close, fixed at the tap that opened the sheet; nil: the wallet transaction.
     var route: PerplTrading.ActionAccount? = nil
     /// The close is about to be sent (`whole`: the 100% chip), and — if it then fails before anything left the device, or
     /// it filled nothing — it didn't close: so the positions poll knows the position's disappearance is expected from the
-    /// moment it could happen (GT-9), not only once Done is tapped, and is news again when nothing closed. A partial close
+    /// moment it could happen, not only once Done is tapped, and is news again when nothing closed. A partial close
     /// never notes a close of the position.
     var onSending: (_ whole: Bool) -> Void = { _ in }
     var onNotSent: () -> Void = {}
@@ -158,7 +158,7 @@ struct ClosePositionSheet: View {
                                 .keyboardType(.decimalPad).multilineTextAlignment(.trailing).monospacedDigit()
                                 .disabled(termsLocked)
                         }
-                        // The price this close signs, read back from the typed text (audit F4).
+                        // The price this close signs, read back from the typed text.
                         if let limitPrice, limitPrice > 0 { DetailRow("Limit at", NumberStyle.number(limitPrice, maximumFractionDigits: market.priceDecimals)) }
                         if let limitProblem { Paragraph(limitProblem).font(.footnote).foregroundStyle(Color.attention) }
                         Toggle("Post only (maker)", isOn: $postOnly).disabled(termsLocked)
@@ -248,7 +248,7 @@ struct ClosePositionSheet: View {
             switch phase {
             case .done(let hash):
                 onSending(percent == 100) // settled: expected from now on, whenever the poll next reads
-                // At the receipt (GL-3): the close was sent and its result isn't read yet. No volume until a fill is read.
+                // At the receipt: the close was sent and its result isn't read yet. No volume until a fill is read.
                 Activity.record(ActivityRecord(kind: .perp, title: PerpOnChainCopy.closeTitle(position.symbol), subtitle: PerpOnChainCopy.closeSent, hash: hash,
                                                section: "perps", usd: nil), owner: session.address, notify: false)
                 readResult(hash)
@@ -326,7 +326,7 @@ struct ClosePositionSheet: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
                         } else if entry.executedNothing {
-                            // Perpl's final word: nothing executed, so a new close can't double it (GL-1).
+                            // Perpl's final word: nothing executed, so a new close can't double it.
                             PrimaryButton(title: "Try Again", systemImage: "arrow.clockwise", isDisabled: !canConfirm) { tryAgain(route) }
                             Button("Done") { finish() }.font(.subheadline.weight(.semibold))
                         } else {
@@ -378,7 +378,7 @@ struct ClosePositionSheet: View {
     }
 
     /// The close over the trading connection: App Lock (as the wallet's close asks it), then the passkey session held for
-    /// the send (GL-1), then `submitClose` — a passkey account's close always asks first (MERA-PLAN §3) — and Perpl's
+    /// the send, then `submitClose` — a passkey account's close always asks first (MERA-PLAN §3) — and Perpl's
     /// result followed (`track`, whether this sheet stays open or not). Nothing is ever resent from here.
     private func closeOverAPI(_ route: PerplTrading.ActionAccount, approval: MeraSession.StepUp? = nil) async {
         if approval == nil, settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm close")) {
@@ -386,7 +386,7 @@ struct ClosePositionSheet: View {
             apiPhase = .review
             return
         }
-        // A passkey session (and its trading socket) outlives leaving the app until this close is sent (GL-1).
+        // A passkey session (and its trading socket) outlives leaving the app until this close is sent.
         session.mera.beginAction()
         defer { session.mera.endAction() }
         apiPhase = .sending

@@ -41,7 +41,7 @@ final class BridgeModel {
 
     private(set) var quote: AuroraQuote?
     /// The most the deposit's network fee can come to on the source chain at today's fees, once the quote names the
-    /// deposit address (IOST-1). The deposit is signed there against a public RPC, within `NetworkFeeLimits`.
+    /// deposit address. The deposit is signed there against a public RPC, within `NetworkFeeLimits`.
     private(set) var networkFee: TransactionSender.FeePreview?
     private(set) var quoting = false
     private(set) var quoteError: String?
@@ -49,7 +49,7 @@ final class BridgeModel {
 
     enum Phase: Equatable { case idle, signing, submitting, bridging(AuroraSwapStatus), done(String), settling(String), failed(String) }
     /// Signing and submitting, and failures before a deposit was sent. Once one is sent, `phase` follows the app-wide
-    /// `BridgeTracker`, which keeps tracking it after this screen closes or the app is killed (GL-5).
+    /// `BridgeTracker`, which keeps tracking it after this screen closes or the app is killed.
     private var localPhase: Phase = .idle
     /// The deposit this screen sent and shows (its source transaction hash).
     private var trackedHash: String?
@@ -450,7 +450,7 @@ final class BridgeModel {
         // sign anything else — a quote whose input amount, recipient or refund address differs from the request. This
         // catches a buggy or mismatched quote; it cannot prove the deposit address is Aurora's, because the request
         // echo arrives in the same response as that address: the address is trusted to Aurora and the aurora-proxy
-        // Edge Function, and the review card shows it before the user confirms (security audit 2026-09-26, IOST-3).
+        // Edge Function, and the review card shows it before the user confirms.
         guard let quotedIn = BigUInt(quote.amountIn), quotedIn == amount else {
             localPhase = .failed(tr("The bridge quote didn't match the amount you entered, so nothing was sent. Get a new quote."))
             return
@@ -464,7 +464,7 @@ final class BridgeModel {
         let sourceChain = fromChain
         let destChain = toChain
         // A lock or an app switch while the deposit is signed and sent suspends this: ask for the time iOS grants, so the
-        // deposit is broadcast, recorded and persisted, and Aurora told (GL-5).
+        // deposit is broadcast, recorded and persisted, and Aurora told.
         let background = BackgroundTime("Bridge") // not localized: the background task's name, never shown
         defer { background.end() }
         do {
@@ -472,7 +472,7 @@ final class BridgeModel {
                 localPhase = .failed(tr("This source token can't be bridged.")); return
             }
 
-            // The destination balance, asked for before signing (RI-3): the baseline an arrival is measured from. Asked
+            // The destination balance, asked for before signing: the baseline an arrival is measured from. Asked
             // before the deposit exists, it can't include this bridge's credit, which takes the deposit confirming and the
             // bridge settling. Never the picker's cached balance, which can be missing or from before an earlier bridge
             // landed; a read that fails leaves no baseline, and the arrival is then never inferred from the balance. It
@@ -493,7 +493,7 @@ final class BridgeModel {
             }
             trackedHash = hash.hexString
             sourceTxURL = sourceChain.explorerTx(hash.hexString) // source deposit tx — a verifiable link straight away
-            // Recorded and persisted the moment it is sent, before anything else can go wrong (GL-5): the funds have left
+            // Recorded and persisted the moment it is sent, before anything else can go wrong: the funds have left
             // the source chain.
             let bridgeFeeUsd: Double? = {
                 guard let inUsd = quote.amountInUsd.flatMap(Double.init), let outUsd = quote.amountOutUsd.flatMap(Double.init) else { return nil }

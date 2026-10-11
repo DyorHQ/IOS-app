@@ -4,8 +4,7 @@ import ImageIO
 import XCTest
 @testable import DyorKit
 
-/// Untrusted remote media is read up to a byte cap and decoded only as a thumbnail, after its declared size is checked
-/// (security audit 2026-09-26, RI-5).
+/// Untrusted remote media is read up to a byte cap and decoded only as a thumbnail, after its declared size is checked.
 final class RemoteMediaTests: XCTestCase {
     override func setUp() { MediaStub.reset() }
 

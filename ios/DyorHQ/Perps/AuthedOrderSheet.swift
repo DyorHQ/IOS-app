@@ -10,7 +10,7 @@ import SwiftUI
 /// filled, refused — or, when Perpl's report doesn't come in time, that its result isn't confirmed yet. It can be closed
 /// while it waits: `PerplTrading.track` keeps following the order, and the trade screen's status row shows the result.
 /// Off, it is today's one-click sheet (`placeLegacy`): Perpl's acknowledgement, and the app-wide watcher reports a fill.
-/// Nothing is ever resent from here: a second order needs a new tap on the ticket (GL-1, the path fixed at the tap).
+/// Nothing is ever resent from here: a second order needs a new tap on the ticket (the path fixed at the tap).
 struct AuthedOrderSheet: View {
     let market: PerpMarket
     let input: OrderInput
@@ -20,7 +20,7 @@ struct AuthedOrderSheet: View {
     let sideColor: Color
     let summaryMargin: Double
     /// What the triggers close when it isn't the order's size: what is left on the new side of a position the order
-    /// turns around (GT-6), with a note saying so.
+    /// turns around, with a note saying so.
     var triggerSize: Double? = nil
     var triggerNote: String? = nil
     /// The account's positions and orders as the Exchange last reported them, for the checks made where it is sent.
@@ -126,7 +126,7 @@ struct AuthedOrderSheet: View {
                         DetailRow("Size", verbatim: "\(NumberStyle.number(input.size, maximumFractionDigits: market.lotDecimals)) \(market.asset)")
                         DetailRow("Leverage", verbatim: "\(NumberStyle.number(input.leverage, maximumFractionDigits: 1))×")
                         DetailRow("Margin", PriceFormat.usdValue(summaryMargin))
-                        // Each closes this order's size, fixed when placed (security audit GT-5).
+                        // Each closes this order's size, fixed when placed.
                         if let takeProfit { DetailRow("Take profit", "\(NumberStyle.number(takeProfit)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .positive) }
                         if let stopLoss { DetailRow("Stop loss", "\(NumberStyle.number(stopLoss)) · closes \(NumberStyle.number(triggerSize ?? input.size)) \(market.asset)", tint: .negative) }
                     } header: {
@@ -307,7 +307,7 @@ struct AuthedOrderSheet: View {
         let lines = outcomeLines(order)
         if let entry = order.entry {
             let words = PerplOutcomeText.order(entry, order.textContext)
-            // Perpl never answered the entry: its result can't be known yet, and the triggers weren't sent (GL-1).
+            // Perpl never answered the entry: its result can't be known yet, and the triggers weren't sent.
             let text = PerplTracker.isUnconfirmed(entry) && !order.acknowledged
                 ? PerplOutcomeText(headline: words.headline, detail: PerpOrderCopy.unknown(takeProfit: order.takeProfit != nil, stopLoss: order.stopLoss != nil), tone: words.tone)
                 : words
@@ -414,7 +414,7 @@ struct AuthedOrderSheet: View {
 
     /// Records the TP/SL Perpl admitted (or never answered: they may be live) on this device, shown as unverified until
     /// Perpl's list says otherwise (Perpl offers no read-back for keeper triggers). Returns each echo's id by kind: the
-    /// order removes only its own echoes later, never another order's of the same kind (GT-1).
+    /// order removes only its own echoes later, never another order's of the same kind.
     @discardableResult
     private func recordTriggerEchoes(_ result: PerplTrading.BracketResult) -> [PerplTriggerKind: UUID] {
         var placed: [PlacedTrigger] = []
@@ -435,7 +435,7 @@ struct AuthedOrderSheet: View {
     private func place(approval: MeraSession.StepUp? = nil) async {
         // App Lock covers leveraged orders too (this path signs with the Perpl API key, not a confirmation sheet).
         if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm order")) { return }
-        // A passkey session (and its trading socket) outlives leaving the app until this bracket is sent (GL-1).
+        // A passkey session (and its trading socket) outlives leaving the app until this bracket is sent.
         session.mera.beginAction()
         defer { session.mera.endAction() }
         phase = .sending
@@ -489,7 +489,7 @@ struct AuthedOrderSheet: View {
     private func placeLegacy(approval: MeraSession.StepUp? = nil) async {
         // App Lock covers leveraged orders too (this path signs with the Perpl API key, not a confirmation sheet).
         if settings.appLockApplies(to: session.account), !(await BiometricGate.authenticate(reason: "Confirm order")) { return }
-        // A passkey session (and its trading socket) outlives leaving the app until this bracket is sent (GL-1).
+        // A passkey session (and its trading socket) outlives leaving the app until this bracket is sent.
         session.mera.beginAction()
         defer { session.mera.endAction() }
         phase = .sending
@@ -538,7 +538,7 @@ struct AuthedOrderSheet: View {
         } catch is PerplTrading.EntryUnanswered {
             // The entry frame went out but was never acknowledged: it may be live. Resending would place a second
             // order, so this sheet only closes (and reloads orders and positions) from here. Its triggers are sent only
-            // after the entry is answered, so none of them went out (GL-1): if the entry is live, it has no TP/SL.
+            // after the entry is answered, so none of them went out: if the entry is live, it has no TP/SL.
             onSent()
             phase = .legacyUnknown(PerpOrderCopy.unknown(takeProfit: takeProfit != nil, stopLoss: stopLoss != nil))
         } catch let error as PerplTradeError where error.outcomeUnknown {
@@ -550,8 +550,8 @@ struct AuthedOrderSheet: View {
     }
 
     /// What to say about requested triggers that aren't known to be live: `false` refused (or never sent), `true`
-    /// sent but unanswered — it may be live, so it must not be placed again blindly (security audit GL-1). Refused
-    /// ones are set again from the position's TP/SL, not by opening more size (GT-1).
+    /// sent but unanswered — it may be live, so it must not be placed again blindly. Refused
+    /// ones are set again from the position's TP/SL, not by opening more size.
     /// In the app's language; each combination is a sentence of its own.
     private func triggerWarning(tp: Bool?, sl: Bool?) -> String? {
         var parts: [String] = []
@@ -606,7 +606,7 @@ struct OrderTicket {
     /// flag survives a mode switch, the effective value here is always false for a market order.
     var effectiveReduceOnly: Bool { kind == .limit && reduceOnly }
     var effectivePostOnly: Bool { kind == .limit && postOnly }
-    /// TP/SL only on an order that opens or adds (security audit GT-6): on a reduce-only order its triggers would close
+    /// TP/SL only on an order that opens or adds: on a reduce-only order its triggers would close
     /// the side the account doesn't hold. Also enforced in `PerplTrading`.
     var effectiveTPSL: Bool { tpslEnabled && !effectiveReduceOnly }
 
@@ -665,6 +665,6 @@ struct OrderTicket {
 extension String {
     /// Parses a user-typed price, size or trigger (`Amount.fieldNumber`). The decimal pad shows the locale separator
     /// ("," across much of Europe/LatAm) while our own writers (`plainSize`) emit POSIX "."; a pasted "66,000" in en_US
-    /// is 66000, never 66 (audit F4), and "0,5" is one half in every locale, never 5.
+    /// is 66000, never 66, and "0,5" is one half in every locale, never 5.
     var perpDouble: Double? { Amount.fieldNumber(self) }
 }

@@ -181,7 +181,7 @@ struct TriggerRow: Identifiable {
         }
     }
 
-    /// How much of the position it closes, when that isn't all of it (security audit GT-5: a trigger's size is fixed
+    /// How much of the position it closes, when that isn't all of it (a trigger's size is fixed
     /// when it's placed and doesn't follow the position).
     var coverage: String? {
         guard let positionSize, positionSize > 0, size > 0 else { return nil }

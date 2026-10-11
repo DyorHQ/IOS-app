@@ -186,7 +186,7 @@ My Launchpad, My Moments, Recent Activity and the alert checks — so those read
   a read waits only for the lookups of its own tokens under way, so two screens never look the same token up twice, and a
   read whose tokens were all looked up lately waits for none.
 * The Moments terms (`MomentsService.policy`) are shared for a minute (`ChainCache.TTL.terms`): their values change only
-  through a proposal queued for 48 hours, and a publish stays bound to the terms its review showed (`termsHash`, MO-4).
+  through a proposal queued for 48 hours, and a publish stays bound to the terms its review showed (`termsHash`).
 * A transaction that settles in a `ConfirmationSheet` and every pull to refresh forget all of it
   (`AppEnvironment.invalidateChainReads`): the next read goes to the chain, and no read begun before is joined or kept.
 

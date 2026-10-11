@@ -149,7 +149,7 @@ final class HomeModel {
 
     /// Finds ERC-20s the wallet holds on-chain that aren't in its universe yet (received outside the app, airdropped,
     /// bridged), persists them to the shared token store as Unverified, and reloads — so every held token appears in
-    /// holdings, marked, while the swap picker lists it only when searched for (IOST-12). Runs once per wallet; the
+    /// holdings, marked, while the swap picker lists it only when searched for. Runs once per wallet; the
     /// persisted tokens then price and balance like any curated asset.
     /// The tokens the wallet's history shows it received, from the history model's transfers (no scan of its own): read
     /// again as the history fills in, and once more after it is complete.
@@ -205,7 +205,7 @@ final class HomeModel {
         unverified = KnownTokenStore.unverified(owner: address)
         // Each part is published as its own read lands, never held back by the slowest (`publishSpot`, `publishLaunch`,
         // `publishPerps`, `publishMoments`): its tab and its figure in the split fill in one by one. A load cancelled
-        // part-way (the screen went away, the account changed) publishes nothing more (security audit 2026-09-26, RS-10):
+        // part-way (the screen went away, the account changed) publishes nothing more:
         // what the rest of its reads answer is dropped.
         var priceMap: [Address: PriceInfo]?
         var priceError: Error?
@@ -280,11 +280,11 @@ final class HomeModel {
         }
         let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)
         // A read that failed keeps what the last good one showed, and says so; a load cancelled part-way (the screen
-        // went away, the account changed) publishes nothing more (security audit 2026-09-26, RS-10).
+        // went away, the account changed) publishes nothing more.
         guard !Task.isCancelled, address == loadedFor, let listing else { return }
         // The coins the registry says this wallet made are its own, not Unverified: recorded as chosen through the helper
         // the Portfolio and the Send sheet use (`WalletTokens.markOwnCoins`). A coin it was only sent stays Unverified, out
-        // of Top Tokens (IOST-12).
+        // of Top Tokens.
         if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }
         unverified = KnownTokenStore.unverified(owner: address)
         if let priceError {
