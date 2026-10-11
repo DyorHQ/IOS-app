@@ -1440,35 +1440,6 @@
         }
       }
     },
-    "Approve USDC for Permit2" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aprobar USDC para Permit2"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Approuver USDC pour Permit2"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Permit2에 USDC 승인"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "为 Permit2 授权 USDC"
-          }
-        }
-      }
-    },
     "Approve developer buy" : {
       "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. It approves the pair asset for the coin creator's own first buy, made with the launch.",
       "localizations" : {
@@ -10271,35 +10242,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "保险库不是 Mera 格式。"
-          }
-        }
-      }
-    },
-    "The wallet returned an unreadable signature." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "La billetera devolvió una firma ilegible."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le portefeuille a renvoyé une signature illisible."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "지갑이 읽을 수 없는 서명을 반환했습니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "钱包返回了无法读取的签名。"
           }
         }
       }

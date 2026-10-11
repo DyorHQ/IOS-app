@@ -541,35 +541,6 @@
         }
       }
     },
-    "%@ confirmed on Monad." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@: confirmado en Monad."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Transaction « %@ » confirmée sur Monad."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@: Monad에서 확인됐어요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 已在 Monad 上确认。"
-          }
-        }
-      }
-    },
     "%@ confirms it's your passkey, even if your session is open. Your data on the server is deleted first; only then is the passkey removed and this phone cleared. This cannot be undone." : {
       "localizations" : {
         "es" : {
@@ -4186,71 +4157,6 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld 倍杠杆"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "%lld to claim" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld por reclamar"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld por reclamar"
-                }
-              }
-            }
-          }
-        },
-        "fr" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld à réclamer"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld à réclamer"
-                }
-              }
-            }
-          }
-        },
-        "ko" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "수령 가능 %lld건"
-                }
-              }
-            }
-          }
-        },
-        "zh-Hans" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld 项待领取"
                 }
               }
             }
@@ -8946,35 +8852,6 @@
         }
       }
     },
-    "Cancel sent for the stop-loss at %@. It leaves the list when Perpl confirms." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se envió la cancelación del stop loss a %@. Saldrá de la lista cuando Perpl la confirme."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Annulation du stop loss à %@ envoyée. Il disparaît de la liste dès que Perpl confirme."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@에 설정된 손절 주문의 취소 요청을 보냈어요. Perpl이 확인하면 목록에서 사라져요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已发送 %@ 止损的取消请求。Perpl 确认后，它会从列表中移除。"
-          }
-        }
-      }
-    },
     "Cancel sent for the stop-loss, but Perpl hasn't confirmed it. Check Orders: it may still be live." : {
       "localizations" : {
         "es" : {
@@ -8999,35 +8876,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已发送止损的取消请求，但 Perpl 尚未确认。查看“委托”：它可能仍然有效。"
-          }
-        }
-      }
-    },
-    "Cancel sent for the take-profit at %@. It leaves the list when Perpl confirms." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se envió la cancelación del take profit a %@. Saldrá de la lista cuando Perpl la confirme."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Annulation du take profit à %@ envoyée. Il disparaît de la liste dès que Perpl confirme."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@에 설정된 익절 주문의 취소 요청을 보냈어요. Perpl이 확인하면 목록에서 사라져요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已发送 %@ 止盈的取消请求。Perpl 确认后，它会从列表中移除。"
           }
         }
       }
@@ -14441,35 +14289,6 @@
         }
       }
     },
-    "Creator fees couldn't be read" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No se pudieron leer las comisiones del creador"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Impossible de lire les frais du créateur"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "크리에이터 수수료를 읽지 못함"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法读取创作者费用"
-          }
-        }
-      }
-    },
     "Creator fees couldn't be read just now." : {
       "localizations" : {
         "es" : {
@@ -14690,35 +14509,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "创作者 · %@（已退役的 Launchpad）"
-          }
-        }
-      }
-    },
-    "Cross-chain bridging isn't configured in this build yet." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "El puente entre cadenas aún no está configurado en esta versión."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le bridge entre chaînes n'est pas encore configuré dans cette version."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이 빌드에는 아직 크로스체인 브리지가 설정되지 않았어요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此版本尚未配置跨链功能。"
           }
         }
       }
@@ -28120,35 +27910,6 @@
         }
       }
     },
-    "Nothing to claim yet" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aún no hay nada que reclamar"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rien à réclamer pour l'instant"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "아직 수령할 항목 없음"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暂无可领取"
-          }
-        }
-      }
-    },
     "Nothing to claim yet — fees accrue as people trade your coin." : {
       "localizations" : {
         "es" : {
@@ -31713,64 +31474,6 @@
         }
       }
     },
-    "Perpl didn't confirm cancelling the stop-loss at %@. Check Orders before trying again." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl no confirmó la cancelación del stop loss a %@. Revisa Órdenes antes de volver a intentarlo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl n'a pas confirmé l'annulation du stop loss à %@. Vérifiez l'onglet Ordres avant de réessayer."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl이 %@에 설정된 손절 주문의 취소를 확인하지 않았습니다. 다시 시도하기 전에 ‘주문’ 탭을 확인하십시오."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl 未确认取消 %@ 的止损。重试前先查看“委托”。"
-          }
-        }
-      }
-    },
-    "Perpl didn't confirm cancelling the take-profit at %@. Check Orders before trying again." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl no confirmó la cancelación del take profit a %@. Revisa Órdenes antes de volver a intentarlo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl n'a pas confirmé l'annulation du take profit à %@. Vérifiez l'onglet Ordres avant de réessayer."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl이 %@에 설정된 익절 주문의 취소를 확인하지 않았습니다. 다시 시도하기 전에 ‘주문’ 탭을 확인하십시오."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl 未确认取消 %@ 的止盈。重试前先查看“委托”。"
-          }
-        }
-      }
-    },
     "Perpl has no candle history for this market yet." : {
       "localizations" : {
         "es" : {
@@ -32107,76 +31810,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Perpl 拒绝了追加保证金。"
-          }
-        }
-      }
-    },
-    "Perpl refused to cancel the stop-loss at %@: %@. It is still live." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Perpl refused to cancel the stop-loss at %1$@: %2$@. It is still live."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl se negó a cancelar el stop loss a %1$@: %2$@. Sigue activo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl a refusé d'annuler le stop loss à %1$@ : %2$@. Il est toujours actif."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl이 %1$@에 설정된 손절 주문의 취소를 거부했습니다: %2$@. 주문은 아직 활성 상태입니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl 拒绝取消 %1$@ 的止损：%2$@。它仍然有效。"
-          }
-        }
-      }
-    },
-    "Perpl refused to cancel the take-profit at %@: %@. It is still live." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Perpl refused to cancel the take-profit at %1$@: %2$@. It is still live."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl se negó a cancelar el take profit a %1$@: %2$@. Sigue activo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl a refusé d'annuler le take profit à %1$@ : %2$@. Il est toujours actif."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl이 %1$@에 설정된 익절 주문의 취소를 거부했습니다: %2$@. 주문은 아직 활성 상태입니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perpl 拒绝取消 %1$@ 的止盈：%2$@。它仍然有效。"
           }
         }
       }
@@ -54227,36 +53860,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全部"
-          }
-        }
-      }
-    },
-    "no reason given" : {
-      "comment" : "Stands in for Perpl's reason when it gave none, completing “Perpl refused to cancel the take-profit at %@: <this>.”",
-      "extractionState" : "stale",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "sin motivo indicado"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "aucune raison indiquée"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "사유 없음"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未说明原因"
           }
         }
       }
