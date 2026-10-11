@@ -111,7 +111,7 @@ final class FormattedTextIsolationTests: XCTestCase {
             XCTAssertTrue(home.contains(price), price)
         }
         XCTAssertFalse(home.contains("USDText(value: row.usd"), "a unit price is a price")
-        let launch = try AppSource.app("Launchpad/LaunchpadView.swift")
+        let launch = try AppSource.appFiles(AppSource.launchpadViewFiles)
         XCTAssertTrue(launch.contains("Text(PriceFormat.usdPrice(priceUSD)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().accessibilityLabel(PriceFormat.spoken(priceUSD))"))
         let moments = try AppSource.app("Moments/MomentDetailView.swift")
         XCTAssertEqual(moments.components(separatedBy: "MomentsFormat.coinPriceSpoken(").count - 1, 3, "every coin price shown is spoken")

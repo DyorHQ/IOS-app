@@ -152,11 +152,11 @@ final class DocsLinksTests: XCTestCase {
             // The slippage sheet's explanation.
             .init("slippageAndPriceImpact", "Swap/SwapView.swift", "SlippageSheet", follows: "How far the price may move before your swap settles"),
             // Launch a Coin: the pairing footer.
-            .init("launchACoin", "Launchpad/LaunchpadView.swift", "CreateLaunchView", follows: "Launch fee"),
+            .init("launchACoin", "Launchpad/CreateLaunchView.swift", "CreateLaunchView", follows: "Launch fee"),
             // The coin page: its creator fees, its gauge while the curve trades, its graduation section once it doesn't.
-            .init("launchpadFeesAndRewards", "Launchpad/LaunchpadView.swift", "LaunchDetailView", follows: "they accrue in the fee escrow"),
-            .init("launchpadGraduation", "Launchpad/LaunchpadView.swift", "LaunchDetailView", follows: "Graduates at"),
-            .init("launchpadGraduation", "Launchpad/LaunchpadView.swift", "LaunchDetailView", follows: "The curve is full."),
+            .init("launchpadFeesAndRewards", "Launchpad/LaunchDetailView.swift", "LaunchDetailView", follows: "they accrue in the fee escrow"),
+            .init("launchpadGraduation", "Launchpad/LaunchDetailView.swift", "LaunchDetailView", follows: "Graduates at"),
+            .init("launchpadGraduation", "Launchpad/LaunchDetailView.swift", "LaunchDetailView", follows: "The curve is full."),
             // Publish a Moment: the economics footer.
             .init("publishAMoment", "Moments/CreateMomentView.swift", "CreateMomentView", follows: "Collecting ends at graduation"),
             // A Moment: the collect section, Your Position (vesting and claims), You Created This (the creator's earnings).
@@ -203,7 +203,7 @@ final class DocsLinksTests: XCTestCase {
         XCTAssertTrue(unmatched.isEmpty, "missing: \(unmatched)")
         // The coin page shows one of its two graduation links: under the gauge while the curve trades, or under the
         // graduation section once it doesn't.
-        let launchpad = try AppSource.app("Launchpad/LaunchpadView.swift")
+        let launchpad = try AppSource.appFiles(AppSource.launchpadViewFiles)
         XCTAssertTrue(launchpad.contains("if launch.phase == .bonding, launch.curveSellsOpen { LearnMoreLink(.launchpadGraduation) }"))
         XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
         // The first deposit's link stays while an amount under the minimum is typed: the problem takes the text's place.

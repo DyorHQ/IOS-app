@@ -13,7 +13,7 @@ final class TradeStringsTests: XCTestCase {
     /// Every Swift file of the five folders, without its comments.
     private static func sources() throws -> [(path: String, code: [Character])] {
         let all = try FormattedTextIsolationTests.appSources().filter { source in folders.contains { source.path.hasPrefix($0) } }
-        XCTAssertEqual(all.count, 21, "the five folders' files")
+        XCTAssertEqual(all.count, 25, "the five folders' files")
         return all.map { ($0.path, uncommented(Array($0.text))) }
     }
 
@@ -235,7 +235,7 @@ final class TradeStringsTests: XCTestCase {
         XCTAssertTrue(past.contains(#"Text(verbatim: tr(LocalizedStringResource("pastCohort.closed", defaultValue: "Closed", comment: "#))
         XCTAssertTrue(past.contains(#"(info.graduated ? Text("Graduated") : info.state == .expired ? Text("Expired")"#), "each status is a key")
         XCTAssertFalse(past.contains(#""Closed")"#))
-        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         XCTAssertTrue(profile.contains(#"Picker(tr(LocalizedStringResource("myLaunchpad.view", defaultValue: "View", comment: "#))
         XCTAssertFalse(profile.contains(#"Picker("View""#))
     }
@@ -281,7 +281,7 @@ final class TradeStringsTests: XCTestCase {
             }
         }
         XCTAssertEqual(agos, 3, "Launch trades, My Launchpad activity and Swap history")
-        XCTAssertNil(try AppSource.app("Launchpad/LaunchpadView.swift").range(of: "enum RelativeTime"), "one RelativeTime, DyorKit's")
+        XCTAssertNil(try AppSource.appFiles(AppSource.launchpadViewFiles).range(of: "enum RelativeTime"), "one RelativeTime, DyorKit's")
     }
 
     // MARK: A small reader of Swift source (single-line string literals), enough for these files

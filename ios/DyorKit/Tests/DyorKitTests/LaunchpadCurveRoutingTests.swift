@@ -510,7 +510,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
 
         // My Launchpad: Coins You Launched and its count list what the board lists; the creator-fee escrows are read for
         // every coin created and every pair asset, so a hidden retired coin's fees (aBIL in 0xad3d's escrow) are still read.
-        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         XCTAssertTrue(profile.contains("var launched: [Created] { created.filter(\\.launch.listsOnBoard) }"))
         XCTAssertTrue(profile.contains("stat(\"Launched\", model.launchesRead ? \"\\(model.launched.count)\" : model.launchesUnread ? \"—\" : \"0\", reading: !model.launchesRead && !model.launchesUnread)"),
                       "the count of what the board lists, a placeholder until the launches are read")

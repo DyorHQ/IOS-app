@@ -49,7 +49,7 @@ final class WatchOnlySessionTests: XCTestCase {
         XCTAssertTrue(action.contains("isDisabled: model.selectedQuote == nil || model.insufficient || !session.canSign) { reviewing = model.review }"))
         XCTAssertTrue(action.contains(#"} footer: { if !session.canSign { Text("Sign in to trade.")"#))
         XCTAssertEqual(swap.components(separatedBy: "reviewing = model.review").count - 1, 1, "Review opens from that button only")
-        XCTAssertTrue(try AppSource.app("Launchpad/LaunchpadView.swift").contains(#"if !session.canSign { Text("Sign in to trade.") }"#))
+        XCTAssertTrue(try AppSource.appFiles(AppSource.launchpadViewFiles).contains(#"if !session.canSign { Text("Sign in to trade.") }"#))
     }
 
     /// iOS 26 shows a confirmation dialog as a popover pointing at the view it is attached to: on the list, Stop Watching's

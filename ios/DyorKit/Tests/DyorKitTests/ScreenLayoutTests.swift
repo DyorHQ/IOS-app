@@ -30,7 +30,7 @@ final class ScreenLayoutTests: XCTestCase {
         XCTAssertTrue(body.contains("AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisGridLine(); AxisValueLabel(format: timeFormat, centered: true) }"))
         XCTAssertFalse(body.contains(".stride(by: .hour"), "a mark every few hours over weeks is a hundred labels")
 
-        let launch = AppSource.squeezed(try AppSource.app("Launchpad/LaunchpadView.swift"))
+        let launch = AppSource.squeezed(try AppSource.appFiles(AppSource.launchpadViewFiles))
         XCTAssertTrue(launch.contains("if trades.isEmpty, !loadingTrades, tradesRead, tradesComplete, !tradesUnread, launch.phase == .bonding { Paragraph(\"No trades yet"))
         XCTAssertTrue(launch.contains("guard tradesRead else { return \"—\" }"))
         XCTAssertTrue(launch.contains("return tradesComplete && !tradesUnread ? value : value + \"+\""))

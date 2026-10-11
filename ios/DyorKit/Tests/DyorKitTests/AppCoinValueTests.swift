@@ -184,14 +184,14 @@ final class AppCoinValueTests: XCTestCase {
         let portfolio = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(portfolio.contains("priced[launch.token] = DyorPrice.launch(launch, spot: fetchedPrices?[launch.token]?.usd,"))
         XCTAssertTrue(portfolio.contains("if let price = prices[token] { stats.pnl += delta * price } else { stats.pnlComplete = false }"), "the P&L at the same price")
-        let launchpad = try AppSource.app("Launchpad/LaunchpadView.swift")
+        let launchpad = try AppSource.appFiles(AppSource.launchpadViewFiles)
         XCTAssertTrue(launchpad.contains("private var priceUSD: Double? { launch.usdPrice(pairUSD: pairUSD) }"))
         XCTAssertTrue(launchpad.contains("private var marketCapUSD: Double? { launch.marketCapInPair.flatMap { cap in pairUSD.map { cap * $0 } } }"))
         XCTAssertTrue(launchpad.contains("guard let current = launch.pairPrice.map({ $0 * unit }) else { return points }"))
         XCTAssertEqual(launchpad.components(separatedBy: "launch.marketCapInPair.map {").count - 1, 2, "the board card and the page header")
         // My Launchpad values a holding exactly as Home does: Spot's price, asked for every coin held in the same read as the
         // pair assets, else the coin's own decimal price; its profit and loss is measured against that same value.
-        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         XCTAssertTrue(profile.contains("let valueUSD = DyorPrice.launch(launch, spot: spotUSD[token], pairUSD: pairUSD).map { Amount.units(balance, decimals: 18) * $0 }"))
         XCTAssertTrue(profile.contains("let pairUSD = launch.pair.isNative ? self.pairUSD[Monad.native] : self.pairUSD[launch.pairToken]"), "the pair's price as Home picks it")
         XCTAssertTrue(profile.contains("} + heldCoins.map { Token(address: $0.token, symbol: $0.symbol, name: $0.name, decimals: 18, isLaunchpad: true) }"), "every coin held priced by Spot")

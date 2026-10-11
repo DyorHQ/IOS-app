@@ -54,7 +54,7 @@ final class LaunchListingTests: XCTestCase {
     /// The screens wire it in: the board shows its error with Retry (and no "No Launches Yet" beside it) and keeps a
     /// launchpad's last coins; the Portfolio, My Launchpad and Home say a load was incomplete.
     func testTheScreensSayALaunchpadCouldntBeRead() throws {
-        let board = try AppSource.app("Launchpad/LaunchpadView.swift")
+        let board = try AppSource.appFiles(AppSource.launchpadViewFiles)
         XCTAssertTrue(board.contains("let listing = await env.launchpad.launchListing(limit: 60)\n        launches = listing.keeping(launches)"))
         XCTAssertTrue(board.contains("error = listing.firstError.map(describe)"))
         XCTAssertTrue(board.contains("if let error = model.error {\n                    HStack(alignment: .firstTextBaseline) {\n                        InlineError(message: error)"))
@@ -63,7 +63,7 @@ final class LaunchListingTests: XCTestCase {
         let portfolio = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(portfolio.contains("let launches = listing.keeping(Array(launchesByCurve.values))"))
         XCTAssertTrue(portfolio.contains("if !listing.complete || fetchedMoments == nil || !retired.complete || fetchedPrices == nil {"))
-        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         XCTAssertTrue(profile.contains("let launches = listing.keeping(lastLaunches)"))
         XCTAssertTrue(profile.contains("var unread = !listing.complete"))
         XCTAssertTrue(profile.contains("incomplete = unread ?"))
@@ -71,8 +71,8 @@ final class LaunchListingTests: XCTestCase {
         let home = try AppSource.appFiles(AppSource.homeViewFiles)
         XCTAssertTrue(home.contains("launchList = read.keeping(self.launches)"))
         XCTAssertTrue(home.contains("} else if !listing.complete {"))
-        for (path, text) in [("Launchpad/LaunchpadView.swift", board), ("Portfolio/PortfolioModel.swift", portfolio), ("Launchpad/LaunchpadProfileView.swift", profile),
-                             (AppSource.homeViewFiles.joined(separator: ", "), home)] {
+        for (path, text) in [(AppSource.launchpadViewFiles.joined(separator: ", "), board), ("Portfolio/PortfolioModel.swift", portfolio),
+                             (AppSource.launchpadProfileViewFiles.joined(separator: ", "), profile), (AppSource.homeViewFiles.joined(separator: ", "), home)] {
             XCTAssertFalse(text.contains("allLaunches("), "\(path) reads every launchpad through launchListing")
         }
     }

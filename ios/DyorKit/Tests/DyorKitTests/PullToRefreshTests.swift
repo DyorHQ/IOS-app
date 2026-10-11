@@ -82,7 +82,7 @@ final class PullToRefreshTests: XCTestCase {
     /// kicking it. My Launchpad kicks it too once its balances are read at a block the history's head hasn't reached, so a
     /// holding's profit and loss and the Activity tab wait for one short round, not a top-up's 90 seconds.
     func testTradesClaimsAndBalancesKickTheHistory() throws {
-        let launchpad = try AppSource.app("Launchpad/LaunchpadView.swift")
+        let launchpad = try AppSource.appFiles(AppSource.launchpadViewFiles)
         let buy = try XCTUnwrap(launchpad.range(of: "ConfirmationSheet(title: \"Buy \\(launch.symbol)\""))
         let buyIntent = try XCTUnwrap(launchpad.range(of: "}, intent: .launchpadBuy(", range: buy.upperBound..<launchpad.endIndex))
         XCTAssertTrue(launchpad[buy.upperBound..<buyIntent.lowerBound].contains("env.history.kick(env: env)"), "a curve buy")
@@ -90,7 +90,7 @@ final class PullToRefreshTests: XCTestCase {
         let sellIntent = try XCTUnwrap(launchpad.range(of: "}, intent: .launchpadSell(", range: sell.upperBound..<launchpad.endIndex))
         XCTAssertTrue(launchpad[sell.upperBound..<sellIntent.lowerBound].contains("env.history.kick(env: env)"), "a curve sell")
 
-        let profile = try AppSource.app("Launchpad/LaunchpadProfileView.swift")
+        let profile = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         let sheets = try XCTUnwrap(profile.range(of: "@ViewBuilder private func claimSheet(for target: ClaimTarget) -> some View {"))
         let rows = try XCTUnwrap(profile.range(of: "// MARK: - Rows", range: sheets.upperBound..<profile.endIndex))
         XCTAssertEqual(profile[sheets.upperBound..<rows.lowerBound].components(separatedBy: "env.history.kick(env: env)").count - 1, 3, "each claim: creator fees, rewards, Claim All")

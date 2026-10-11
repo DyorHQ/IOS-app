@@ -266,7 +266,7 @@ final class HistoryWindowTests: XCTestCase {
         let activity = try source("Profile/RecentActivityView.swift")
         XCTAssertTrue(activity.contains("historyFilling = snapshot.filling(since: since, scans: WalletHistoryScans.activity)"))
         XCTAssertTrue(activity.contains("historyProgress = snapshot.progress(since: since, scans: WalletHistoryScans.activity)"))
-        let launchpad = try source("Launchpad/LaunchpadProfileView.swift")
+        let launchpad = try AppSource.appFiles(AppSource.launchpadProfileViewFiles)
         XCTAssertTrue(launchpad.contains("let filling = snapshot.filling(since: nil, scans: WalletHistoryScans.feeIncome)"))
         XCTAssertTrue(launchpad.contains("incomeProgress = snapshot.progress(since: nil, scans: WalletHistoryScans.feeIncome)"))
         let moments = try source("Moments/MomentsPortfolioView.swift")

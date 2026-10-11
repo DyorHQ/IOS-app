@@ -40,8 +40,18 @@ enum AppSource {
     static let homeViewFiles = ["Home/HomeView.swift", "Home/HomeRows.swift", "Home/HomeModel.swift", "Home/TokenDetailView.swift",
                                 "Home/PriceChart.swift", "Home/HomeHeader.swift"]
 
+    /// The files the code of Launchpad/LaunchpadView.swift sits in, each in ios/DyorHQ/Launchpad, in the order it was
+    /// written: the board itself (with its cards), then its model, a coin's page and the Create form.
+    static let launchpadViewFiles = ["Launchpad/LaunchpadView.swift", "Launchpad/LaunchpadModel.swift", "Launchpad/LaunchDetailView.swift",
+                                     "Launchpad/CreateLaunchView.swift"]
+
+    /// The files the code of Launchpad/LaunchpadProfileView.swift sits in, each in ios/DyorHQ/Launchpad, in the order it
+    /// was written: My Launchpad's screen (with its rows), then its model.
+    static let launchpadProfileViewFiles = ["Launchpad/LaunchpadProfileView.swift", "Launchpad/LaunchpadProfileModel.swift"]
+
     /// The app's files at `paths` under ios/DyorHQ, one after the other, a line apart: a check of code split over several
-    /// files (`homeViewFiles`) reads all of it at once. A skip when this checkout has only the package.
+    /// files (`homeViewFiles`, `launchpadViewFiles`, `launchpadProfileViewFiles`) reads all of it at once. A skip when this
+    /// checkout has only the package.
     static func appFiles(_ paths: [String]) throws -> String {
         try paths.map { try app($0) }.joined(separator: "\n")
     }

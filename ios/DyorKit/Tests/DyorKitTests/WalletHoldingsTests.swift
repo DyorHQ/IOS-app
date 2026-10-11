@@ -419,7 +419,7 @@ final class WalletHoldingsTests: XCTestCase {
         XCTAssertTrue(tokens.contains("let unverified = WalletHoldings.unverified(read.unverified, owner: read.owner, launches: own.launches, staked: own.staked)"))
         XCTAssertTrue(tokens.contains("rows.filter { $0.isCreator || $0.entitlement > 0 }"))
         XCTAssertTrue(assets.contains("Set(ranked.filter(\\.unverified).map(\\.id))"))
-        let launchpad = try AppSource.app("Launchpad/LaunchpadView.swift")
+        let launchpad = try AppSource.appFiles(AppSource.launchpadViewFiles)
         let buy = try XCTUnwrap(launchpad.range(of: "ConfirmationSheet(title: \"Buy \\(launch.symbol)\""))
         let bought = try XCTUnwrap(launchpad.range(of: "Activity.record(ActivityRecord(kind: .buy", range: buy.upperBound..<launchpad.endIndex))
         let settled = String(launchpad[buy.upperBound..<bought.lowerBound])

@@ -311,7 +311,7 @@ final class DyorCoinWiringTests: XCTestCase {
         for file in files {
             for read in reads { where_[file.path, default: 0] += file.text.components(separatedBy: read).count - 1 }
         }
-        XCTAssertEqual(where_.filter { $0.value > 0 }.keys.sorted(), ["App/RootView.swift", "Home/HomeModel.swift", "Launchpad/LaunchpadView.swift",
+        XCTAssertEqual(where_.filter { $0.value > 0 }.keys.sorted(), ["App/RootView.swift", "Home/HomeModel.swift", "Launchpad/CreateLaunchView.swift",
                                                                      "Moments/CreateMomentView.swift", "Portfolio/AssetsModel.swift", "Wallet/WalletTokens.swift"])
         let home = AppSource.squeezed(try AppSource.appFiles(AppSource.homeViewFiles))
         let homeModel = try Self.from(try Self.source(declaring: "HomeModel"), "final class HomeModel {")
@@ -323,7 +323,7 @@ final class DyorCoinWiringTests: XCTestCase {
         XCTAssertTrue(root.contains(".task(id: scenePhase == .active) { if scenePhase == .active { await env.dyorCoins.keepFresh() } }"))
         XCTAssertTrue(model.contains("await registry.refreshIfStale(maxAge: Self.refreshInterval)"))
         XCTAssertTrue(model.contains("static let refreshInterval: TimeInterval = 300"))
-        for path in ["Launchpad/LaunchpadView.swift", "Moments/CreateMomentView.swift"] {
+        for path in ["Launchpad/CreateLaunchView.swift", "Moments/CreateMomentView.swift"] {
             let text = try Self.source(path)
             let settled = try XCTUnwrap(text.range(of: "Task { [coins = env.dyorCoins] in await coins.refresh() }"), path)
             let completed = try XCTUnwrap(text.range(of: "onCompleted: { hash in", options: .backwards, range: text.startIndex..<settled.lowerBound), path)
@@ -391,7 +391,7 @@ final class DyorCoinWiringTests: XCTestCase {
         let ui = try Self.source("Moments/MomentsUI.swift")
         XCTAssertTrue(ui.contains(".overlay { MomentArtwork(provenance: info.provenance, symbol: info.symbol, creator: info.moment.creator) }"), "the card, a column wide")
         XCTAssertTrue(ui.contains("RemoteImageLoader.shared.prefetch(imageSources(provenance: info.provenance, creator: info.moment.creator), bucket: ImageSizeBucket.bucket(points: side), caps: caps)"))
-        let launchpad = try Self.source("Launchpad/LaunchpadView.swift")
+        let launchpad = AppSource.squeezed(try AppSource.appFiles(AppSource.launchpadViewFiles))
         XCTAssertEqual(launchpad.components(separatedBy: "{ LaunchCard(launch: launch) } .buttonStyle(.plain) .onAppear { prefetch(after: launch, in: coins) }").count - 1, 2,
                        "every section's grid")
         XCTAssertEqual(launchpad.components(separatedBy: "{ LaunchCard(launch: launch) }").count - 1, 2)
@@ -439,7 +439,7 @@ final class DyorCoinWiringTests: XCTestCase {
     /// The create forms say the guard's refusal under the field it is about and keep Review off; a launch's name is held to
     /// 32 characters, a Moment's to 48. The upload is the middle 512-pixel square, under the object name migration 26 pins.
     func testTheCreateFormsSayTheGuard() throws {
-        let launchpad = try Self.source("Launchpad/LaunchpadView.swift")
+        let launchpad = try Self.source("Launchpad/CreateLaunchView.swift")
         let create = try Self.between(launchpad, "struct CreateLaunchView: View {", "private struct LaunchPreviewCard")
         XCTAssertTrue(create.contains("SymbolSafety.createRefusal(name: name.trimmingCharacters(in: .whitespaces), symbol: symbol, maxName: SymbolSafety.maxLaunchNameLength)"))
         XCTAssertTrue(create.contains("private var valid: Bool { name.trimmingCharacters(in: .whitespaces).count >= 2 && symbolValid && refusal == nil }"))

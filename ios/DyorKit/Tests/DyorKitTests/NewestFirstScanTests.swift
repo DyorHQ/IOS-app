@@ -423,7 +423,7 @@ final class NewestFirstScreenPinTests: XCTestCase {
     /// "part of"); a minimum no read could better is a plain note; Retry and a done trade or claim read the page again as
     /// its own task.
     func testALaunchPageSaysWhatItReadAndReadsAsItsOwnTask() throws {
-        let launch = try Self.source("Launchpad/LaunchpadView.swift")
+        let launch = AppSource.squeezed(try AppSource.appFiles(AppSource.launchpadViewFiles))
         XCTAssertTrue(launch.contains("if holders.complete { return \"\\(holders.count)\" } return holders.count > 0 ? \"\\(holders.count)+\" : \"—\""))
         XCTAssertTrue(launch.contains("if tradesRead { InlineError(message: \"Part of this coin's trades couldn't be read just now, so the chart and 24h volume may be missing some.\") } "
                                       + "else { InlineError(message: \"This coin's trades couldn't be read just now.\") }"))

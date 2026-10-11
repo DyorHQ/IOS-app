@@ -184,7 +184,7 @@ final class RetiredLaunchpadTests: XCTestCase {
     /// The source wires those answers in: the coin page picks its ticket by `curveSellsOpen` and offers Retry Graduation
     /// only while the launch awaits it. (Which screens send a coin to this page: `LaunchpadCurveRoutingTests`.)
     func testTheScreensFollowTheCurveState() throws {
-        let launchpad = try AppSource.app("Launchpad/LaunchpadView.swift")
+        let launchpad = try AppSource.appFiles(AppSource.launchpadViewFiles)
         XCTAssertTrue(launchpad.contains("if launch.curveSellsOpen { ticketSection } else { graduatedSection }"))
         XCTAssertTrue(launchpad.contains("private var isStuck: Bool { launch.awaitsGraduation && (detail?.stuckSince ?? 0) > 0 }"))
         XCTAssertFalse(launchpad.contains("if launch.phase == .bonding { ticketSection }"))

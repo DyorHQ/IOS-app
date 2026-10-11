@@ -210,7 +210,7 @@ final class LaunchBoardTests: XCTestCase {
     /// on a failed read), and an Explore card inviting a launch when nothing is on the live curve; a card and a page carry
     /// "Retired launchpad" only for a sell-only coin, and the old copy that sent holders to the board is gone.
     func testTheBoardHidesSellOnlyCoinsAndShowsTheirHolders() throws {
-        let source = try AppSource.app("Launchpad/LaunchpadView.swift")
+        let source = try AppSource.appFiles(AppSource.launchpadViewFiles)
 
         // The holder section: after the public sections, searched, counted in the empty check.
         let refund = try XCTUnwrap(source.range(of: "section(title: \"Refund & Migrating\""))
@@ -292,7 +292,7 @@ final class LaunchBoardTests: XCTestCase {
     /// claims are the exception: a failed read hides them, since a trade or claim since may have changed them, and Your
     /// Holdings, Max, the balance check and the claims act on them.
     func testTheBoardAndTheCoinPageKeepTheirLastGoodReads() throws {
-        let source = AppSource.squeezed(try AppSource.app("Launchpad/LaunchpadView.swift"))
+        let source = AppSource.squeezed(try AppSource.appFiles(AppSource.launchpadViewFiles))
         let model = try XCTUnwrap(source.range(of: "final class LaunchpadModel {"))
         let page = try XCTUnwrap(source.range(of: "struct LaunchDetailView: View {", range: model.upperBound..<source.endIndex))
         let board = String(source[model.upperBound..<page.lowerBound]), coin = String(source[page.upperBound...])
