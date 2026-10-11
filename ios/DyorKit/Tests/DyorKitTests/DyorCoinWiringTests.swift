@@ -117,6 +117,11 @@ final class DyorCoinWiringTests: XCTestCase {
         AppSource.squeezed(try AppSource.app(path))
     }
 
+    /// The app file that declares the type `name` (`AppSource.declaration(of:)`), whitespace squeezed to single spaces.
+    private static func source(declaring name: String) throws -> String {
+        AppSource.squeezed(try AppSource.declaration(of: name).text)
+    }
+
     /// Every Swift file of the app, by its path under ios/DyorHQ, squeezed.
     private static func sources() throws -> [(path: String, text: String)] {
         try AppSource.allAppFiles().map { (path: $0.path, text: AppSource.squeezed($0.text)) }
@@ -129,11 +134,16 @@ final class DyorCoinWiringTests: XCTestCase {
         return String(source[from.lowerBound..<to.lowerBound])
     }
 
+    /// The text of `source` from `start` to its end.
+    private static func from(_ source: String, _ start: String) throws -> String {
+        String(source[try XCTUnwrap(source.range(of: start), start).lowerBound...])
+    }
+
     /// Top Tokens and the Add funds card's "funds arriving" go by the token store's Unverified mark alone, which a DyorHQ
     /// label never changes: only the wallet's own coins are taken out of it, as chosen.
     func testAReceivedDyorHQCoinNeverRanksInTopTokensNorCountsAsArrivingFunds() throws {
-        let home = try Self.source("Home/HomeView.swift")
-        let model = try Self.between(home, "final class HomeModel {", "struct TokenDetailView: View {")
+        let home = try Self.source(declaring: "HomeModel")
+        let model = try Self.from(home, "final class HomeModel {")
         let top = try Self.between(model, "func topTokens(_ tab: HomeTokenTab) -> [MarketRow] {", "private var discoveredFor")
         XCTAssertTrue(top.contains("let priced = rows.filter { $0.usd != nil && !unverified.contains($0.id) }"))
         XCTAssertFalse(top.contains("dyorCoins") || top.contains("badge"), "no label decides what ranks")
@@ -162,7 +172,7 @@ final class DyorCoinWiringTests: XCTestCase {
     /// wallet's tokens (whose labels follow as the coins model re-renders the rows), and only the own-coin mark waits for
     /// that proof: the reads, the proof among them, all answer before it.
     func testHomesRowsNeverWaitOnTheRegistrysIngests() throws {
-        let home = try Self.source("Home/HomeView.swift")
+        let home = try Self.source(declaring: "HomeModel")
         let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// One of `load`'s reads, as it answers.")
         let proof = try XCTUnwrap(load.range(of: "group.addTask { await env.dyorCoins.prove(tokens); return .proven }"))
         let rows = try XCTUnwrap(load.range(of: "if stands, balancesIn { publishSpot("))
@@ -180,7 +190,7 @@ final class DyorCoinWiringTests: XCTestCase {
     /// Home marks the coins the registry says this wallet made as chosen through the helper the Portfolio and the Send
     /// sheet use, before it reads the Unverified mark it shows and ranks by.
     func testHomeMarksTheWalletsOwnCoinsThroughTheSharedHelper() throws {
-        let home = try Self.source("Home/HomeView.swift")
+        let home = try Self.source(declaring: "HomeModel")
         let load = try Self.between(home, "func load(env: AppEnvironment, address: Address?) async {", "/// The wallet's Moments stakes")
         let own = try XCTUnwrap(load.range(of: "let ownCoins = address == nil ? [] : await env.dyorCoins.created(by: address ?? .zero)"))
         let mark = try XCTUnwrap(load.range(of: "if let address { WalletTokens.markOwnCoins(ownCoins, among: tokens, owner: address) }"))
@@ -301,10 +311,10 @@ final class DyorCoinWiringTests: XCTestCase {
         for file in files {
             for read in reads { where_[file.path, default: 0] += file.text.components(separatedBy: read).count - 1 }
         }
-        XCTAssertEqual(where_.filter { $0.value > 0 }.keys.sorted(), ["App/RootView.swift", "Home/HomeView.swift", "Launchpad/LaunchpadView.swift",
+        XCTAssertEqual(where_.filter { $0.value > 0 }.keys.sorted(), ["App/RootView.swift", "Home/HomeModel.swift", "Launchpad/LaunchpadView.swift",
                                                                      "Moments/CreateMomentView.swift", "Portfolio/AssetsModel.swift", "Wallet/WalletTokens.swift"])
-        let home = try Self.source("Home/HomeView.swift")
-        let homeModel = try Self.between(home, "final class HomeModel {", "struct TokenDetailView: View {")
+        let home = AppSource.squeezed(try AppSource.appFiles(AppSource.homeViewFiles))
+        let homeModel = try Self.from(try Self.source(declaring: "HomeModel"), "final class HomeModel {")
         for read in reads { XCTAssertEqual(home.components(separatedBy: read).count, homeModel.components(separatedBy: read).count, "Home reads only in its model's load: \(read)") }
         let assets = try Self.source("Portfolio/AssetsModel.swift")
         let assetsModel = try Self.between(assets, "final class AssetsModel {", "struct AssetsCard: View {")
@@ -398,8 +408,8 @@ final class DyorCoinWiringTests: XCTestCase {
     /// The token page shows the coin's logo at 44 pt, and for a DyorHQ coin where it was launched in place of the
     /// Unverified card; a look-alike keeps its warning, before anything else.
     func testTheTokenPageSaysWhereADyorHQCoinWasLaunched() throws {
-        let home = try Self.source("Home/HomeView.swift")
-        let page = try Self.between(home, "struct TokenDetailView: View {", "struct PriceChart: View {")
+        let home = try Self.source(declaring: "TokenDetailView")
+        let page = try Self.from(home, "struct TokenDetailView: View {")
         XCTAssertTrue(page.contains("TokenLogo(token: row.token, size: 44)"))
         XCTAssertTrue(page.contains("private var badge: TokenBadge { env.dyorCoins.badge(row.token, receivedUnasked: received) }"))
         let imitation = try XCTUnwrap(page.range(of: "if badge.isImitation, let title = badge.title {"))

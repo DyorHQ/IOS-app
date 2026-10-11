@@ -20,10 +20,9 @@ final class ScreenLayoutTests: XCTestCase {
     /// the curve trades, and only once its last 24 hours were read in full (a read that stopped short or failed isn't "no
     /// trades"), and the 24h volume "—" until they were read, a minimum ("+") while they were read in part.
     func testThePriceChartsTimeAxis() throws {
-        let home = try AppSource.app("Home/HomeView.swift")
-        let chart = try XCTUnwrap(home.range(of: "struct PriceChart: View {")).upperBound
-        let end = try XCTUnwrap(home.range(of: "struct HomeHeader: View {", range: chart..<home.endIndex)).lowerBound
-        let body = AppSource.squeezed(String(home[chart..<end]))
+        let source = try AppSource.declaration(of: "PriceChart").text
+        let chart = try XCTUnwrap(source.range(of: "struct PriceChart: View {")).upperBound
+        let body = AppSource.squeezed(String(source[chart...]))
         XCTAssertTrue(body.contains("@Environment(\\.locale) private var locale"))
         XCTAssertTrue(body.contains("last.timeIntervalSince(first) > 36 * 3600"))
         XCTAssertTrue(body.contains("return Date.FormatStyle.dateTime.hour().locale(locale)"))

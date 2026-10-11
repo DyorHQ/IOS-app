@@ -656,7 +656,7 @@ final class MomentsSpeedScreenPinTests: XCTestCase {
     }
 
     func testAMomentSavedWhenLastReadOpensByItsLink() throws {
-        let home = try Self.source("Home/HomeView.swift")
+        let home = AppSource.squeezed(try AppSource.appFiles(AppSource.homeViewFiles))
         XCTAssertTrue(home.contains("if model.reads.isSaved(.moments), let link = MomentLink(key: moment.key) { router.openMoment(link) } else { router.openMoment(moment) }"))
         XCTAssertTrue(home.contains("Button { openMoment(row.moment) }"))
         XCTAssertFalse(home.contains("Button { router.openMoment(row.moment) }"))

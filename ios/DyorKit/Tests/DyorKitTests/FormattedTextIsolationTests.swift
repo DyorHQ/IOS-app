@@ -103,7 +103,7 @@ final class FormattedTextIsolationTests: XCTestCase {
         XCTAssertTrue(components.contains("init(price: Double?, font: Font = .body)"))
         XCTAssertTrue(components.contains("init(value: Double?, font: Font = .body)"))
         XCTAssertTrue(components.contains(".accessibilityLabel(isPrice ? PriceFormat.spoken(dollars) : PriceFormat.usdValue(dollars))"))
-        let home = try AppSource.app("Home/HomeView.swift")
+        let home = try AppSource.appFiles(AppSource.homeViewFiles)
         XCTAssertTrue(home.contains("Text(PriceFormat.axis(price, span: domain.upperBound - domain.lowerBound))"))
         XCTAssertFalse(home.contains("AxisValueLabel() }"), "no default axis label, which reads 0 for every dust tick")
         for price in ["USDText(price: row.usd, font: .subheadline.weight(.medium))", "USDText(price: row.usd, font: .caption2)",

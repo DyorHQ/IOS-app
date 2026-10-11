@@ -149,7 +149,7 @@ final class WalletTokenDiscoveryTests: XCTestCase {
         XCTAssertEqual(shown, [], "a token's name is shown as `displayName`, in the app's language")
         XCTAssertGreaterThan(copied, 0, "the reader sees the copy into a new Token (Home's discovered tokens)")
 
-        let home = try AppSource.app("Home/HomeView.swift")
+        let home = try AppSource.appFiles(AppSource.homeViewFiles)
         XCTAssertTrue(home.contains("Text(row.token.displayName).font(.caption)"), "Home's row")
         XCTAssertTrue(home.contains(#"LabeledContent("Name", value: row.token.displayName)"#), "the token page")
         XCTAssertTrue(home.contains("? Token(address: token.address, symbol: token.symbol, name: token.name,"), "a discovered token is stored with its name as found")

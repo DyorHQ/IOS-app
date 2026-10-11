@@ -13,7 +13,7 @@ final class TradeStringsTests: XCTestCase {
     /// Every Swift file of the five folders, without its comments.
     private static func sources() throws -> [(path: String, code: [Character])] {
         let all = try FormattedTextIsolationTests.appSources().filter { source in folders.contains { source.path.hasPrefix($0) } }
-        XCTAssertEqual(all.count, 16, "the five folders' files")
+        XCTAssertEqual(all.count, 21, "the five folders' files")
         return all.map { ($0.path, uncommented(Array($0.text))) }
     }
 
@@ -170,7 +170,7 @@ final class TradeStringsTests: XCTestCase {
             XCTAssertNil(text.range(of: #"== 1 \? ""#, options: .regularExpression), "\(path): a plural chosen by hand")
             XCTAssertFalse(text.contains("rawValue.capitalized"), "\(path): a label derived from a raw value")
         }
-        let home = try AppSource.app("Home/HomeView.swift")
+        let home = try AppSource.declaration(of: "MomentHoldingRow").text
         XCTAssertTrue(home.contains(#"tr("\(row.nftBalance) editions")"#))
         let portfolio = try AppSource.app("Portfolio/PortfolioView.swift")
         XCTAssertTrue(portfolio.contains(#"Text("\(stats.trades) trades in the period")"#))
@@ -244,7 +244,7 @@ final class TradeStringsTests: XCTestCase {
     /// tabs' and the menu's names: four share the card's width, so a language whose Launch tab is a long word keeps the
     /// switch short. The split names each category as the switch does. English reads Spot, Perps, Launch and Moments.
     func testHomesCategoriesAreKeysOfTheirOwn() throws {
-        let home = try AppSource.app("Home/HomeView.swift")
+        let home = try AppSource.appFiles(AppSource.homeViewFiles)
         for (key, english) in [("spot", "Spot"), ("perps", "Perps"), ("launch", "Launch"), ("moments", "Moments")] {
             XCTAssertTrue(home.contains(#"tr(LocalizedStringResource("homeCategory.\#(key)", defaultValue: "\#(english)", comment: "[tight] Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split."#), key)
         }

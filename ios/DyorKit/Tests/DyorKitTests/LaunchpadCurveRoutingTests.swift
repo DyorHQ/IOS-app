@@ -487,7 +487,7 @@ final class LaunchpadCurveRoutingTests: XCTestCase {
         XCTAssertFalse(branch.contains("openSwap"))
         XCTAssertEqual(assets.components(separatedBy: "router.openSwap(").count - 1, 1, "one Swap row, for the other coins")
 
-        let home = try AppSource.app("Home/HomeView.swift")
+        let home = try AppSource.appFiles(AppSource.homeViewFiles)
         XCTAssertTrue(home.contains("let route = await env.launchpad.curveRoute(for: row.token)"))
         XCTAssertTrue(home.contains("} else if let route = curveRoute, route.isOnCurve, let title = route.actionTitle(row.token.symbol) {"))
         XCTAssertTrue(home.contains(toLaunch))

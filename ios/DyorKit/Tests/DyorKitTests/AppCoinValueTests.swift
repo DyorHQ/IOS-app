@@ -179,7 +179,7 @@ final class AppCoinValueTests: XCTestCase {
             let hits = integer.matches(in: text, range: NSRange(text.startIndex..., in: text)).map { (text as NSString).substring(with: $0.range) }
             XCTAssertEqual(hits, [], "\((path as NSString).lastPathComponent) values a launch at its integer price")
         }
-        let home = try AppSource.app("Home/HomeView.swift")
+        let home = try AppSource.declaration(of: "HomeModel").text
         XCTAssertTrue(home.contains("DyorPrice.launch(launch, spot: priceMap[launch.token]?.usd, pairUSD: pairUSD)"), "Home's Launch tab: Spot's price first")
         let portfolio = try AppSource.app("Portfolio/PortfolioModel.swift")
         XCTAssertTrue(portfolio.contains("priced[launch.token] = DyorPrice.launch(launch, spot: fetchedPrices?[launch.token]?.usd,"))

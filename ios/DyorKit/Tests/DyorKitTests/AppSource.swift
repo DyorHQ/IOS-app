@@ -35,6 +35,17 @@ enum AppSource {
         return try String(contentsOf: appFolder.appendingPathComponent(path), encoding: .utf8)
     }
 
+    /// The files the code of Home/HomeView.swift sits in, each in ios/DyorHQ/Home: the screen itself, then its rows, its
+    /// model, the token page, the price chart and the header.
+    static let homeViewFiles = ["Home/HomeView.swift", "Home/HomeRows.swift", "Home/HomeModel.swift", "Home/TokenDetailView.swift",
+                                "Home/PriceChart.swift", "Home/HomeHeader.swift"]
+
+    /// The app's files at `paths` under ios/DyorHQ, one after the other, a line apart: a check of code split over several
+    /// files (`homeViewFiles`) reads all of it at once. A skip when this checkout has only the package.
+    static func appFiles(_ paths: [String]) throws -> String {
+        try paths.map { try app($0) }.joined(separator: "\n")
+    }
+
     /// The package's source file at `path` under ios/DyorKit/Sources/DyorKit.
     static func kit(_ path: String) throws -> String {
         try String(contentsOf: kitFolder.appendingPathComponent(path), encoding: .utf8)
