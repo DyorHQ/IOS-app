@@ -105,3 +105,5 @@ ios/docs/*
 !docs/README.md
 !docs/app-wiring.md
 !docs/swap-spec.md
+# How the app reads a wallet's chain history (developer doc: the public endpoints' measured caps, the router, the store).
+!docs/history-architecture.md

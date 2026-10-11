@@ -80,9 +80,10 @@ deno test -A --no-config --node-modules-dir=none supabase/functions/ supabase/te
 
 ## Continuous integration
 
-- **leak-guard** (GitHub Actions) runs on every push and pull request and nightly: forbidden paths, secret patterns,
-  gitleaks, and the guard's own tests. It always uses the default branch's copy of the guard, so a push cannot switch
-  off its own check.
+- **leak-guard** (GitHub Actions, `.github/workflows/leak-guard.yml`) runs on every push and pull request: forbidden
+  paths, secret patterns, gitleaks, and the guard's own tests. It always uses the default branch's copy of the guard,
+  so a push cannot switch off its own check. **leak-guard-nightly** (`leak-guard-nightly.yml`) runs the same scans over
+  every branch and tag each night, and opens an issue when it finds something.
 - **Xcode Cloud** archives `ios/DyorHQ.xcodeproj` on every push to `main`. The project is generated in the cloud
   checkout by `ios/ci_scripts/ci_post_clone.sh`, which needs `PRIVY_APP_ID` and `PRIVY_CLIENT_ID` in the workflow's
   environment; the archive stops, by design, when they are missing. The Xcode Cloud section of
