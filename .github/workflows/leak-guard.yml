@@ -5,8 +5,8 @@
 # Every check runs the DEFAULT BRANCH's copy of the guard (scripts, .leakguard, .gitleaks.toml), never the pushed one,
 # so a push cannot switch off its own check; a push that changes the guard fails the "Guard changes" step until the
 # change has been reviewed (expected, once, for a reviewed change to the guard).
-# A nightly run, which GitHub always takes from the default branch, scans every branch and tag since .leakguard's
-# @history-base commits, so editing this file on a branch hides nothing from it; when it fails it opens an issue.
+# The nightly scan of every branch and tag is a separate workflow, leak-guard-nightly.yml, so pull requests list only
+# this check.
 # IOS-app is private on the GitHub Free plan, so this cannot be made a required check: a failed run is the alert.
 name: leak-guard
 
@@ -15,9 +15,6 @@ on:
     branches: ["**"]
     tags: ["**"]
   pull_request:
-  schedule:
-    - cron: "17 4 * * *"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,7 +30,6 @@ env:
 
 jobs:
   leak-guard:
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -157,94 +153,3 @@ jobs:
       - name: Leak guard and Claude secret guard self-tests (the pushed copies)
         if: ${{ !cancelled() }}
         run: node --test tests/leak-guard.test.mjs tests/secret-guard.test.mjs
-
-  history:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - name: Check out every branch and tag
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Install the unpackers
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libarchive-tools zstd unzip
-
-      - name: Load the guard from the default branch
-        id: guard
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          G="$RUNNER_TEMP/leak-guard"
-          src="refs/remotes/origin/$DEFAULT_BRANCH"
-          for f in $GUARD_FILES; do
-            mkdir -p "$G/$(dirname "$f")"
-            if git cat-file -e "$src:$f" 2>/dev/null; then git show "$src:$f" > "$G/$f"; fi
-          done
-          [ -f "$G/scripts/dev/secret-scan.sh" ] || { echo "::error::$DEFAULT_BRANCH has no leak guard."; exit 1; }
-          [ -f "$G/.leakguard" ] || : > "$G/.leakguard"
-          [ -f "$G/.gitleaks.toml" ] || printf '[extend]\nuseDefault = true\n' > "$G/.gitleaks.toml"
-          echo "dir=$G" >> "$GITHUB_OUTPUT"
-
-      - name: Work out the commits (every branch and tag since @history-base)
-        id: range
-        env:
-          G: ${{ steps.guard.outputs.dir }}
-        run: |
-          set -euo pipefail
-          range=--all
-          for b in $(sed -n 's/^[[:space:]]*@history-base[[:space:]][[:space:]]*\([0-9a-fA-F]*\)[[:space:]]*$/\1/p' "$G/.leakguard"); do
-            if git cat-file -e "$b^{commit}" 2>/dev/null; then range="$range ^$b"; else echo "::warning::@history-base $b is not in this clone."; fi
-          done
-          echo "range=$range" >> "$GITHUB_OUTPUT"
-          echo "Commits to check: $range ($(git rev-list --count $range) commits)"
-
-      - name: Forbidden paths in every branch and tag
-        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
-        env:
-          G: ${{ steps.guard.outputs.dir }}
-          RANGE: ${{ steps.range.outputs.range }}
-        run: /bin/bash "$G/scripts/dev/forbidden-paths.sh" --config "$G/.leakguard" --history $RANGE
-
-      - name: Secret patterns in every branch and tag, with their messages
-        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
-        env:
-          G: ${{ steps.guard.outputs.dir }}
-          RANGE: ${{ steps.range.outputs.range }}
-        run: /bin/bash "$G/scripts/dev/secret-scan.sh" --config "$G/.leakguard" --history $RANGE
-
-      - name: gitleaks on every branch and tag
-        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
-        env:
-          G: ${{ steps.guard.outputs.dir }}
-          RANGE: ${{ steps.range.outputs.range }}
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$GITHUB_WORKSPACE:/repo" -v "$G:/guard:ro" \
-            "$GITLEAKS_IMAGE" git /repo --config /guard/.gitleaks.toml --log-opts="$RANGE" --max-decode-depth=2 \
-            --redact --no-banner --verbose --exit-code 1
-
-  report:
-    needs: history
-    if: failure() && github.event_name == 'schedule'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      issues: write
-    steps:
-      - name: Open or update the alert issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          title="Leak guard: the nightly scan failed"
-          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
-          if [ -n "$n" ]; then
-            gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "Failed again: $RUN_URL"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
-              --body "The nightly leak-guard scan of every branch and tag failed: $RUN_URL (locations and finding names only, never values)."
-          fi
