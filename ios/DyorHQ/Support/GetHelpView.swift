@@ -8,7 +8,7 @@ enum SupportLinks {
     static let name = "DyorHQ" // not localized: the app's name
     /// The brand line, in the app's language (the catalog may keep it in English: the owner decides).
     static var tagline: String {
-        tr(LocalizedStringResource("The RWA HQ for social trading", comment: "DyorHQ's tagline, under the wordmark. Ask the owner before translating it."))
+        tr(LocalizedStringResource("Your All-in-One Crypto App", comment: "DyorHQ's tagline, under the wordmark. Ask the owner before translating it."))
     }
     static let site = URL(string: "https://dyorhq.fun")!
     /// The docs home (dyorhq.gitbook.io/docs).

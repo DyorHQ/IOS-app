@@ -1,6 +1,6 @@
 # DyorHQ design system
 
-The RWA HQ for social trading
+Your All-in-One Crypto App
 
 ## Direction
 

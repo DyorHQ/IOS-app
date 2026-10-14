@@ -1,6 +1,6 @@
 # DyorHQ brand guidelines
 
-The RWA HQ for social trading
+Your All-in-One Crypto App
 
 The only approved identity is the editorial wordmark and interlocking D/Q monogram selected on 2026-09-09. Use `dyorhq-identity.png` as the visual reference, `dyorhq-wordmark.png` for the wordmark, and `dyorhq-monogram.png` for icons. Do not restore older assets from git history or generated build output.
 
