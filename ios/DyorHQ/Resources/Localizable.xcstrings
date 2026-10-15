@@ -42244,10 +42244,6 @@
         }
       }
     },
-    "The RWA HQ for social trading" : {
-      "comment" : "DyorHQ's tagline, under the wordmark. Ask the owner before translating it.",
-      "shouldTranslate" : false
-    },
     "The TP/SL on Perpl changed meanwhile, so nothing was sent. Check them and try again." : {
       "localizations" : {
         "es" : {
@@ -50878,6 +50874,10 @@
           }
         }
       }
+    },
+    "Your All-in-One Crypto App" : {
+      "comment" : "DyorHQ's tagline, under the wordmark. Ask the owner before translating it.",
+      "shouldTranslate" : false
     },
     "Your Balance" : {
       "localizations" : {
