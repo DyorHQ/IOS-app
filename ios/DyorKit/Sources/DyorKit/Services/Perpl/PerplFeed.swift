@@ -42,7 +42,7 @@ public struct PerpTrade: Identifiable, Sendable, Hashable {
 }
 
 /// The `market-state@<chain>` snapshot for one market, scaled.
-public struct PerplLiveState: Sendable {
+public struct PerplLiveState: Sendable, Equatable {
     public let oracle: Double
     public let mark: Double
     public let last: Double
@@ -195,9 +195,11 @@ public final class PerplFeed {
                 guard let self, gen == self.generation else { return }
                 switch result {
                 case .success(let message):
-                    self.connected = true
+                    // Set only when they change: a set notifies every view that read them even when the value is the same,
+                    // and a frame (a heartbeat among them) arrives several times a second.
+                    if !self.connected { self.connected = true }
                     self.lastMessageAt = Date()
-                    self.error = nil
+                    if self.error != nil { self.error = nil }
                     self.retry = 0
                     if case .string(let text) = message, let data = text.data(using: .utf8) { self.handle(data) }
                     else if case .data(let data) = message { self.handle(data) }
@@ -231,21 +233,22 @@ public final class PerplFeed {
         let priceScale = pow(10.0, Double(market.priceDecimals))
         let sizeScale = pow(10.0, Double(market.lotDecimals))
         switch mt {
+        // The book, the tape and the market's state are set only when a frame changes them (see `receive`).
         case 15: // L2 snapshot
-            book.bids = levels(obj["bid"], priceScale, sizeScale, descending: true)
-            book.asks = levels(obj["ask"], priceScale, sizeScale, descending: false)
+            update(bids: levels(obj["bid"], priceScale, sizeScale, descending: true), asks: levels(obj["ask"], priceScale, sizeScale, descending: false))
         case 16: // L2 delta
-            book.bids = apply(delta: obj["bid"], to: book.bids, priceScale, sizeScale, descending: true)
-            book.asks = apply(delta: obj["ask"], to: book.asks, priceScale, sizeScale, descending: false)
+            update(bids: apply(delta: obj["bid"], to: book.bids, priceScale, sizeScale, descending: true),
+                   asks: apply(delta: obj["ask"], to: book.asks, priceScale, sizeScale, descending: false))
         case 17: // trades snapshot — replaces the tape. Every (re)subscribe sends one, and prepending it to the tape
                  // already shown doubled every recent trade after each reconnect.
             trades = Array(tradeList(obj["d"], priceScale, sizeScale).prefix(60))
         case 18: // trades update — newest first, ahead of what is already shown
             let incoming = tradeList(obj["d"], priceScale, sizeScale)
-            trades = Array((incoming + trades).prefix(60))
+            if !incoming.isEmpty { trades = Array((incoming + trades).prefix(60)) }
         case 9: // market-state (all markets)
             if let d = obj["d"] as? [String: Any], let raw = d[String(market.id)] as? [String: Any] {
-                state = liveState(raw, priceScale, sizeScale)
+                let live = liveState(raw, priceScale, sizeScale)
+                if live != state { state = live }
             }
         case 100: // heartbeat
             if let sn = obj["sn"] as? Int {
@@ -254,6 +257,12 @@ public final class PerplFeed {
             }
         default: break
         }
+    }
+
+    /// Sets the book's two sides, in one change and only when either moved.
+    private func update(bids: [BookLevel], asks: [BookLevel]) {
+        guard bids != book.bids || asks != book.asks else { return }
+        book = OrderBook(bids: bids, asks: asks)
     }
 
     private func levels(_ any: Any?, _ priceScale: Double, _ sizeScale: Double, descending: Bool) -> [BookLevel] {
