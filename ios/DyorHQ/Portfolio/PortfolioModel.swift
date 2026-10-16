@@ -209,47 +209,71 @@ final class PortfolioModel {
     /// Everything in the period, newest first.
     func activity(_ period: VolumePeriod) -> [Activity] {
         let since = period.since()
+        return allActivity().filter { $0.time >= since }
+    }
+
+    /// What `allActivity` last built, and from what: the inputs' count (`activityInputs`), the language its text is in and
+    /// the bridges it lists.
+    @ObservationIgnored private var activityMemo: (inputs: Int, locale: Locale, bridges: [BridgeRecord], items: [Activity])?
+    /// Moves whenever anything the activity list is built from does (`applyHistory`, `load`, `reset`). Observed: a view
+    /// that read the list redraws when it moves, though the list itself came from `activityMemo`.
+    private var activityInputs = 0
+
+    /// Every item of the activity list, newest first, built again only when what it is built from changed: the screen asks
+    /// on every redraw, and the list can run to thousands of rows, each with its text. A period's list is the items since
+    /// it began, in the same order (`activity`).
+    private func allActivity() -> [Activity] {
+        let inputs = activityInputs
+        let locale = L10n.locale
+        let bridges = BridgeStore.all(owner: loadedFor)
+        if let memo = activityMemo, memo.inputs == inputs, memo.locale == locale, memo.bridges == bridges { return memo.items }
+        let items = buildActivity(bridges: bridges)
+        activityMemo = (inputs, locale, bridges, items)
+        return items
+    }
+
+    private func buildActivity(bridges: [BridgeRecord]) -> [Activity] {
         var out: [Activity] = []
-        for swap in swapsLessFills where swap.time >= since {
+        for swap in swapsLessFills {
             let kind = classify(swap)
             let section: Section = kind == .launch ? .launch : kind == .moments ? .moments : .spot
             out.append(Activity(id: "swap-\(swap.id)", section: section, title: kind == .spot ? tr("Swapped") : tr("Traded on \(section.title)"), subtitle: SwapHistoryItem.describe(swap, tokens: tokens), time: swap.time, usd: swapUSD(swap), hash: swap.hash))
         }
-        for fill in fills where fill.time >= since {
+        for fill in fills {
             out.append(Activity(id: "fill-\(fill.id)", section: .perps, title: "\(fill.direction) \(fill.symbol)", subtitle: tr("\(NumberStyle.number(fill.size)) at \(NumberStyle.number(fill.price)) · fee \(PriceFormat.usdValue(fill.fee))"), time: fill.time, usd: fill.notional, hash: nil))
         }
-        for f in launchHistory.fills where f.time >= since {
+        for f in launchHistory.fills {
             let launch = launchesByCurve[f.curve]
             let symbol = launch?.symbol ?? f.curve.short
             let pair = launch?.pair
             let quote = pair.map { "\(NumberStyle.units(f.quoteAmount, decimals: $0.decimals, compact: true)) \($0.symbol)" } ?? ""
             out.append(Activity(id: "curve-\(f.id)", section: .launch, title: f.isBuy ? tr("Bought \(symbol)") : tr("Sold \(symbol)"), subtitle: "\(NumberStyle.units(f.tokenAmount, decimals: 18, compact: true)) \(symbol) · \(quote)", time: f.time, usd: launchQuoteUSD(f), hash: f.hash))
         }
-        for c in launchHistory.claims where c.time >= since {
+        for c in launchHistory.claims {
             let usd = claimUSD(c)
             out.append(Activity(id: "lclaim-\(c.id)", section: .launch, title: c.kind == .creatorFees ? tr("Claimed creator fees") : tr("Claimed holder rewards"), subtitle: c.launchToken.flatMap { launchesByToken[$0]?.symbol }.map { "$\($0)" } ?? "", time: c.time, usd: usd, hash: c.hash))
         }
-        for p in launchHistory.payments where p.time >= since {
+        for p in launchHistory.payments {
             let asset = paymentAsset(p)
             out.append(Activity(id: "lpaid-\(p.id)", section: .launch, title: tr("Received creator fees"), subtitle: "\(NumberStyle.units(p.amount, decimals: asset.decimals)) \(asset.symbol)", time: p.time, usd: paymentUSD(p), hash: p.hash))
         }
-        for c in momentsHistory.collects where c.time >= since {
+        for c in momentsHistory.collects {
             let m = momentsByKey[c.key]
             out.append(Activity(id: "collect-\(c.id)", section: .moments, title: tr("Collected \(m?.name ?? tr("Moment #\(String(c.momentId))"))"), subtitle: tr("\(c.editions) editions · \(NumberStyle.number(MomentsMath.coins(c.entitlement), compact: true)) \(m?.symbol ?? tr("coins"))"), time: c.time, usd: MomentsMath.usdc(c.gross), hash: c.hash))
         }
-        for c in momentsHistory.claims where c.time >= since {
+        for c in momentsHistory.claims {
             let m = momentsByKey[c.key]
             out.append(Activity(id: "mclaim-\(c.id)", section: .moments, title: m.map { tr("Claimed \($0.symbol)") } ?? tr("Claimed coins"), subtitle: tr("\(NumberStyle.number(MomentsMath.coins(c.total), compact: true)) \(m?.symbol ?? "") vested"), time: c.time, usd: m?.pool.map { MomentsMath.coins(c.total) * $0.usdcPerCoin }, hash: c.hash))
         }
-        for w in momentsHistory.withdrawals where w.time >= since {
+        for w in momentsHistory.withdrawals {
             let m = momentsByKey[w.key]
             out.append(Activity(id: "mwd-\(w.id)", section: .moments, title: w.kind == .poolFees ? tr("Withdrew pool fees") : tr("Withdrew proceeds"), subtitle: m?.name ?? tr("Moment #\(String(w.momentId))"), time: w.time, usd: MomentsMath.usdc(w.amount), hash: w.hash))
         }
-        for p in momentsHistory.publishes where p.time >= since {
+        for p in momentsHistory.publishes {
             let m = momentsByKey[p.key]
             out.append(Activity(id: "pub-\(p.id)", section: .moments, title: tr("Published \(m?.name ?? tr("Moment #\(String(p.momentId))"))"), subtitle: m.map { "$\($0.symbol)" } ?? "", time: p.time, usd: nil, hash: p.hash))
         }
-        for b in BridgeStore.all(owner: loadedFor) where b.time >= since {
+        for b in bridges {
             out.append(Activity(id: "bridge-\(b.id)", section: .bridge, title: tr("Bridged \(b.inSymbol) → \(b.outSymbol)"), subtitle: "\(b.fromChain) → \(b.toChain)", time: b.time, usd: b.usd, hash: nil))
         }
         return out.sorted { $0.time > $1.time }
@@ -452,6 +476,8 @@ final class PortfolioModel {
         // A cohort that can't be read keeps the Moments the last load read of it, and the load says it is incomplete.
         let previousMoments = Array(momentsByKey.values)
         async let retiredMomentsTask = PastMomentsModel.allMoments(env: env, keeping: previousMoments)
+        // Perps history needs none of the reference data (Perpl's own API, not the chain): read beside it.
+        async let perpsTask = loadPerps(env: env, key: perplKey, passkey: passkey)
         // A launchpad whose launches couldn't be read keeps its last good ones, and the load says it is incomplete.
         let listing = await launchesTask
         let fetchedMoments = try? await momentsTask
@@ -474,7 +500,6 @@ final class PortfolioModel {
 
         let priceable = universe.filter { !$0.isLaunchpad && !momentsCoins.contains($0.address) }
         async let pricesTask = env.prices.prices(for: priceable)
-        async let perpsTask = loadPerps(env: env, key: perplKey, passkey: passkey)
         let fetchedPrices = try? await pricesTask
         let perps = await perpsTask
         guard !Task.isCancelled, loadingFor == address else { return }
@@ -500,6 +525,7 @@ final class PortfolioModel {
         perpsNote = perps.note
 
         loadedFor = address
+        activityInputs += 1
         hasLoaded = true
         applyHistory(env.history.snapshot, version: env.history.version, for: address, force: true)
         Logger(subsystem: "fun.dyorhq.app", category: "portfolio").info("portfolio for \(address.short, privacy: .public): swaps \(self.swaps.count) launch fills \(self.launchHistory.fills.count) collects \(self.momentsHistory.collects.count) launches \(launches.count) history \(self.history.progress)")
@@ -546,6 +572,7 @@ final class PortfolioModel {
         launchHistory = snapshot.launch
         rebuildSwapsLessFills()
         momentsHistory = snapshot.moments
+        activityInputs += 1
         historyUnreachable = snapshot.unreachable
         // A period the history has now read in full is final: saved, for the next time the wallet opens.
         if !force, hasLoaded, loadedFor == address { saveFigures() }
@@ -625,6 +652,7 @@ final class PortfolioModel {
         tokens = [:]; prices = [:]
         hasLoaded = false; landedWhole = false; updatedAt = nil; loadedFor = nil; perpsNote = nil; saved = nil; lastSaved = nil; savedFor = nil
         history = .empty; historyUnreachable = false; historyVersion = -1
+        activityInputs += 1
     }
 
     /// Perpl history needs the account's API key (one-click trading); up to 1,000 fills and 1,000 closed events. Without

@@ -18,8 +18,9 @@ enum BridgeStore {
     private static func key(_ owner: Address?) -> String { "bridge.records.v1." + (owner?.checksummed.lowercased() ?? "none") }
 
     static func all(owner: Address?) -> [BridgeRecord] {
-        guard let data = UserDefaults.standard.data(forKey: key(owner)) else { return [] }
-        return (try? JSONDecoder().decode([BridgeRecord].self, from: data)) ?? []
+        let key = key(owner)
+        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
+        return DecodedDefaults.decode([BridgeRecord].self, key: key, data: data) ?? []
     }
 
     static func record(_ record: BridgeRecord, owner: Address?) {

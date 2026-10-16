@@ -58,13 +58,39 @@ public indirect enum ABIType: Hashable, Sendable {
         return type
     }
 
-    /// Parses a comma-separated parameter list such as `uint256,(address,bool)[]`.
+    /// Parses a comma-separated parameter list such as `uint256,(address,bool)[]`. A list parsed before is answered from
+    /// `ParsedLists` (each is a constant in source, decoded once per log or call result).
     public static func parseList(_ text: String) throws -> [ABIType] {
+        if let parsed = ParsedLists.shared[text] { return parsed }
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return [] }
         var parser = TypeParser("(" + trimmed + ")")
         guard case .tuple(let parts) = try parser.parseType() else { throw ABIError.invalidType(text) }
+        ParsedLists.shared[text] = parts
         return parts
+    }
+}
+
+/// The parameter lists `ABIType.parseList` has parsed, by their text: only lists that parsed, and at most `limit` of
+/// them (the source's signatures are far fewer; past it, nothing new is kept).
+private final class ParsedLists: @unchecked Sendable {
+    static let shared = ParsedLists()
+    private static let limit = 512
+    private let lock = NSLock()
+    private var lists: [String: [ABIType]] = [:]
+
+    subscript(text: String) -> [ABIType]? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return lists[text]
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let newValue, lists.count < Self.limit else { return }
+            lists[text] = newValue
+        }
     }
 }
 

@@ -140,14 +140,7 @@ public enum NumberStyle {
         if magnitude >= 1_000 {
             // The app's one number style (`PriceFormat`): "," between thousands and "." as the decimal point in every
             // region, so 85,000.5 never reads "85 000,5" or "85.000,5" next to a "$85,000.50" price.
-            let formatter = NumberFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.numberStyle = .decimal
-            formatter.usesGroupingSeparator = true
-            formatter.groupingSeparator = ","
-            formatter.groupingSize = 3
-            formatter.decimalSeparator = "."
-            formatter.maximumFractionDigits = maximumFractionDigits ?? 2
+            let formatter = GroupedFormatters.formatter(maximumFractionDigits: maximumFractionDigits ?? 2)
             return sign + (formatter.string(from: NSNumber(value: magnitude)) ?? String(magnitude))
         }
         if magnitude >= 1 { return sign + trim(String(format: "%.\(maximumFractionDigits ?? 4)f", magnitude)) }
@@ -175,6 +168,39 @@ public enum NumberStyle {
 
     public static func basisPoints(_ bps: Int) -> String {
         trim(String(format: "%.2f", Double(bps) / 100)) + "%"
+    }
+
+    /// The grouped style's formatters, one per fraction-digit count, made once: an order book, a trades tape or an
+    /// activity list formats a price of 1,000 or more per row on every redraw, and a new formatter for each cost far
+    /// more than the formatting. Formatting with a configured `NumberFormatter` is safe from any thread; one is never
+    /// changed once made.
+    private enum GroupedFormatters {
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var made: [Int: NumberFormatter] = [:]
+
+        static func formatter(maximumFractionDigits digits: Int) -> NumberFormatter {
+            // The counts the app asks for are a handful (a market's price grid at most); past them a formatter is made
+            // for the one call, as before.
+            guard (0...20).contains(digits) else { return make(maximumFractionDigits: digits) }
+            lock.lock()
+            defer { lock.unlock() }
+            if let formatter = made[digits] { return formatter }
+            let formatter = make(maximumFractionDigits: digits)
+            made[digits] = formatter
+            return formatter
+        }
+
+        private static func make(maximumFractionDigits digits: Int) -> NumberFormatter {
+            let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.numberStyle = .decimal
+            formatter.usesGroupingSeparator = true
+            formatter.groupingSeparator = ","
+            formatter.groupingSize = 3
+            formatter.decimalSeparator = "."
+            formatter.maximumFractionDigits = digits
+            return formatter
+        }
     }
 
     private static func trim(_ s: String) -> String {

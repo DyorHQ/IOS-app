@@ -206,17 +206,38 @@ public final class RSSParser: NSObject, XMLParserDelegate {
 
     static func date(_ text: String?) -> Date? {
         guard let text, !text.isEmpty else { return nil }
-        let iso = ISO8601DateFormatter()
-        if let d = iso.date(from: text) { return d }
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = iso.date(from: text) { return d }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        for format in formats {
+        return DateParsers.shared.date(text)
+    }
+
+    /// The formatters `date` tries, in order, each configured once: a feed's every article has a date, and making the
+    /// formatters, then setting each pattern in turn, for each one cost more than reading it. A configured formatter is
+    /// only ever read; the lock keeps one parse at a time.
+    private final class DateParsers: @unchecked Sendable {
+        static let shared = DateParsers()
+        private let lock = NSLock()
+        private let iso = ISO8601DateFormatter()
+        private let isoFractional: ISO8601DateFormatter = {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return iso
+        }()
+        private let formatters: [DateFormatter] = RSSParser.formats.map { format in
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = format
-            if let d = formatter.date(from: text) { return d }
+            return formatter
         }
-        return nil
+
+        func date(_ text: String) -> Date? {
+            lock.lock()
+            defer { lock.unlock() }
+            if let d = iso.date(from: text) { return d }
+            if let d = isoFractional.date(from: text) { return d }
+            for formatter in formatters {
+                if let d = formatter.date(from: text) { return d }
+            }
+            return nil
+        }
     }
 
     static func firstImage(in html: String) -> String? {

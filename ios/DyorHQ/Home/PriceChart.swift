@@ -33,6 +33,8 @@ struct PriceChart: View {
 
     var body: some View {
         if points.count >= 2 {
+            // Worked out once per redraw: each area mark and axis label reads it, and each reading maps every point.
+            let domain = self.domain
             Chart(points) { point in
                 LineMark(x: .value("Time", point.time), y: .value("Price", point.usd))
                     .interpolationMethod(.monotone)

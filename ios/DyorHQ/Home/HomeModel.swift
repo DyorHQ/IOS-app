@@ -73,7 +73,17 @@ final class HomeModel {
     /// The registry taking in the coins of the launches and Moments the last load read (`DyorCoinsModel.ingest`).
     @ObservationIgnored private var ingesting: Task<Void, Never>?
 
-    var holdings: [MarketRow] { rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) } }
+    var holdings: [MarketRow] {
+        // Read on every redraw, many times a body and once per holdings row, so the last answer is kept for the rows it
+        // was worked out from (`==` on the same array is immediate). `rows` is read either way, so a view that asked
+        // still redraws when it changes.
+        let rows = self.rows
+        if let memo = holdingsMemo, memo.rows == rows { return memo.holdings }
+        let holdings = rows.filter { $0.balance > 0 }.sorted { ($0.value ?? 0) > ($1.value ?? 0) }
+        holdingsMemo = (rows, holdings)
+        return holdings
+    }
+    @ObservationIgnored private var holdingsMemo: (rows: [MarketRow], holdings: [MarketRow])?
 
     /// When the oldest part still showing what was saved for the wallet was read (`restoreSaved`): Home says it ("Updated
     /// 3 min ago") until every part on screen was read in this session, and then this is nil.
@@ -82,10 +92,18 @@ final class HomeModel {
     /// Spot, Launch and Moments with every address counted once (`HomeTotals`): a DyorHQ coin stays listed in Spot but
     /// counts under Launch or Moments when that tab lists it, at the one price Spot shows for it.
     var totals: HomeTotals {
-        HomeTotals(spot: holdings.map { HomeTotals.Line(address: $0.id, units: Amount.units($0.balance, decimals: $0.token.decimals), price: $0.usd) },
-                   launch: launchHoldings.map { HomeTotals.Line(address: $0.id, units: $0.units, price: $0.priceUSD) },
-                   moments: momentRows.map { HomeTotals.Line(address: $0.moment.moment.coin, units: Self.coins($0), price: WalletHoldings.momentPrice($0.moment)) })
+        // Kept like `holdings`, for the three lists it is worked out from; each is read either way.
+        let (holdings, launchHoldings, momentRows) = (self.holdings, self.launchHoldings, self.momentRows)
+        if let memo = totalsMemo, memo.holdings == holdings, memo.launchHoldings == launchHoldings, memo.momentRows == momentRows {
+            return memo.totals
+        }
+        let totals = HomeTotals(spot: holdings.map { HomeTotals.Line(address: $0.id, units: Amount.units($0.balance, decimals: $0.token.decimals), price: $0.usd) },
+                                launch: launchHoldings.map { HomeTotals.Line(address: $0.id, units: $0.units, price: $0.priceUSD) },
+                                moments: momentRows.map { HomeTotals.Line(address: $0.moment.moment.coin, units: Self.coins($0), price: WalletHoldings.momentPrice($0.moment)) })
+        totalsMemo = (holdings, launchHoldings, momentRows, totals)
+        return totals
     }
+    @ObservationIgnored private var totalsMemo: (holdings: [MarketRow], launchHoldings: [LaunchHolding], momentRows: [MomentPortfolioRow], totals: HomeTotals)?
 
     /// A Moments stake's coins: held, plus still owed (entitled, not yet claimed).
     nonisolated static func coins(_ row: MomentPortfolioRow) -> Double {

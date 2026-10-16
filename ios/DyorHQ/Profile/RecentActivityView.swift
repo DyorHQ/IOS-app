@@ -158,9 +158,12 @@ final class RecentActivityModel {
         loading = true
         defer { if load == loads { loading = false } }
         let tokenMap = Dictionary(KnownTokenStore.universe(owner: address).map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
-        // The actions recorded on this device show at once; the on-chain backfill joins them below.
+        // The actions recorded on this device show at once, with the week's swaps the wallet's history already holds (in
+        // memory, no read); the launchpad backfill, which needs the launches, joins them below (`applyHistory`).
         let byToken = Dictionary(lastLaunches.map { ($0.token, $0) }, uniquingKeysWith: { first, _ in first })
-        items = Self.merge(ActivityLog.all(owner: address), lpActivity: lastActivity, byToken: byToken, swaps: [], tokens: tokenMap)
+        let since = Date().addingTimeInterval(-SwapHistoryService.Window.week.seconds)
+        items = Self.merge(ActivityLog.all(owner: address), lpActivity: lastActivity, byToken: byToken,
+                           swaps: env.history.snapshot.swaps.filter { $0.time >= since }, tokens: tokenMap)
         // Pending rows are re-checked beside the launch read, not ahead of it (each can wait on the RPC); the feed is
         // built once the launches answer, and again once they are settled.
         async let rechecked: Void = PendingActivity.recheck(owner: address, rpc: env.rpc)

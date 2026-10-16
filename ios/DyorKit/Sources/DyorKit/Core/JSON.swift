@@ -11,18 +11,21 @@ public enum JSON: Equatable, Sendable, Codable, CustomStringConvertible {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
+        // Each kind is tried in turn, and a decoder accepts a value only as its own kind (a string is never a number or a
+        // bool, and the reverse), so the order decides nothing but cost: a failed try throws. Strings come first because
+        // nearly every value a node sends is one (hex quantities, hashes, addresses), then objects, then arrays.
         if container.decodeNil() {
             self = .null
+        } else if let s = try? container.decode(String.self) {
+            self = .string(s)
+        } else if let o = try? container.decode([String: JSON].self) {
+            self = .object(o)
+        } else if let a = try? container.decode([JSON].self) {
+            self = .array(a)
         } else if let b = try? container.decode(Bool.self) {
             self = .bool(b)
         } else if let n = try? container.decode(Double.self) {
             self = .number(n)
-        } else if let s = try? container.decode(String.self) {
-            self = .string(s)
-        } else if let a = try? container.decode([JSON].self) {
-            self = .array(a)
-        } else if let o = try? container.decode([String: JSON].self) {
-            self = .object(o)
         } else {
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported JSON value")
         }

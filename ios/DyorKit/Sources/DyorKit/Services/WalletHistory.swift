@@ -582,12 +582,14 @@ public actor WalletHistoryService {
     /// when the server found one earlier than the one known, so the transfer scans keep what the read adds back to it
     /// (`adopt(firstTransaction:wallet:erasureToken:epoch:)`); then every scan the server served (`HistoryStore.adopt`),
     /// all at once, each after its own refresh under way. The
-    /// chain's head is read first (`HistoryStore.latest`, one request): a scan whose head is past it speaks for blocks the
-    /// device can't prove exist, and none is taken in when the head can't be read — the rounds read the chain as before.
+    /// chain's head is read first, as a round reads it (`roundHead`: the session's shared head read anew, raced across the
+    /// app's endpoints, where the logs endpoints were asked one after another, and shared with the round that follows): a
+    /// scan whose head is past it speaks for blocks the device can't prove exist, and none is taken in when the head can't
+    /// be read — the rounds read the chain as before.
     /// Nothing for another wallet's read, or a read of the metadata alone. The ids of the scans it took in.
     @discardableResult
     public func adopt(_ read: ServerHistoryRead, wallet: Address, erasureToken: Int, epoch: Int) async -> Set<String> {
-        guard read.wallet == wallet, !read.metaOnly, let chainHead = await store.latest()?.number else { return [] }
+        guard read.wallet == wallet, !read.metaOnly, let chainHead = await roundHead()?.number else { return [] }
         if case .found(let block) = read.firstTransaction { await adopt(firstTransaction: block, wallet: wallet, erasureToken: erasureToken, epoch: epoch) }
         let scans = await scans(wallet: wallet, findingFirstTransaction: false)
         return await withTaskGroup(of: String?.self) { group in
