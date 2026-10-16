@@ -5,6 +5,12 @@ public struct Address: Hashable, Sendable, Codable, CustomStringConvertible {
     public let data: Data
 
     public init?(_ string: String) {
+        // What a node, a store or a link nearly always holds: "0x" and 40 hex digits, nothing to trim. Read straight from
+        // its bytes; anything else goes the general way below, which gives the same answer for this case.
+        if string.utf8.count == 42, let bytes = Data.asciiHex(string), bytes.count == 20, string.utf8.first == UInt8(ascii: "0") {
+            data = bytes
+            return
+        }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count == 42, trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X"), let bytes = Data(hex: trimmed), bytes.count == 20 else { return nil }
         data = bytes
@@ -30,14 +36,20 @@ public struct Address: Hashable, Sendable, Codable, CustomStringConvertible {
 
     /// EIP-55 mixed-case checksum form, what users should see and copy.
     public var checksummed: String {
-        let lower = data.map { String(format: "%02x", $0) }.joined()
+        var lower = data.lowercaseHexDigits
         let hash = Keccak.hash256(lower)
-        var out = "0x"
-        for (i, ch) in lower.enumerated() {
-            let nibble = (hash[i / 2] >> (i % 2 == 0 ? 4 : 0)) & 0xF
-            out.append(nibble >= 8 ? ch.uppercased() : String(ch))
+        // A letter (a–f) whose hash nibble is 8 or more is written in capitals; digits are as they are.
+        return lower.withUTF8 { digits in
+            String(unsafeUninitializedCapacity: 2 + digits.count) { out in
+                out[0] = UInt8(ascii: "0")
+                out[1] = UInt8(ascii: "x")
+                for (i, ch) in digits.enumerated() {
+                    let nibble = (hash[i / 2] >> (i % 2 == 0 ? 4 : 0)) & 0xF
+                    out[2 + i] = nibble >= 8 && ch >= UInt8(ascii: "a") ? ch - 32 : ch
+                }
+                return 2 + digits.count
+            }
         }
-        return out
     }
 
     /// EIP-55 for typed or pasted input: an all-lowercase or all-uppercase address carries no checksum and passes as
