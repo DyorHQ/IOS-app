@@ -14,8 +14,9 @@ enum KnownTokenStore {
     }
 
     private static func stored(_ owner: Address) -> [Token] {
-        guard let data = UserDefaults.standard.data(forKey: key(owner)) else { return [] }
-        return (try? JSONDecoder().decode([Token].self, from: data)) ?? []
+        let key = key(owner)
+        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
+        return DecodedDefaults.decode([Token].self, key: key, data: data) ?? []
     }
 
     /// Records a token the wallet now holds. No-ops for native MON and anything already curated or stored.
@@ -87,5 +88,27 @@ enum KnownTokenStore {
         var out = Token.core
         for token in all(owner: owner) where seen.insert(token.address).inserted { out.append(token) }
         return out
+    }
+}
+
+/// JSON kept in UserDefaults, decoded once for the bytes it was decoded from: the stores read on every redraw (the tokens a
+/// wallet acquired, its bridges) answer from what was decoded until what is stored changes — here, or by a restore from
+/// the backend — and the same bytes always decode to the same value. A value that fails to decode isn't kept.
+enum DecodedDefaults {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var held: [String: (data: Data, value: Any)] = [:]
+
+    static func decode<T: Decodable>(_ type: T.Type, key: String, data: Data) -> T? {
+        lock.lock()
+        if let kept = held[key], kept.data == data, let value = kept.value as? T {
+            lock.unlock()
+            return value
+        }
+        lock.unlock()
+        guard let value = try? JSONDecoder().decode(T.self, from: data) else { return nil }
+        lock.lock()
+        held[key] = (data, value)
+        lock.unlock()
+        return value
     }
 }

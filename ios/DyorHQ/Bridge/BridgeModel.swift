@@ -91,18 +91,19 @@ final class BridgeModel {
     /// top ordered by USD value, then the rest by a stable-first, alphabetical order. This is what the cross-chain
     /// source picker shows, so "100 USDT on Arbitrum" is the first thing the user sees.
     var sourceAssets: [AuroraToken] {
+        // Each asset's holding, value and rank worked out once, not twice per comparison: the picker is hundreds of assets
+        // across chains, sorted on every redraw while balances arrive. The order is the same.
         tokens
             .filter { (EVMChain.byAuroraId($0.blockchain).map { !$0.isMonad }) ?? false }
+            .map { (token: $0, held: held($0), usd: balanceUSD($0), rank: stableRank($0)) }
             .sorted { a, b in
-                let ha = held(a), hb = held(b)
-                if ha != hb { return ha }                 // any holding ranks above no holding
-                let va = balanceUSD(a), vb = balanceUSD(b)
-                if va != vb { return va > vb }             // among holdings, richest by USD first
-                let ra = stableRank(a), rb = stableRank(b)
-                if ra != rb { return ra < rb }             // then the familiar stables
-                if a.symbol != b.symbol { return a.symbol < b.symbol }
-                return a.blockchain < b.blockchain
+                if a.held != b.held { return a.held }               // any holding ranks above no holding
+                if a.usd != b.usd { return a.usd > b.usd }          // among holdings, richest by USD first
+                if a.rank != b.rank { return a.rank < b.rank }      // then the familiar stables
+                if a.token.symbol != b.token.symbol { return a.token.symbol < b.token.symbol }
+                return a.token.blockchain < b.token.blockchain
             }
+            .map(\.token)
     }
 
     // MARK: Loading

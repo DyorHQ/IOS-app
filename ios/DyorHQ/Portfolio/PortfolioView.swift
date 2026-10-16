@@ -317,7 +317,8 @@ struct PortfolioView: View {
             if items.isEmpty {
                 Text(model.hasLoaded ? "Nothing in this period." : "Loading…").font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
             } else {
-                VStack(spacing: 0) {
+                // Lazy: "Show all" can list thousands, each with a self-updating time; rows are made as they scroll in.
+                LazyVStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
                         PortfolioActivityRow(item: item, color: color(item.section))
                         if index < shown.count - 1 { Divider().padding(.leading, 44) }

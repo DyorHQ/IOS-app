@@ -296,7 +296,8 @@ struct AssetsCard: View {
 
             if kind == .assets, !model.tokens.isEmpty {
                 let shown = showAllTokens ? model.tokens : Array(model.tokens.prefix(6))
-                VStack(spacing: 0) {
+                // Lazy: "Show all" can list hundreds (airdropped tokens), each with its logo; rows are made as they scroll in.
+                LazyVStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, asset in
                         let route = model.curve.route(asset.token.address)
                         if let retired = model.retiredByCoin[asset.token.address] {
