@@ -29,7 +29,10 @@ import Foundation
    curves take sells only (`RetiredLaunchpad`): a curve `buy` into a curve a retired factory recorded, an approval
    paying anything but the coin itself into one, and `launchAndBuy` on (or an approval to) a retired router. Both are
    owner decisions of 2026-09-28. Which curves a retired factory recorded is read on-chain before the check
-   (`RetiredCurves`), and a curve `buy` whose curve couldn't be looked up is refused as unverified.
+   (`RetiredCurves`), and a curve `buy` whose curve couldn't be looked up is refused as unverified. On 1inch, Aqua and
+   SwapVMRouter are refused outright, and a router call is refused unless it is a declared 1inch swap read in full and
+   priced against the stock's reference (`oneInchRefusal`); while 1inch is off in this build (`OneInch.compiledIn`), every router call is. Anything on 1inch,
+   or touching a known xStock, always asks (`AlwaysAsk.tokenizedStock`).
 
    Pure and synchronous: the app supplies what only the chain can answer (`Context.verifiedCurves`, `RetiredCurves`) and
    the session's caps. The only messages a session signs on its own are DyorHQ's wallet-auth sign-in for this account;
@@ -194,6 +197,8 @@ extension Mera {
         case send, bridge, launch, withdrawElsewhere, export, deletion, lengthenSession, rawDigest, message
         /// Perpl cancels and reduce-only closes: allowed only after a step-up.
         case cancelOrder, closePosition
+        /// Anything on 1inch, and any action touching a known xStock: never prompt-free, whatever the session.
+        case tokenizedStock
         /// Anything no sheet declared as session-OK.
         case unlisted
 
@@ -211,6 +216,7 @@ extension Mera {
             case .message: return L10n.string(LocalizedStringResource("signing a message", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
             case .cancelOrder: return L10n.string(LocalizedStringResource("cancelling an order", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
             case .closePosition: return L10n.string(LocalizedStringResource("closing a position", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+            case .tokenizedStock: return L10n.string(LocalizedStringResource("trading xStocks (tokenized stocks)", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
             case .unlisted: return L10n.string(LocalizedStringResource("this action always asks", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
             }
         }
@@ -243,6 +249,15 @@ extension Mera {
             case graduateFallback
             /// A buy on a retired launchpad, whose curves take sells only.
             case retiredLaunchpad
+            /// A call to a 1inch contract the app never uses (Aqua, SwapVMRouter), or a 1inch router call that isn't a
+            /// declared swap the wallet reads in full, or that sets flags or sends MON.
+            case unreadableSwap
+            /// A 1inch swap whose minimum received is further below the amount shown than the stock slippage limit
+            /// (`OneInch.stockSlippageCapBps`).
+            case stockMinimumOut
+            /// A 1inch swap whose price is further from the stock's reference price (`XStockReference`) than the band
+            /// (`OneInch.priceBandBps`), better or worse, or checked against another stock's reference.
+            case stockPrice
             case unpriced, overActionCap, overSessionCap
 
             /// The "<reason>" in "Face ID required: <reason>", in the app's language.
@@ -268,6 +283,12 @@ extension Mera {
                 case .networkFee: return L10n.string(LocalizedStringResource("an unusually high network fee", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
                 case .graduateFallback: return L10n.string(LocalizedStringResource("a graduation fallback, which only DyorHQ’s keepers send", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
                 case .retiredLaunchpad: return L10n.string(LocalizedStringResource("a buy on a retired launchpad, which only takes sells", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .unreadableSwap: return L10n.string(LocalizedStringResource("a 1inch transaction DyorHQ can’t read in full", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
+                case .stockMinimumOut:
+                    // The limit as a percentage in the app's one style, whatever the language ("1%").
+                    let limit = NumberStyle.basisPoints(OneInch.stockSlippageCapBps)
+                    return L10n.string(LocalizedStringResource("a minimum received more than \(limit) below the amount shown", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.” The value is a percentage (1%), the most a stock trade may slip."))
+                case .stockPrice: return L10n.string(LocalizedStringResource("a price too far from the stock’s reference price", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.” The reference price is the stock's independent on-chain price."))
                 case .unpriced: return L10n.string(LocalizedStringResource("this can’t be priced", bundle: L10n.kit, comment: "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”"))
                 case .overActionCap:
                     // The cap in the app's one style for dollars, whatever the language ("$100").
@@ -384,6 +405,7 @@ extension Mera {
         /// A whole plan before anything is signed, for the sheet's badge: every call, then the caps (not charged).
         public static func review(_ calls: [Call], intent: Intent, context: Context, caps: SpendingCaps) -> Verdict {
             guard intent.isSessionScoped else { return .ask(.alwaysAsks(intent.asks)) }
+            if intent.parts.contains(where: { alwaysAsksForStock($0) }) { return .ask(.alwaysAsks(.tokenizedStock)) }
             for call in calls {
                 if case .ask(let reason) = check(call, intent: intent, context: context) { return .ask(reason) }
             }
@@ -404,6 +426,8 @@ extension Mera {
         /// separately, once per action, and `refusal` runs before either).
         public static func check(_ call: Call, intent: Intent, context: Context) -> Verdict {
             guard intent.isSessionScoped else { return .ask(.alwaysAsks(intent.asks)) }
+            // An action with a 1inch or xStock part always asks, whichever of its parts this call would fit.
+            if intent.parts.contains(where: { alwaysAsksForStock($0) }) { return .ask(.alwaysAsks(.tokenizedStock)) }
             guard call.chainId == Monad.chainId else { return .ask(.wrongChain) }
             guard call.from == context.account else { return .ask(.wrongSender) }
             var reason: Reason?
@@ -431,10 +455,16 @@ extension Mera {
         /// - `.retiredLaunchpad`: a buy on a retired launchpad (`retiredLaunchpadRefusal`), whatever the sheet declared;
         ///   `.unverifiedCurve` for a curve `buy` whose curve couldn't be looked up (`retiredCurves` is `.unknown`).
         ///   `retiredCurves` is what the chain says about the curves `curveCandidates` names for this call.
-        public static func refusal(_ call: Call, intent: Intent, account: Address, retiredCurves: RetiredCurves = .none) -> Reason? {
+        /// - 1inch (`oneInchRefusal`): any call to or approval of Aqua or SwapVMRouter, and any router call but a declared
+        ///   1inch swap the wallet reads in full, trading the tokens shown for no more than the amount shown, paying this
+        ///   account, within the stock slippage limit, and at a price within the band of the stock's `reference` price
+        ///   (`.stockPrice`, also when no reference is given).
+        public static func refusal(_ call: Call, intent: Intent, account: Address, retiredCurves: RetiredCurves = .none,
+                                   reference: XStockReference.Snapshot? = nil) -> Reason? {
             if call.chainId == Monad.chainId, !feeWithinLimits(call) { return .networkFee }
             if call.data.prefix(4) == Selector.graduateFallback { return .graduateFallback }
             if let reason = retiredLaunchpadRefusal(call, retiredCurves: retiredCurves) { return reason }
+            if let reason = oneInchRefusal(call, intent: intent, account: account, reference: reference) { return reason }
             if call.to == Kuru.entrypoint, let swap = KuruFlowSwap(calldata: call.data) {
                 if (swap.recipient ?? account) != account { return .recipient }
                 if !swap.takesNoFee { return .fee }
@@ -447,6 +477,66 @@ extension Mera {
                 if selector == expected, let recipient = ABIWords(call.data.dropFirst(4)).address(2), recipient != account { return .recipient }
             }
             return nil
+        }
+
+        /// What no approval makes acceptable on 1inch, or nil. Nothing in this build sends a 1inch swap
+        /// (`OneInch.compiledIn` is false), so while it is off every router call is refused here, whatever it says:
+        ///
+        /// - `.unreadableSwap`: a call to Aqua or SwapVMRouter, or an approval (ERC-20 or Permit2) naming either; a router
+        ///   call while 1inch is off, that isn't a generic swap read in full (`OneInchSwap`), that no `.swap(.oneInch)`
+        ///   part declares, or that sets flags or sends MON;
+        /// - `.recipient`: a router swap paying its output to anyone but this account;
+        /// - `.differentToken`: a router swap trading tokens other than every declared part's;
+        /// - `.amountOverDeclared`: a router swap spending more than the part declared;
+        /// - `.stockMinimumOut`: a router swap whose minimum is further below the declared output than the stock slippage
+        ///   limit (`OneInch.stockSlippageCapBps`), whatever slippage the sheet chose;
+        /// - `.stockPrice`: a router swap checked against no `reference` price at all, or that isn't a curated stock against
+        ///   USDC at that reference's stock, or whose declared output is outside the band either way, or whose minimum is
+        ///   further than the band on the side that costs the account (`XStockPriceBand`).
+        static func oneInchRefusal(_ call: Call, intent: Intent, account: Address, compiledIn: Bool = OneInch.compiledIn,
+                                   reference: XStockReference.Snapshot? = nil) -> Reason? {
+            if OneInch.refusedContracts.contains(call.to) { return .unreadableSwap }
+            let selector = call.data.prefix(4)
+            let args = ABIWords(call.data.dropFirst(4))
+            if selector == Selector.approve || selector == Selector.increaseAllowance,
+               let word = args.word(0), let spender = Address(data: Data(word.suffix(20))), OneInch.refusedContracts.contains(spender) { return .unreadableSwap }
+            if selector == Selector.permit2Approve, let word = args.word(1), let spender = Address(data: Data(word.suffix(20))),
+               OneInch.refusedContracts.contains(spender) { return .unreadableSwap }
+            guard call.to == OneInch.router else { return nil }
+            guard compiledIn, let swap = OneInchSwap(calldata: call.data) else { return .unreadableSwap }
+            switch swap.problem(account: account, value: call.value) {
+            case .recipient: return .recipient
+            case .flags, .value: return .unreadableSwap
+            case nil: break
+            }
+            let declared = intent.parts.filter { $0.kind == .swap(.oneInch) }
+            guard !declared.isEmpty else { return .unreadableSwap }
+            let matching = declared.filter { $0.input?.token == swap.srcToken && $0.output?.token == swap.dstToken }
+            guard !matching.isEmpty else { return .differentToken }
+            guard matching.contains(where: { swap.amount <= ($0.input?.amount ?? 0) }) else { return .amountOverDeclared }
+            let floor = { (part: Intent.Part) in SwapMath.minAfterSlippage(part.output?.amount ?? 0, bps: OneInch.stockSlippageCapBps) }
+            let admitted = matching.filter { swap.amount <= ($0.input?.amount ?? 0) && swap.minReturn >= floor($0) }
+            guard !admitted.isEmpty else { return .stockMinimumOut }
+            // No reference, no price binding: refuse rather than sign a router swap nothing has priced.
+            guard let reference else { return .stockPrice }
+            guard admitted.contains(where: { stockPriceAdmits(swap, declaredOut: $0.output?.amount ?? 0, reference: reference) }) else {
+                return .stockPrice
+            }
+            return nil
+        }
+
+        /// Whether `swap`, declared to receive `declaredOut`, trades `reference`'s stock against USDC at a price within the
+        /// band of it: the declared output either way, and the swap's minimum on the side that costs the account.
+        static func stockPriceAdmits(_ swap: OneInchSwap, declaredOut: BigUInt, reference: XStockReference.Snapshot) -> Bool {
+            if swap.srcToken == Monad.usdc, swap.dstToken == reference.stock {
+                return XStockPriceBand.admits(stock: declaredOut, usdc: swap.amount, reference: reference)
+                    && XStockPriceBand.admitsWorstCase(isBuy: true, stock: swap.minReturn, usdc: swap.amount, reference: reference)
+            }
+            if swap.srcToken == reference.stock, swap.dstToken == Monad.usdc {
+                return XStockPriceBand.admits(stock: swap.amount, usdc: declaredOut, reference: reference)
+                    && XStockPriceBand.admitsWorstCase(isBuy: false, stock: swap.amount, usdc: swap.minReturn, reference: reference)
+            }
+            return false
         }
 
         /// A buy on a retired launchpad, whose curves take sells only (owner decision 2026-09-28), or nil:
@@ -487,8 +577,21 @@ extension Mera {
             return out
         }
 
-        /// Spenders the app approves that are no launchpad curve.
-        static let notCurves: Set<Address> = [Uniswap.permit2, Uniswap.swapRouter02, Uniswap.universalRouter, MondayTrade.swapRouter, Kuru.entrypoint, Perpl.exchange]
+        /// The stock whose reference price must be read before `refusal` prices a 1inch router swap (`oneInchRefusal`):
+        /// the side that isn't USDC of the first router call that decodes as a swap. Nil when no call is one, so nothing
+        /// is read for any other plan; a swap of the wrong pair is still refused, by the reference's own stock.
+        public static func referenceStock(_ calls: [Call]) -> Address? {
+            for call in calls where call.to == OneInch.router {
+                guard let swap = OneInchSwap(calldata: call.data) else { continue }
+                return swap.srcToken == Monad.usdc ? swap.dstToken : swap.srcToken
+            }
+            return nil
+        }
+
+        /// Spenders the app approves that are no launchpad curve, and 1inch's contracts (Aqua and SwapVMRouter are refused
+        /// before any lookup matters).
+        static let notCurves: Set<Address> = [Uniswap.permit2, Uniswap.swapRouter02, Uniswap.universalRouter, MondayTrade.swapRouter, Kuru.entrypoint, Perpl.exchange,
+                                              OneInch.router, OneInch.aqua, OneInch.swapVMRouter]
 
         /// The fee comes from the RPC (`eth_estimateGas`, the base fee, `eth_maxPriorityFeePerGas`), so a buggy or hostile
         /// node could otherwise have a transaction commit the whole balance to gas. It must stay within Monad's
@@ -505,6 +608,8 @@ extension Mera {
         }
 
         static func check(_ call: Call, part: Intent.Part, context: Context) -> Verdict {
+            // Before any approval is weighed: a 1inch or xStock part is never prompt-free.
+            if alwaysAsksForStock(part) { return .ask(.alwaysAsks(.tokenizedStock)) }
             // No selector: a plain MON transfer, which is a send.
             guard call.data.count >= 4 else { return .ask(.notAllowlisted) }
             let selector = call.data.prefix(4)
@@ -559,6 +664,9 @@ extension Mera {
             case .swap(.kuru):
                 guard call.to == Kuru.entrypoint else { return .ask(.notAllowlisted) }
                 return checkKuru(call, part: part, context: context)
+            case .swap(.oneInch):
+                // Never prompt-free (`alwaysAsksForStock` asks before this is reached).
+                return .ask(.alwaysAsks(.tokenizedStock))
             case .swap(.wrap):
                 guard call.to == Monad.wmon, let input = part.input else { return .ask(.notAllowlisted) }
                 if selector == Selector.wmonDeposit, input.isNative { return .allowed }
@@ -618,6 +726,12 @@ extension Mera {
 
         private static func isLaunchpad(_ kind: Intent.Kind) -> Bool { kind == .launchpadBuy || kind == .launchpadSell }
 
+        /// A part that always asks for Face ID: anything on 1inch, and anything whose input or output is a known xStock
+        /// (`isKnown`, `XStocks.isKnown` but in tests), whatever kind of action it is.
+        static func alwaysAsksForStock(_ part: Intent.Part, isKnown: (Address) -> Bool = XStocks.isKnown) -> Bool {
+            part.kind == .swap(.oneInch) || [part.input?.token, part.output?.token].contains { $0.map(isKnown) ?? false }
+        }
+
         private static func curve(for part: Intent.Part, _ context: Context) -> Address? {
             part.launchToken.flatMap { context.verifiedCurves[$0] }
         }
@@ -628,6 +742,7 @@ extension Mera {
             case .swap(.uniswap): return [Uniswap.permit2, Uniswap.swapRouter02]
             case .swap(.monday): return [MondayTrade.swapRouter]
             case .swap(.kuru): return [Kuru.entrypoint]
+            case .swap(.oneInch): return [OneInch.router]
             case .launchpadBuy, .launchpadSell: return curve(for: part, context).map { [$0] } ?? []
             case .momentsCollect: return context.contracts.moments.collect.isZero ? [] : [context.contracts.moments.collect]
             case .perplDeposit: return [Perpl.exchange]
@@ -659,6 +774,7 @@ extension Mera {
 
         enum Selector {
             static let approve = ABI.selector("approve(address,uint256)")
+            static let increaseAllowance = ABI.selector("increaseAllowance(address,uint256)")
             static let permit2Approve = ABI.selector("approve(address,address,uint160,uint48)")
             static let universalRouterExecute = ABI.selector("execute(bytes,bytes[],uint256)")
             static let swapRouter02Multicall = ABI.selector("multicall(uint256,bytes[])")

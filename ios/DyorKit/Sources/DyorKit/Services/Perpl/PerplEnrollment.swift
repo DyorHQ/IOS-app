@@ -86,11 +86,20 @@ public enum PerplEnrollment {
         .init(name: "time", type: "uint64"),
     ]
 
-    public struct Validated {
+    /// A payload `validate` accepted. Only `validate` can make one, so a wallet's `signPerplEnrollment` — the app's one
+    /// way to have a key sign a raw digest — can never be handed a digest of anything else: no venue, API or screen can
+    /// ask for an arbitrary signature through it. `@unchecked`: both fields are immutable once `validate` built them, and
+    /// `typedData`'s JSON-shaped values are only read (hashed), never mutated.
+    public struct Validated: @unchecked Sendable {
         /// The canonical rebuild of the validated payload; what the digest is computed from.
         public let typedData: EIP712.TypedData
         /// The 32-byte digest to sign (wallet) and to prove possession over (Ed25519).
         public let digest: Data
+
+        fileprivate init(typedData: EIP712.TypedData, digest: Data) {
+            self.typedData = typedData
+            self.digest = digest
+        }
     }
 
     /// Checks the server's `typed_data` against the request the app made — `chainId`, `address`, `publicKeyHex`,

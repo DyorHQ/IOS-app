@@ -442,12 +442,12 @@ final class PerplTrading: MeraSessionLifecycle {
                 // From the live session, not the enrolment's copy: nothing outlives a session that ended meanwhile.
                 key = sessionKey()
                 guard key != nil else { throw Mera.SessionError.sessionEnded }
-            } else if let signer = wallet as? DigestSigner {
+            } else if let signer = wallet as? PerplEnrollmentSigner {
                 let secret = PerplAuth.newSecret()
                 let publicKeyHex = try PerplAuth.publicKeyHex(secret: secret)
                 let auth = PerplAuthClient(chainId: Monad.chainId)
                 let payload = try await auth.requestPayload(address: address.checksummed, publicKeyHex: publicKeyHex, scopeMask: PerplScope.trade, label: "DyorHQ") // not localized: the key's label
-                let walletSignature = try await signer.signDigest(payload.digest)
+                let walletSignature = try await signer.signPerplEnrollment(payload.validated)
                 let enrolled = try await auth.enroll(address: address.checksummed, secret: secret, payload: payload, walletSignature: walletSignature, scopeMask: PerplScope.trade)
                 PerplKeychain.save(enrolled, address: address.checksummed)
                 // The user may have signed out or switched wallets while the wallet signed: this key belongs to

@@ -64,6 +64,34 @@
         }
       }
     },
+    "%@ doesn't quote xStocks (tokenized stocks) in DyorHQ." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ no cotiza xStocks (acciones tokenizadas) en DyorHQ."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ne cote pas les xStocks (actions tokenisées) dans DyorHQ."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ에서 %@은(는) xStocks(토큰화 주식) 견적을 제공하지 않습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 DyorHQ 中，%@ 不提供 xStocks（代币化股票）报价。"
+          }
+        }
+      }
+    },
     "%@ of its margin is in use, and Perpl liquidates at 100%%. Mark %@, liquidation %@. %@" : {
       "comment" : "A margin alert. The values: the margin in use (“85%”), the mark price, the liquidation price, then what to do, a sentence of its own.",
       "localizations" : {
@@ -244,6 +272,146 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@-PERP 做空仓位已平仓"
+          }
+        }
+      }
+    },
+    "1inch couldn't quote this trade right now. Try again later." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch no pudo cotizar esta operación en este momento. Vuelve a intentarlo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch n'a pas pu coter cette transaction pour le moment. Réessayez plus tard."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 1inch가 이 거래의 견적을 낼 수 없습니다. 나중에 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch 目前无法为这笔交易报价。请稍后重试。"
+          }
+        }
+      }
+    },
+    "1inch has no quote for this trade right now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch no tiene cotización para esta operación en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch n'a pas de cotation pour cette transaction pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 1inch에 이 거래에 대한 견적이 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch 目前没有这笔交易的报价。"
+          }
+        }
+      }
+    },
+    "1inch is busy right now. Try again in a moment." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch está ocupado en este momento. Vuelve a intentarlo en un momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch est occupé pour le moment. Réessayez dans un instant."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 1inch가 혼잡합니다. 잠시 후 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch 当前繁忙。请稍后重试。"
+          }
+        }
+      }
+    },
+    "1inch returned an unexpected answer, so it was blocked for your safety." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch devolvió una respuesta inesperada, así que se bloqueó por tu seguridad."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch a renvoyé une réponse inattendue : elle a donc été bloquée pour votre sécurité."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch가 예상치 못한 응답을 반환하여 안전을 위해 차단되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch 返回了意外的应答，因此为了你的安全已将其拦截。"
+          }
+        }
+      }
+    },
+    "1inch's price is too far from this stock's reference price, so it was blocked for your safety." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El precio de 1inch se aleja demasiado del precio de referencia de esta acción, así que se bloqueó por tu seguridad."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le prix de 1inch s'écarte trop du prix de référence de cette action : il a donc été bloqué pour votre sécurité."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch의 가격이 이 주식의 기준 가격과 너무 달라 안전을 위해 차단되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch 的价格与这只股票的参考价格相差过大，因此为了你的安全已将其拦截。"
           }
         }
       }
@@ -1272,6 +1440,34 @@
         }
       }
     },
+    "Approve %@ for 1inch" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aprobar %@ para 1inch"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approuver %@ pour 1inch"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch에 %@ 승인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为 1inch 授权 %@"
+          }
+        }
+      }
+    },
     "Approve %@ for Kuru Flow" : {
       "localizations" : {
         "es" : {
@@ -1637,6 +1833,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在其发射页面上买入或卖出"
+          }
+        }
+      }
+    },
+    "Buying xStocks (tokenized stocks) isn't available right now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comprar xStocks (acciones tokenizadas) no está disponible en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'achat de xStocks (actions tokenisées) n'est pas disponible pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 xStocks(토큰화 주식)를 구매할 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前无法购买 xStocks（代币化股票）。"
           }
         }
       }
@@ -2655,6 +2879,34 @@
         }
       }
     },
+    "DyorHQ couldn't check this xStock's reference price, so it doesn't price or trade it right now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ no pudo comprobar el precio de referencia de este xStock, así que no le pone precio ni lo opera en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ n'a pas pu vérifier le prix de référence de ce xStock : il ne l'évalue donc pas et ne le négocie pas pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ가 이 xStock의 기준 가격을 확인할 수 없어 지금은 가격을 표시하거나 거래하지 않습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 无法核对这个 xStock 的参考价格，因此目前不为它定价，也不交易它。"
+          }
+        }
+      }
+    },
     "DyorHQ couldn't check whether this coin is still on a launchpad's bonding curve just now. If it is, it trades on its Launch page, not on Swap: check again in a moment." : {
       "localizations" : {
         "es" : {
@@ -2679,6 +2931,146 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "DyorHQ 暂时无法检查此币是否仍在 Launchpad 的联合曲线上。如果是，它会在其发射页面上交易，而不是在兑换中：稍后再检查一次。"
+          }
+        }
+      }
+    },
+    "DyorHQ couldn't verify this 1inch swap, so nothing was sent." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ no pudo verificar este intercambio de 1inch, así que no se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ n'a pas pu vérifier cet échange 1inch : rien n'a donc été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ가 이 1inch 스왑을 확인할 수 없어 아무것도 전송되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 无法验证这笔 1inch 兑换，因此未发送任何内容。"
+          }
+        }
+      }
+    },
+    "DyorHQ doesn't offer this xStock (tokenized stock) right now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ no ofrece este xStock (acción tokenizada) en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ ne propose pas ce xStock (action tokenisée) pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ는 지금 이 xStock(토큰화 주식)을 제공하지 않습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 目前不提供这个 xStock（代币化股票）。"
+          }
+        }
+      }
+    },
+    "DyorHQ doesn't sign Permit2 approvals for the 1inch router, so nothing was sent." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ no firma aprobaciones de Permit2 para el router de 1inch, así que no se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ ne signe pas d'approbations Permit2 pour le routeur 1inch : rien n'a donc été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ는 1inch 라우터에 대한 Permit2 승인에 서명하지 않으므로 아무것도 전송되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 不会为 1inch 路由器签署 Permit2 授权，因此未发送任何内容。"
+          }
+        }
+      }
+    },
+    "DyorHQ doesn't sign transactions for this 1inch contract, so nothing was sent." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ no firma transacciones para este contrato de 1inch, así que no se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ ne signe pas de transactions pour ce contrat 1inch : rien n'a donc été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ는 이 1inch 컨트랙트의 트랜잭션에 서명하지 않으므로 아무것도 전송되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 不会为这个 1inch 合约签署交易，因此未发送任何内容。"
+          }
+        }
+      }
+    },
+    "DyorHQ only approves the 1inch router for the exact amount of a swap, so nothing was sent." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ solo aprueba el router de 1inch por la cantidad exacta de un intercambio, así que no se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ n'approuve le routeur 1inch que pour le montant exact d'un échange : rien n'a donc été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ는 스왑의 정확한 금액만큼만 1inch 라우터를 승인하므로 아무것도 전송되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 只按兑换的确切数量授权 1inch 路由器，因此未发送任何内容。"
           }
         }
       }
@@ -2763,6 +3155,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "DyorHQ 的服务器暂时没有响应（%@）。一分钟后重试。"
+          }
+        }
+      }
+    },
+    "Each xStocks (tokenized stocks) trade is limited to %@ in DyorHQ." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En DyorHQ, cada operación con xStocks (acciones tokenizadas) está limitada a %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dans DyorHQ, chaque transaction de xStocks (actions tokenisées) est limitée à %@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ에서 xStocks(토큰화 주식) 거래는 건당 %@로 제한됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 DyorHQ 中，每笔 xStocks（代币化股票）交易的上限为 %@。"
           }
         }
       }
@@ -3435,6 +3855,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无效的钱包签名。"
+          }
+        }
+      }
+    },
+    "Issuer RFQ via 1inch" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RFQ del emisor a través de 1inch"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RFQ de l'émetteur via 1inch"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch를 통한 발행사 RFQ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过 1inch 的发行方 RFQ"
           }
         }
       }
@@ -7234,6 +7682,34 @@
         }
       }
     },
+    "Selling xStocks (tokenized stocks) in DyorHQ isn't available right now. You can still send them." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vender xStocks (acciones tokenizadas) en DyorHQ no está disponible en este momento. Aún puedes enviarlos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La vente de xStocks (actions tokenisées) dans DyorHQ n'est pas disponible pour le moment. Vous pouvez toujours les envoyer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 DyorHQ에서 xStocks(토큰화 주식)를 판매할 수 없습니다. 전송은 계속 할 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前无法在 DyorHQ 中出售 xStocks（代币化股票）。你仍然可以发送它们。"
+          }
+        }
+      }
+    },
     "Sent — confirmation not seen yet. Check it before trying again." : {
       "localizations" : {
         "es" : {
@@ -7373,6 +7849,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "登录 DyorHQ 以继续。"
+          }
+        }
+      }
+    },
+    "Sign in to DyorHQ to trade xStocks (tokenized stocks)." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión en DyorHQ para operar con xStocks (acciones tokenizadas)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez-vous à DyorHQ pour négocier des xStocks (actions tokenisées)."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks(토큰화 주식)를 거래하려면 DyorHQ에 로그인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录 DyorHQ 以交易 xStocks（代币化股票）。"
           }
         }
       }
@@ -7809,6 +8313,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Supabase 请求失败（%@）。"
+          }
+        }
+      }
+    },
+    "Swap on 1inch" : {
+      "comment" : "A step of a transaction, named by what it does (a verb), as the list of steps shows it while they are signed and sent. The venue's name is never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intercambiar en 1inch"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échanger sur 1inch"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch에서 스왑"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 1inch 上兑换"
           }
         }
       }
@@ -9820,6 +10353,34 @@
         }
       }
     },
+    "The quote expired before the swap was signed, so the swap wasn't sent. Get a new quote and try again." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cotización caducó antes de firmar el intercambio, así que el intercambio no se envió. Obtén una nueva cotización y vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cotation a expiré avant la signature de l'échange : l'échange n'a donc pas été envoyé. Obtenez une nouvelle cotation et réessayez."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스왑에 서명하기 전에 견적이 만료되어 스왑이 전송되지 않았습니다. 새 견적을 받아 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报价在兑换签名前已过期，因此兑换未发送。获取新的报价后重试。"
+          }
+        }
+      }
+    },
     "The rest expired before it filled." : {
       "comment" : "The result of a Perps order the app sent, under 'Partly filled …' in the order sheet and the trade screen's status row: the unfilled rest ran out of time on Perpl.",
       "localizations" : {
@@ -10242,6 +10803,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "保险库不是 Mera 格式。"
+          }
+        }
+      }
+    },
+    "The wallet signed in to DyorHQ isn't this one. Sign in again with this wallet." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La billetera con la que iniciaste sesión en DyorHQ no es esta. Vuelve a iniciar sesión con esta billetera."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le portefeuille connecté à DyorHQ n'est pas celui-ci. Reconnectez-vous avec ce portefeuille."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ에 로그인된 지갑이 이 지갑이 아닙니다. 이 지갑으로 다시 로그인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录 DyorHQ 的钱包不是这个钱包。请用这个钱包重新登录。"
           }
         }
       }
@@ -11489,6 +12078,34 @@
         }
       }
     },
+    "This price is an estimate. Review the swap to get a firm quote." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este precio es una estimación. Revisa el intercambio para obtener una cotización firme."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce prix est une estimation. Vérifiez l'échange pour obtenir une cotation ferme."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 가격은 추정치입니다. 확정 견적을 받으려면 스왑을 검토하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此价格为估算值。请检查这笔兑换以获取确定报价。"
+          }
+        }
+      }
+    },
     "This quote was made for a different wallet. Refresh the quote." : {
       "localizations" : {
         "es" : {
@@ -11601,6 +12218,62 @@
         }
       }
     },
+    "This stock's market is closed right now. Try again when it opens." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El mercado de esta acción está cerrado en este momento. Vuelve a intentarlo cuando abra."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le marché de cette action est fermé pour le moment. Réessayez à son ouverture."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 이 주식의 시장이 닫혀 있습니다. 시장이 열리면 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这只股票的市场目前已休市。请在开市后重试。"
+          }
+        }
+      }
+    },
+    "This swap no longer matches what you reviewed, so nothing was sent for it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este intercambio ya no coincide con lo que revisaste, así que no se envió nada para él."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cet échange ne correspond plus à ce que vous avez vérifié : rien n'a donc été envoyé pour lui."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 스왑이 검토한 내용과 더 이상 일치하지 않아 이 스왑에 대해서는 아무것도 전송되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这笔兑换已与你确认的内容不符，因此未为它发送任何内容。"
+          }
+        }
+      }
+    },
     "This symbol looks like %@, a token DyorHQ already lists. Choose another symbol." : {
       "localizations" : {
         "es" : {
@@ -11653,6 +12326,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此符号看起来像 %@（一种被广泛交易的代币，而此币并不是它）。换一个符号。"
+          }
+        }
+      }
+    },
+    "This tokenized stock isn't supported in DyorHQ, so it can't be swapped here. You can still send it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta acción tokenizada no es compatible con DyorHQ, así que no se puede intercambiar aquí. Aún puedes enviarla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette action tokenisée n'est pas prise en charge dans DyorHQ : elle ne peut donc pas être échangée ici. Vous pouvez toujours l'envoyer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 토큰화 주식은 DyorHQ에서 지원되지 않아 여기서 스왑할 수 없습니다. 전송은 계속 할 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 不支持这种代币化股票，因此无法在这里兑换。你仍然可以发送它。"
           }
         }
       }
@@ -11713,6 +12414,34 @@
         }
       }
     },
+    "This xStock's reference price is out of date, so DyorHQ doesn't price or trade it right now. Try again later." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El precio de referencia de este xStock está desactualizado, así que DyorHQ no le pone precio ni lo opera en este momento. Vuelve a intentarlo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le prix de référence de ce xStock n'est plus à jour : DyorHQ ne l'évalue donc pas et ne le négocie pas pour le moment. Réessayez plus tard."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 xStock의 기준 가격이 오래되어 DyorHQ가 지금은 가격을 표시하거나 거래하지 않습니다. 나중에 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个 xStock 的参考价格已过时，因此 DyorHQ 目前不为它定价，也不交易它。请稍后重试。"
+          }
+        }
+      }
+    },
     "Token with no name" : {
       "localizations" : {
         "es" : {
@@ -11737,6 +12466,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无名称代币"
+          }
+        }
+      }
+    },
+    "Tokenized stock: not supported" : {
+      "comment" : "[tight] A warning badge on a tokenized stock (an xStock) DyorHQ knows but doesn't trade, such as a bridged copy.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acción tokenizada: no compatible"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Action tokenisée : non prise en charge"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "토큰화 주식: 지원되지 않음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代币化股票：不支持"
           }
         }
       }
@@ -11909,6 +12667,62 @@
         }
       }
     },
+    "Too many xStocks (tokenized stocks) quotes from this wallet. Try again in %@ min." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demasiadas cotizaciones de xStocks (acciones tokenizadas) desde esta billetera. Vuelve a intentarlo en %@ min."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trop de cotations de xStocks (actions tokenisées) pour ce portefeuille. Réessayez dans %@ min."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 지갑의 xStocks(토큰화 주식) 견적 요청이 너무 많습니다. %@분 후 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个钱包的 xStocks（代币化股票）报价请求过多。%@ 分钟后重试。"
+          }
+        }
+      }
+    },
+    "Too many xStocks (tokenized stocks) quotes from this wallet. Try again later." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demasiadas cotizaciones de xStocks (acciones tokenizadas) desde esta billetera. Vuelve a intentarlo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trop de cotations de xStocks (actions tokenisées) pour ce portefeuille. Réessayez plus tard."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 지갑의 xStocks(토큰화 주식) 견적 요청이 너무 많습니다. 나중에 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个钱包的 xStocks（代币化股票）报价请求过多。请稍后重试。"
+          }
+        }
+      }
+    },
     "Trade %@ on its Launch page" : {
       "localizations" : {
         "es" : {
@@ -11989,6 +12803,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "交易连接已关闭。"
+          }
+        }
+      }
+    },
+    "Trading xStocks (tokenized stocks) isn't available right now." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Operar con xStocks (acciones tokenizadas) no está disponible en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La négociation de xStocks (actions tokenisées) n'est pas disponible pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 xStocks(토큰화 주식)를 거래할 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前无法交易 xStocks（代币化股票）。"
           }
         }
       }
@@ -12768,6 +13610,35 @@
         }
       }
     },
+    "a 1inch transaction DyorHQ can’t read in full" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "una transacción de 1inch que DyorHQ no puede leer por completo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "une transaction 1inch que DyorHQ ne peut pas lire entièrement"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ가 전부 읽을 수 없는 1inch 트랜잭션"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 无法完整读取的 1inch 交易"
+          }
+        }
+      }
+    },
     "a buy on a retired launchpad, which only takes sells" : {
       "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”",
       "localizations" : {
@@ -12971,6 +13842,35 @@
         }
       }
     },
+    "a minimum received more than %@ below the amount shown" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.” The value is a percentage (1%), the most a stock trade may slip.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "un mínimo recibido más de un %@ por debajo de la cantidad mostrada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "un minimum reçu inférieur de plus de %@ au montant affiché"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "표시된 금액보다 %@ 넘게 낮은 최소 수령량"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "比显示数量低 %@ 以上的最少收到数量"
+          }
+        }
+      }
+    },
     "a position in a market" : {
       "comment" : "What Perpl sent that the app could not read, completing “Perpl sent <this> the app could not read.”",
       "localizations" : {
@@ -12996,6 +13896,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "某个市场中的仓位"
+          }
+        }
+      }
+    },
+    "a price too far from the stock’s reference price" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.” The reference price is the stock's independent on-chain price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "un precio demasiado alejado del precio de referencia de la acción"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "un prix trop éloigné du prix de référence de l'action"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "주식의 기준 가격과 너무 다른 가격"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与股票参考价格相差过大的价格"
           }
         }
       }
@@ -15182,6 +16111,35 @@
         }
       }
     },
+    "trading xStocks (tokenized stocks)" : {
+      "comment" : "Why a passkey prompt or a refusal appears, completing “Face ID required: <this>.” and “Blocked for your safety: <this>. This transaction wasn’t signed.”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "operar con xStocks (acciones tokenizadas)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "négocier des xStocks (actions tokenisées)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks(토큰화 주식) 거래"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交易 xStocks（代币化股票）"
+          }
+        }
+      }
+    },
     "vs %@ %@" : {
       "comment" : "A coin's 24h change measured in the asset it trades against: “vs MON 1.20%”. The values are the asset's symbol and the change.",
       "localizations" : {
@@ -15242,6 +16200,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "提取到其他地址"
+          }
+        }
+      }
+    },
+    "xStocks (tokenized stocks) can be swapped only against USDC in DyorHQ." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En DyorHQ, los xStocks (acciones tokenizadas) solo se pueden intercambiar por USDC."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dans DyorHQ, les xStocks (actions tokenisées) ne peuvent être échangés que contre de l'USDC."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ에서 xStocks(토큰화 주식)는 USDC와만 스왑할 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 DyorHQ 中，xStocks（代币化股票）只能与 USDC 兑换。"
           }
         }
       }
