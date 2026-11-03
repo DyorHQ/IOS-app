@@ -86,6 +86,11 @@ final class AppEnvironment {
     let language = LanguageStore()
     /// The minimum supported build: below it, "Update required" replaces the app.
     let updateGate = UpdateGate()
+    /// The owner's opt-in xStocks switch (`RemoteFlags.xStocks`), as the last check read it: off until a check reads JSON
+    /// `true`, restored from `XStocksSwitchStore` at launch. Set by `apply(_:)`, and handed to the swap engine in the
+    /// order read (`handXStocksFlag`), where it opens stock buys with the server's mode and the disclosure
+    /// (`XStocksAvailability`).
+    private(set) var xStocksFlag = XStocksSwitchStore.last
     /// Authenticated Perpl trading. A passkey account's trading key lives and dies with its session (`session.mera`).
     let perplTrading: PerplTrading
     /// The wallet's cross-section volume / fees / P&L model, shared by Home's Total Volume and the Portfolio page.
@@ -167,7 +172,12 @@ final class AppEnvironment {
         // graduate on Monday Trade). A pending live stack adds nothing, so nothing is read from address 0. What the route
         // search finds (each pair's pools, each coin's graduated pool) is kept a minute in the shared reads, so an amount
         // typed or a re-quote costs each venue one quote read; a settled transaction forgets it (`invalidateChainReads`).
-        swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments, cache: chainCache)
+        // xStocks (tokenized stocks) are quoted by 1inch through the oneinch-proxy Edge Function, which holds DyorHQ's
+        // 1inch key: the app never carries one. Its requests carry the signed-in wallet's own session, never another
+        // wallet's (`SupabaseClient.sessionHeaders(for:)`). A build without the stock venue never sends one
+        // (`OneInch.compiledIn`).
+        swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments, cache: chainCache,
+                          oneInchProxy: backend.functionURL("oneinch-proxy"), oneInchCredentials: { wallet in try await backend.sessionHeaders(for: wallet) })
         perpl = PerplService(rpc: rpc)
         // The launch list and the Moments lists are read once for every screen that asks within a few seconds, and what
         // never changes of a settled launch or Moment is read once and kept (`chainCache`, `chainStore`).
@@ -233,6 +243,9 @@ final class AppEnvironment {
         // Retired launchpads are sell-only (owner decision 2026-09-28): the wallet refuses a buy into a curve a retired
         // factory recorded, whatever the sheet declared or a Face ID approved.
         session.mera.retiredCurveLookup = { [launchpad] curves in await launchpad.retiredCurves(among: curves) }
+        // A 1inch stock swap is signed only at a price within the band of the stock's own reference feed, read when it is
+        // signed; a read that fails leaves none, and the wallet refuses the swap.
+        session.mera.xStockReferenceLookup = { [swap] stock in try? await swap.referencePrice(for: stock) }
         perplTrading = PerplTrading(mera: session.mera)
         // The chain's word on which positions are open, which the automatic TP/SL clean-up needs besides the stream's.
         // A position the account's bitmap holds but the read left out (a failed sub-read, a market not listed) throws:
@@ -269,6 +282,8 @@ final class AppEnvironment {
         updateGate.onFlags = { [weak self] flags in self?.apply(flags) }
         // The connections the first screens read over, opened before they ask.
         warmConnections()
+        // The xStocks switch as last read on this device, until the flags are read again.
+        handXStocksFlag(xStocksFlag)
     }
 
     /// When `warmConnections` last opened the connections.
@@ -295,6 +310,8 @@ final class AppEnvironment {
     @ObservationIgnored private var venueSwitch: Task<Void, Never>?
     /// The last history epoch handed to the store, so epochs apply in the order they were read.
     @ObservationIgnored private var epochSwitch: Task<Void, Never>?
+    /// The last xStocks switch handed to the swap engine, so the switch applies in the order it was read.
+    @ObservationIgnored private var xStocksSwitch: Task<Void, Never>?
 
     /// Applies the owner's remote switches (`RemoteFlags`, from `UpdateGate`'s read of `app_config` 'ios'): DyorHQ venue
     /// prices on the price service (off: priced like any token, as build 16 did), the DyorHQ labels on the coins model
@@ -303,14 +320,19 @@ final class AppEnvironment {
     /// server's history on the history model (off: the chain alone, as build 22 read it), each on unless the row says
     /// false. A Perps request already sent keeps the mode of its tap. The history epoch is applied to the store whatever
     /// the switch says: entries that took the server's history in under a lower one are read again from nothing, and the
-    /// rounds start over on the wallet when any was. The last values read of the two Perps switches (`PerpsSwitchStore`)
-    /// and of the server's two (`ServerHistoryDefaults`) are kept on the device for the next launch; nothing is written to
-    /// the backend, and the next check applies the row again.
+    /// rounds start over on the wallet when any was. The opt-in xStocks switch is kept as read (`xStocksFlag`, on only for
+    /// JSON true) and handed to the swap engine in order. The last values read of the two Perps switches
+    /// (`PerpsSwitchStore`), of the xStocks switch (`XStocksSwitchStore`) and of the server's two
+    /// (`ServerHistoryDefaults`) are kept on the device for the next launch; nothing is written to the backend, and the
+    /// next check applies the row again.
     func apply(_ flags: RemoteFlags) {
         dyorCoins.showsDyorBadges = flags.dyorBadges
         perplTrading.liveOutcomes = flags.perpsLiveOutcome
         perplTrading.apiActions = flags.perpsApiActions
         PerpsSwitchStore.save(flags)
+        xStocksFlag = flags.xStocks
+        XStocksSwitchStore.save(flags)
+        handXStocksFlag(flags.xStocks)
         let previous = venueSwitch
         venueSwitch = Task { [prices] in
             await previous?.value
@@ -324,6 +346,15 @@ final class AppEnvironment {
             let reset = await historyStore.apply(epoch: flags.historyEpoch)
             guard reset > 0, let self else { return }
             history.epochReset(env: self)
+        }
+    }
+
+    /// Hands the xStocks switch to the swap engine after any handed before it, so the last one read is the one it keeps.
+    private func handXStocksFlag(_ on: Bool) {
+        let previous = xStocksSwitch
+        xStocksSwitch = Task { [swap] in
+            await previous?.value
+            await swap.setXStocksFlag(on)
         }
     }
 

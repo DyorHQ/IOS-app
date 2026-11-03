@@ -204,7 +204,7 @@ extension Mera {
             guard let secret = perplSecret(keyNonce) else { throw SessionError.noUtilityOutput }
             let payload = try await auth.requestPayload(address: address.checksummed, publicKeyHex: try PerplAuth.publicKeyHex(secret: secret),
                                                         scopeMask: PerplScope.trade, label: label, now: now())
-            let signature = try account(now()).sign(hash32: payload.digest)
+            let signature = try account(now()).sign(hash32: payload.validated.digest)
             return try await auth.enroll(address: address.checksummed, secret: secret, payload: payload, walletSignature: signature.hexString, scopeMask: PerplScope.trade)
         }
 

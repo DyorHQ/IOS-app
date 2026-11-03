@@ -178,7 +178,7 @@ public enum WalletHoldings {
     /// cost doesn't grow with what a creator writes, and the answer for a symbol and name judged lately is kept
     /// (`Answers`), so a list drawn again judges nothing again.
     public static func imitated(by token: Token, majors: Bool = true) -> Token? {
-        guard !token.isNative, Token.core(token.address) == nil else { return nil }
+        guard !token.isNative, Token.curatedReference(token.address) == nil else { return nil }
         let question = Answers.Question(symbol: token.symbol, name: token.name, majors: majors)
         if let kept = answers.answer(question) { return kept }
         let found = judge(token, majors: majors)
@@ -269,9 +269,9 @@ public enum WalletHoldings {
         }
     }
 
-    /// The curated tokens, then the major ones.
+    /// The curated tokens and the curated xStocks (`Token.curatedReference`), then the major ones.
     private static let lookAlikeTargets: [LookAlikeTarget] = curatedTargets + majors.map { LookAlikeTarget($0.token, names: $0.names) }
-    private static let curatedTargets: [LookAlikeTarget] = Token.core.map { LookAlikeTarget($0, names: [$0.name]) }
+    private static let curatedTargets: [LookAlikeTarget] = Token.curatedReference.map { LookAlikeTarget($0, names: [$0.name]) }
 
     /// Each reading of a target, with the first target in `lookAlikeTargets` that reads so: the curated ones come
     /// first, so one below `curatedTargets.count` is curated. A token's readings are each looked up once here, not

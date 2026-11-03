@@ -234,6 +234,10 @@ final class MeraSession {
     /// Reads, on-chain, which of a plan's curves a retired launchpad recorded (`LaunchpadService.retiredCurves`), so a buy
     /// on one is refused (`Mera.SigningPolicy.refusal`). Without it every curve buy is refused as unverified.
     @ObservationIgnored var retiredCurveLookup: (@Sendable (Set<Address>) async -> Mera.SigningPolicy.RetiredCurves)?
+    /// Reads, on-chain, a curated xStock's reference price (`SwapEngine.referencePrice`), which a 1inch router swap must
+    /// be priced against before it is signed (`Mera.SigningPolicy.refusal`). Without it, or when the read fails, every
+    /// router swap is refused for its price.
+    @ObservationIgnored var xStockReferenceLookup: (@Sendable (Address) async -> XStockReference.Snapshot?)?
 
     /// The open session. Private: its keys never leave these types.
     private var live: Mera.SigningSession?
@@ -394,7 +398,10 @@ final class MeraSession {
         if let account = address {
             let call = Mera.SigningPolicy.Call(transaction)
             let retired = await retiredCurves(for: [call])
-            if let reason = Mera.SigningPolicy.refusal(call, intent: action.intent, account: account, retiredCurves: retired) { throw Failure.refused(reason) }
+            let price = await reference(for: [call])
+            if let reason = Mera.SigningPolicy.refusal(call, intent: action.intent, account: account, retiredCurves: retired, reference: price) {
+                throw Failure.refused(reason)
+            }
         }
         if let session = liveSession() {
             if action.approvedIn === session { return try session.sign(transaction) }
@@ -450,8 +457,11 @@ final class MeraSession {
         if let account = address {
             let calls = steps.compactMap { Mera.SigningPolicy.Call(step: $0, from: account, chainId: chainId) }
             let retired = await retiredCurves(for: calls)
+            let price = await reference(for: calls)
             for call in calls {
-                if let reason = Mera.SigningPolicy.refusal(call, intent: intent, account: account, retiredCurves: retired) { return .refused(reason.summary) }
+                if let reason = Mera.SigningPolicy.refusal(call, intent: intent, account: account, retiredCurves: retired, reference: price) {
+                    return .refused(reason.summary)
+                }
             }
         }
         guard let session = openSession else { return .faceID(Mera.SigningPolicy.Reason.locked.summary) }
@@ -667,6 +677,14 @@ final class MeraSession {
         guard !candidates.isEmpty else { return .none }
         guard let lookup = retiredCurveLookup else { return .unknown }
         return await lookup(candidates)
+    }
+
+    /// What `Mera.SigningPolicy.refusal` prices a 1inch router swap against: the reference price of the stock the first
+    /// router swap among `calls` trades (`referenceStock`), read on-chain. Nothing is read for a plan with no router swap;
+    /// with no lookup wired, or a read that fails, there is none, so the swap is refused for its price.
+    private func reference(for calls: [Mera.SigningPolicy.Call]) async -> XStockReference.Snapshot? {
+        guard let stock = Mera.SigningPolicy.referenceStock(calls), let lookup = xStockReferenceLookup else { return nil }
+        return await lookup(stock)
     }
 
     /// What the scope check needs from outside the calldata: this session's account and end, the configured contracts,

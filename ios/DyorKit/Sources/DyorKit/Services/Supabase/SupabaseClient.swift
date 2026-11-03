@@ -22,6 +22,8 @@ public enum SupabaseError: LocalizedError {
     case signInRejected(String)
     /// Too many attempts (429). `retryAfter` is the server's wait in seconds, when it sends one.
     case rateLimited(retryAfter: Int?)
+    /// The session is another wallet's than the one a request is for (`sessionHeaders(for:)`): nothing was sent.
+    case walletMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -38,6 +40,7 @@ public enum SupabaseError: LocalizedError {
         case .rateLimited(let retryAfter):
             guard let seconds = retryAfter, seconds > 0 else { return L10n.tr("Too many attempts. Please wait a few minutes and try again.") }
             return L10n.tr("Too many attempts. Try again in \(String(max(1, (seconds + 59) / 60))) min.")
+        case .walletMismatch: return L10n.tr("The wallet signed in to DyorHQ isn't this one. Sign in again with this wallet.")
         }
     }
 
@@ -109,6 +112,16 @@ public actor SupabaseClient {
     public func sessionHeaders() throws -> [String: String] {
         guard let token = currentSession?.accessToken else { throw SupabaseError.notSignedIn }
         return ["apikey": anonKey, "Authorization": "Bearer \(token)"]
+    }
+
+    /// `sessionHeaders()` for a request made on behalf of `wallet` (DyorHQ's 1inch proxy, which trades for the session's
+    /// wallet only): the session is read once, and throws `notSignedIn` without one and `walletMismatch` when it is
+    /// another wallet's (compared without regard to case), so a request is never sent for one wallet under another's
+    /// session.
+    public func sessionHeaders(for wallet: Address) throws -> [String: String] {
+        guard let session = currentSession else { throw SupabaseError.notSignedIn }
+        guard session.wallet.lowercased() == wallet.hex.lowercased() else { throw SupabaseError.walletMismatch }
+        return ["apikey": anonKey, "Authorization": "Bearer \(session.accessToken)"]
     }
 
     /// Reuse a stored session if it's still valid.

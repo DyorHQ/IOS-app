@@ -4,7 +4,8 @@ Developer docs kept here:
 
 - [`app-wiring.md`](app-wiring.md): what every screen of the iPhone app reads and writes, and which service, contract
   or API it goes through.
-- [`swap-spec.md`](swap-spec.md): spot trading across the Monad venues (Kuru Flow, Uniswap v3/v4, Monday Trade).
+- [`swap-spec.md`](swap-spec.md): spot trading across the Monad venues (Kuru Flow, Uniswap v3/v4, Monday Trade), and
+  xStocks (tokenized stocks) against USDC through 1inch, off in public builds.
 
 The module READMEs cover the rest: [`../ios/README.md`](../ios/README.md) (build, layout, Xcode Cloud, the release
 gate), [`../supabase/README.md`](../supabase/README.md) (schema, Edge Functions, tests) and
