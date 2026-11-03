@@ -1,11 +1,14 @@
-// The Edge Functions' side of edge_rate_gate (migration 27): per-subject, per-network and overall budgets for pin-media,
-// aurora-proxy, waitlist and wallet-auth's first sign-ins. The gate records an allowed call and answers {"ok": true},
-// or refuses with {"retryAfter": seconds, "limit": "subject" | "network" | "global"}. Anything else — the RPC failing
-// (including before migration 27 is applied), an unexpected answer — fails closed as a retryable 503, so an outage can
-// never turn into unlimited use.
+// The Edge Functions' side of edge_rate_gate (migration 27; migration 34 adds oneinch-proxy's two scopes): per-subject,
+// per-network and overall budgets for pin-media, aurora-proxy, oneinch-proxy, waitlist and wallet-auth's first
+// sign-ins. The gate records an allowed call and answers {"ok": true}, or refuses with {"retryAfter": seconds, "limit":
+// "subject" | "network" | "global"}. Anything else — the RPC failing (including before migration 27 is applied, or 34
+// for oneinch-proxy's scopes), an unexpected answer — fails closed as a retryable 503, so an outage can never turn into
+// unlimited use.
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
-export type RateScope = "pin-media" | "aurora" | "aurora-status" | "waitlist" | "wallet-auth";
+export type RateScope =
+  | "pin-media" | "aurora" | "aurora-status" | "waitlist" | "wallet-auth"
+  | "oneinch" | "oneinch-firm"; // migration 34: oneinch-proxy's status and quotes, and its firm swaps
 const LIMITS = new Set(["subject", "network", "global"]);
 
 // null when the call may proceed, else the Response to send (with `headers`, e.g. the function's CORS headers).

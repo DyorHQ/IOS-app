@@ -1,6 +1,7 @@
 // deno test --no-config --node-modules-dir=none -A supabase/functions/_shared/
 import { assertEquals } from "jsr:@std/assert@1";
-import { gateRefusal } from "./rate.ts";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { gateRefusal, rateGate } from "./rate.ts";
 
 const cors = { "Access-Control-Allow-Origin": "*" };
 
@@ -26,4 +27,18 @@ Deno.test("gateRefusal: an RPC error or an unexpected answer fails closed as a r
     assertEquals(res.status, 503, JSON.stringify(data));
     assertEquals((await res.json()).retryable, true);
   }
+});
+
+Deno.test("rateGate: passes the scope, subject and network to edge_rate_gate, oneinch-proxy's scopes included", async () => {
+  const calls: unknown[] = [];
+  const db = { rpc: (name: string, args: unknown) => { calls.push([name, args]); return Promise.resolve({ data: { ok: true }, error: null }); } };
+  for (const scope of ["oneinch", "oneinch-firm"] as const) {
+    assertEquals(await rateGate(db as unknown as SupabaseClient, scope, "0xabc", "203.0.113.9", cors), null);
+  }
+  assertEquals(calls, [
+    ["edge_rate_gate", { p_scope: "oneinch", p_subject: "0xabc", p_ip: "203.0.113.9" }],
+    ["edge_rate_gate", { p_scope: "oneinch-firm", p_subject: "0xabc", p_ip: "203.0.113.9" }],
+  ]);
+  const throwing = { rpc: () => { throw new Error("down"); } };
+  assertEquals((await rateGate(throwing as unknown as SupabaseClient, "oneinch-firm", "0xabc", null, cors))!.status, 503);
 });

@@ -3,8 +3,9 @@
 Backs the parts of DyorHQ that are not on chain: wallet sign-in sessions (`wallet-auth`), email-and-password
 accounts (`email-pepper`, `email-rebind`, `delete-account`), profiles, follows, feed, comments, leaderboards and
 referrals, price and push alerts with their devices, a launch-discovery index, activity and cross-device sync,
-Moment media pinning (`pin-media`), the bridge quote proxy (`aurora-proxy`) and a cache of the wallet history the app
-reads from the chain (`history-indexer`, migration 32: see "Wallet history cache" below). The core app stays
+Moment media pinning (`pin-media`), the bridge quote proxy (`aurora-proxy`), the xStocks quote proxy (`oneinch-proxy`,
+not deployed: see "xStocks quotes" below) and a cache of the wallet history the app reads from the chain
+(`history-indexer`, migration 32: see "Wallet history cache" below). The core app stays
 self-custodial and on-chain; **no private keys or the Perpl Ed25519 secret are ever stored here.**
 
 - **Project:** `DyorHQ` · ref `fmnjqrguvopusfufmirs` · region eu-west-1 · Postgres 17
@@ -24,8 +25,8 @@ publishable key; writes require the wallet's session.
 
 **Signing key:** `APP_JWT_SECRET`, the project's legacy **JWT Secret** (HS256), until the owner moves sessions to a
 dedicated ES256 key, `APP_JWT_SIGNING_JWK` (see "Session signing key" below), which then takes precedence. Either way
-PostgREST accepts the tokens. pin-media and aurora-proxy verify sessions in code with the same keys: `APP_JWT_SECRET`
-for HS256 and the project's JWKS for ES256.
+PostgREST accepts the tokens. pin-media, aurora-proxy and oneinch-proxy verify sessions in code with the same keys:
+`APP_JWT_SECRET` for HS256 and the project's JWKS for ES256.
 
 ## Schema (RLS on every table)
 
@@ -38,7 +39,7 @@ for HS256 and the project's JWKS for ES256.
 | App sync (mig. 11) | `activity` (every action: kind, section, USD size + fee, tx hash), `notifications` |
 | Sessions (mig. 14) | `sessions` (one row per sign-in — `signed_in_at`, `signed_out_at`) |
 | Journey (mig. 12–14) | `user_journey` (view — one row per user: handle, wallet, `joined_at`, sign-in/out times, per-domain spot/perps/launchpad/moments/bridge/deposits/withdrawals rollup; **internal analytics only**, not granted to anon/authenticated), `platform_journey()` (platform totals by domain) |
-| Hardening 2026-09-26 (mig. 24–29) | `app_config` (public, read-only: `ios.min_build`), `waitlist`, `upload_blocklist`, `storage_upload_events` (launch-media's overall budget), `edge_rate_events` / `edge_rate_salt` (owner-only rate ledger); triggers `dyorhq_storage_upload_gate` and `dyorhq_launch_media_write_once` on `storage.objects` |
+| Hardening 2026-09-26 (mig. 24–29) | `app_config` (public, read-only: `ios.min_build`), `waitlist`, `upload_blocklist`, `storage_upload_events` (launch-media's overall budget), `edge_rate_events` / `edge_rate_salt` (owner-only rate ledger; migration 34 adds oneinch-proxy's scopes); triggers `dyorhq_storage_upload_gate` and `dyorhq_launch_media_write_once` on `storage.objects` |
 | Wallet history cache (mig. 32) | `history_scans`, `history_wallets`, `history_wallet_scans`, `history_logs`, `history_subject_caps`, `history_indexer_state`, `history_indexer_runs` (no API role may read or write any of them; the app reads through `history_read()`); triggers `profiles_history_enrol` / `profiles_history_forget` on `profiles` |
 
 `activity.kind` ∈ swap, buy, sell, launch, perp, moment, **bridge**, **deposit**, **withdraw**, send; `activity.section`
@@ -51,7 +52,9 @@ SECURITY DEFINER functions the app calls on purpose, each granted explicitly by 
 
 `migrations/` holds the migrations applied to the live project: 01–28 (23–28 are the 2026-09-26 hardening) and 32
 (`wallet_history`, applied 2026-10-09). 29 (`waitlist`) is written but not applied, and its Edge Function is not
-deployed, because the website keeps its own signups. `migrations-deferred/` holds two that must wait for an app build
+deployed, because the website keeps its own signups. 34 (`oneinch_rate_scopes`, oneinch-proxy's rate scopes) is
+written but not applied. It replaces 27's `edge_rate_gate` with a copy that adds two scopes, so re-running 27 requires
+re-running 34 immediately after (34's header explains why). `migrations-deferred/` holds two that must wait for an app build
 AND for every older build to be expired in App Store Connect / TestFlight (each header says which build; each refuses
 to run until armed): `30_activity_primary_key_wallet_id.sql` (the build that upserts activity with
 `on_conflict=wallet,id`) and `31_launch_media_strict_write_once.sql` (the build that uploads launch-media with
@@ -88,13 +91,14 @@ version that ran.
 | `delete-account` | false | a Privy token (≤ 1 h old unless `DELETE_ACCOUNT_TOKEN_MAX_AGE_S` tightens it), or the wallet session with `{"method":"email-password"}` | per Privy user / wallet |
 | `pin-media` | true | a wallet session, verified in code too | `edge_rate_gate` per wallet, network and overall; 20 s budget |
 | `aurora-proxy` | true | a wallet session, verified in code too; quotes only to and from that wallet | `edge_rate_gate` per wallet and network |
+| `oneinch-proxy` (not deployed) | true | a wallet session, verified in code too; a curated xStock against USDC only, from, origin and receiver forced to that wallet | `edge_rate_gate` per wallet, network (IPv6 /48) and overall; firm swaps 10 per wallet per day; $250 per trade |
 | `waitlist` (not deployed) | false | nothing (CORS: dyorhq.fun, www.dyorhq.fun; honeypot) | `edge_rate_gate` per network (IPv6 /48) and overall |
 | `history-indexer` | false | the `x-history-cron` header equal to the Vault secret `history_cron_secret` (its SHA-256 compared in constant time with `history_cron_digest()`, fetched at most once a minute per isolate; or the optional `HISTORY_CRON_SECRET`); called only by pg_cron → pg_net | one run at a time (a database lease); ≤ 240 s per run and ≤ 1,000 ms of estimated CPU per isolate (half the platform's 2,000 ms); per RPC endpoint ≤ 4 requests/s (`rpc2` 2 at launch); a header never reaches the database, so callers without it cost no query |
 
 Secrets (names only): `APP_JWT_SECRET` or `APP_JWT_SIGNING_JWK` (wallet-auth; pin-media and aurora-proxy read
 `APP_JWT_SECRET` to verify HS256 sessions — secrets are project-wide), `PRIVY_APP_SECRET` (+ optional `PRIVY_APP_ID`),
 `PINATA_JWT` (+ optional `PINATA_GATEWAY`), `AURORA_API_KEY` (+ optional `AURORA_FEE_RECIPIENT`, `AURORA_FEE_BPS`),
-history-indexer's, all optional: `ALCHEMY_MONAD_RPC` (a keyed Alchemy Monad URL: adds the endpoint `alchemy`),
+`ONEINCH_API_KEY` (oneinch-proxy), history-indexer's, all optional: `ALCHEMY_MONAD_RPC` (a keyed Alchemy Monad URL: adds the endpoint `alchemy`),
 `MONAD_LOGS_ENDPOINTS` (JSON tuning the endpoints), `HISTORY_CRON_SECRET` (a second accepted header value). Vault (read
 by migration 33's cron job, created by 33 when missing): `history_cron_secret` (generated inside Postgres; nobody holds
 it), `history_indexer_url`, and optional `history_indexer_region` (created by hand).
@@ -102,11 +106,44 @@ it), `history_indexer_url`, and optional `history_indexer_region` (created by ha
 
 Switches (unset = the behaviour the builds in use need; each header says when to flip it):
 `WALLET_AUTH_LEGACY_SIGNIN=off`, `WALLET_AUTH_SESSION_S`, `REBIND_REQUIRE_REPLACE=on`,
-`DELETE_ACCOUNT_TOKEN_MAX_AGE_S=900`. "Once build N is out" always means: build N has shipped AND every older build
+`DELETE_ACCOUNT_TOKEN_MAX_AGE_S=900`; oneinch-proxy's `ONEINCH_MODE`, `ONEINCH_WALLETS`, `ONEINCH_DENY` and
+`ONEINCH_DENY_ALL` (see "xStocks quotes": unset is off). "Once build N is out" always means: build N has shipped AND every older build
 is expired in App Store Connect / TestFlight, or is below `app_config` `min_build` (see below).
 
 Owner procedures (the deploy order of the hardening changes, takedowns in the public buckets, the session signing
 key rotation) are in DyorHQ/internal (private): `ios-app/supabase/owner-procedures.md`.
+
+## xStocks quotes
+
+`oneinch-proxy` (`functions/oneinch-proxy/`) is the app's only route to the 1inch Swap API, which DyorHQ uses for one
+kind of trade: a curated xStock (tokenized stock) against USDC on Monad, either way. It holds the key
+(`ONEINCH_API_KEY`), so the key never ships in the app. Its routes are `status` (the serving mode for the session's
+wallet), `quote` (an indicative price, cached 5 s per isolate) and `swap` (a firm, issuer-signed quote, never cached).
+Its header lists every check in order; `request.ts` holds the rules and `request_test.ts` covers them.
+
+Switches, read on every request (names only; the procedures are in DyorHQ/internal):
+
+| Name | Effect |
+|---|---|
+| `ONEINCH_MODE` | `on` serves buys and sells, `sell-only` serves sells only; unset, `off` or any other value serves nothing |
+| `ONEINCH_WALLETS` | when set (comma-separated addresses), only these wallets are served; they skip the flag below |
+| `ONEINCH_DENY` | tickers or addresses that may not be bought |
+| `ONEINCH_DENY_ALL` | tickers or addresses that may not be traded at all |
+| `app_config` `ios` → `flags.xStocks` | buys by a wallet not on `ONEINCH_WALLETS` need JSON `true`; sells never need it |
+
+**Curated list.** `functions/_shared/xstocks.json`, the one place the list is edited (`xstocks.ts` is generated from it
+by `gen_xstocks.ts`; `_shared/xstocks_test.ts` fails when they differ, or when USDC differs from the app's
+`Monad.usdc`). Its shape, exactly (no other keys; addresses lowercase and unique, symbols unique):
+
+    {"version": 1, "chainId": 143, "usdc": "0x754704bc059f8c67012fed69bc8a327a5aafb603",
+     "curated": [{"symbol": "<ticker>", "address": "<lowercase address>"}]}
+
+`curated` is empty: no xStock is listed until its address and an on-chain reference price feed are verified, so the
+proxy offers no pair yet. It must name the same tokens as the app's `XStocks.curated`
+(`ios/DyorKit/Sources/DyorKit/Chain/Monad.swift`).
+
+**Deploy order.** Migration 34, after 27; then the secrets, with `ONEINCH_MODE` unset (off); then
+`supabase functions deploy oneinch-proxy` (never `config push`). Without 34 every call fails closed (503).
 
 ## Wallet history cache
 
