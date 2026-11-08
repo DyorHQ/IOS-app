@@ -5,10 +5,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FIXTURE, cases, fixture } from "../scripts/research/xstocks/make-parity-fixture.mjs";
-import { decodeFunctionData } from "viem";
+import { decodeFunctionData, encodeFunctionData } from "viem";
 import {
-  ONEINCH, SWAP_ABI, addressFromSlot, amountField, checkFirmAnswer, codeHash, decodeSwap, maskAddress, minAfterSlippage, printable, redact,
-  slippagePercent, swapMatches, swapProblem,
+  LOP_ABI, ONEINCH, SWAP_ABI, addressFromSlot, amountField, checkFirmAnswer, codeHash, decodeSwap, findOrderFills, makerTraits, maskAddress,
+  minAfterSlippage, printable, redact, slippagePercent, swapMatches, swapProblem,
 } from "../scripts/research/xstocks/lib.mjs";
 
 test("the slipped offset really is readable, so only the canonical re-encoding refuses it", () => {
@@ -148,4 +148,37 @@ test("code hashes and EIP-1967 slots", () => {
   assert.match(codeHash("0x6000"), /^0x[0-9a-f]{64}$/);
   assert.equal(addressFromSlot(`0x${"0".repeat(64)}`), null);
   assert.equal(addressFromSlot(`0x${"0".repeat(24)}111111125421ca6dc452d289314280a0f8842a65`), "0x111111125421cA6dc452d289314280a0f8842A65");
+});
+
+test("maker traits read as LOP v4 lays them out", () => {
+  const traits = (1n << 255n) | (1n << 251n) | (1n << 249n) | (7n << 160n) | (42n << 120n) | (1_700_000_000n << 80n) | 0xabcdn;
+  assert.deepEqual(makerTraits(traits), {
+    noPartialFills: true, allowMultipleFills: false, preInteraction: false, postInteraction: true, needEpochCheck: false, hasExtension: true,
+    usePermit2: false, unwrapWeth: false, series: 7n, nonceOrEpoch: 42n, expiration: 1_700_000_000n, allowedSenderLow80: "0x0000000000000000abcd",
+  });
+  assert.equal(makerTraits(0n).allowedSenderLow80, null);
+});
+
+test("an order fill is found inside a resolver's own calldata", () => {
+  const word = (address) => BigInt(address);
+  const order = {
+    salt: 5n, maker: word("0x00000000000000000000000000000000000c0001"), receiver: 0n, makerAsset: word("0x00000000000000000000000000000000000a0002"),
+    takerAsset: word("0x00000000000000000000000000000000000a0001"), makingAmount: 50_000_000n, takingAmount: 165_000_000_000_000_000n,
+    makerTraits: (1n << 249n) | (1n << 251n),
+  };
+  const inner = encodeFunctionData({ abi: LOP_ABI, functionName: "fillOrderArgs", args: [order, `0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`, 50_000_000n, 0n, "0xbeef"] });
+  // A made-up outer call: a selector, one word, then the router's calldata.
+  const outer = `0x76299cce${"00".repeat(31)}01${inner.slice(2)}`;
+  const [found, ...more] = findOrderFills(outer);
+  assert.equal(more.length, 0);
+  assert.equal(found.entry, "fillOrderArgs");
+  assert.equal(found.offset, 36);
+  assert.equal(found.order.maker, "0x00000000000000000000000000000000000C0001");
+  assert.equal(found.order.receiver, null);
+  assert.equal(found.order.makerAsset, "0x00000000000000000000000000000000000A0002");
+  assert.equal(found.order.makingAmount, 50_000_000n);
+  assert.equal(found.amount, 50_000_000n);
+  assert.equal(found.order.makerTraits.hasExtension, true);
+  assert.deepEqual(findOrderFills("0x76299cce"), []);
+  assert.deepEqual(findOrderFills("nonsense"), []);
 });
