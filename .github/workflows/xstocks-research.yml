@@ -1,6 +1,7 @@
 # xStocks research (read-only): runs scripts/research/xstocks/research.mjs where Monad's RPCs and Ethereum are reachable,
 # to close the research gates the 1inch venue waits on (docs/swap-spec.md, "xStocks through 1inch"). It reads public
-# chain data only: no secret, no key, no transaction, nothing written anywhere but this job's log. It runs only on
+# chain data, Sourcify and public signature databases only: no secret, no key, no transaction, nothing written anywhere
+# but this job's log. It runs only on
 # pushes to research/xstocks-* branches, never on main or a pull request.
 name: xstocks-research
 
@@ -31,36 +32,51 @@ jobs:
         continue-on-error: true
         run: node scripts/research/xstocks/research.mjs router
 
-      - name: "R4: tokens moved through the router in about the last month"
+      - name: "R3a: is each contract's source verified? (Sourcify, keyless)"
         continue-on-error: true
         run: |
-          node scripts/research/xstocks/research.mjs discover --monad-rpc https://rpc2.monad.xyz --span 10000 --blocks 6000000 | tee discover.txt
+          for pair in 143:0x111111125421cA6dc452d289314280a0f8842A65 1:0x111111125421cA6dc452d289314280a0f8842A65 \
+                      143:0x41Dee1855293e4450CD67459047f372d4d818143 143:0x788D911ae7c95121A89A0f0306db65D87422E1de \
+                      143:0x90A2a4c76b5D8c0bc892A69EA28Aa775a8f2dD48 143:0x65c40D624Af3B18C109fBF87B7DEff34CdC5f19b; do
+            echo "== chain ${pair%%:*} ${pair#*:}"
+            curl -sS --max-time 20 "https://sourcify.dev/server/v2/contract/${pair%%:*}/${pair#*:}?fields=compilation" \
+              | jq -c '{match, creationMatch, runtimeMatch, compiler: .compilation.compilerVersion, name: .compilation.fullyQualifiedName, error: .message}' || true
+          done
 
-      - name: "R1/R3b: every log the router emitted, and the tokens moved in those transactions"
+      - name: "R1: the resolver's entry point by its selector (public signature databases, keyless)"
         continue-on-error: true
         run: |
-          node scripts/research/xstocks/research.mjs fills --monad-rpc https://rpc2.monad.xyz --span 10000 --blocks 8000000 --txs 300 | tee fills.txt
+          for url in "https://api.4byte.sourcify.dev/signature-database/v1/lookup?function=0x76299cce" \
+                     "https://api.openchain.xyz/signature-database/v1/lookup?function=0x76299cce"; do
+            echo "== $url"
+            curl -sS --max-time 20 "$url" | jq -c '.result.function // .' || true
+          done
 
-      - name: "R4/R15: the candidates' details"
+      - name: "R1/R3b: xStock fills taken apart (who is the maker: the user or a market maker?)"
         continue-on-error: true
         run: |
-          cat discover.txt fills.txt 2>/dev/null | grep '^CANDIDATE' | awk '{print $2}' | sort -u | head -40 > candidates.txt || true
-          if [ -s candidates.txt ]; then
-            node scripts/research/xstocks/research.mjs token $(cat candidates.txt)
-          else
-            echo "no candidates"
-          fi
+          node scripts/research/xstocks/research.mjs fill --monad-rpc https://rpc2.monad.xyz \
+            0x0d8f3b1814e4daa1a1d3b2d98ec9debb65771fca66c5b727112eb606144bb548 \
+            0xc7f58e2a72a13447a876ae1a38d8d051fce25fb2e67fd5b47b460fb89c97e574 \
+            0x6e551a89a4ab5534112df12290fde799c1670b125d39d318ee08353482f18f2a \
+            0x702b257cc13aa2ba3169885086c1b7e5256f6453b2694c3ac7b941592dec79a5 \
+            0x0a5b1e1623d0c921080faaa77c36b2738d48c84f8bccb76534db95dd36d3c001 \
+            0xd0579fb0f98cf0bd4a144780efd5ddd003ebfcbdc7f2c265a8aa82be3a30c813
 
-      - name: "R3b: the candidates' newest router transactions, decoded as the app decodes them"
+      - name: "R1: a non-xStock router fill, for comparison"
         continue-on-error: true
         run: |
-          cat discover.txt fills.txt 2>/dev/null | grep '^CANDIDATE' | grep -o 'newest tx 0x[0-9a-fA-F]\{64\}' | awk '{print $3}' | sort -u | head -20 > txs.txt || true
-          if [ -s txs.txt ]; then
-            node scripts/research/xstocks/research.mjs tx $(cat txs.txt)
-          else
-            echo "no transactions"
-          fi
+          node scripts/research/xstocks/research.mjs fill --monad-rpc https://rpc2.monad.xyz \
+            0x758936edd7c257a14ec3594904ed6907dbab644cc6cbb0303c88e86df11aa339
 
-      - name: "R4/R15: does SPYx's Ethereum address hold the same token on Monad?"
+      - name: "R4/R15: every xStock seen, read at a gentler pace"
         continue-on-error: true
-        run: node scripts/research/xstocks/research.mjs token 0x90A2a4c76b5D8c0bc892A69EA28Aa775a8f2dD48
+        run: |
+          node scripts/research/xstocks/research.mjs token --monad-rpc https://rpc2.monad.xyz \
+            0x9d275685dC284C8eB1C79f6ABA7a63Dc75ec890a 0x8aD3c73F833d3F9A523aB01476625F269aEB7Cf0 0xc845b2894dBddd03858fd2D643B4eF725fE0849d \
+            0x19c41EA77b34BbDEe61c3A87A75D1ABDA2ED0be4 0x5621737f42dAE558b81269FcB9E9E70c19Aa6b35 0xe92f673Ca36C5E2Efd2DE7628f815f84807e803F \
+            0x96702be57Cd9777f835117a809C7124fe4ec989A 0xbEe6b69345F376598Fe16AbD5592c6F844825E66 0x51eD5b74A05F256DbD9Ebb4e4f68Bb41ba10160b \
+            0xD9FC3E075d45254a1D834fEa18AF8041207DeA0A 0xfEbDEd1B0986a8ee107f5AB1a1c5a813491DeCEB 0x364f210f430eC2448Fc68A49203040F6124096F0 \
+            0xAE2f842EF90C0d5213259Ab82639D5BBF649b08E 0x299c95Eb52BFd5Bc98d924bCE17197b64864589B 0xa753A7395cAe905Cd615Da0B82A53E0560f250af \
+            0x90A2a4c76b5D8c0bc892A69EA28Aa775a8f2dD48 0x7Be01610F060b6a29D2D3c2ba94aa754df56EC5d 0x8D512a03600981B8e86556fd5C0FbDd726Fe1821 \
+            0x3522513E5F146a2006e2901b05f16B2821485E19 0x450D36A2B13DF58f3ac374A4002dbcc177C99718 0xc6DE37a240cf198e0E0EC6c997faFDBbDCD40460
