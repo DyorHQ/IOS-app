@@ -31,15 +31,20 @@ jobs:
         continue-on-error: true
         run: node scripts/research/xstocks/research.mjs router
 
-      - name: "R4: tokens moved through the router in about the last two weeks"
+      - name: "R4: tokens moved through the router in about the last month"
         continue-on-error: true
         run: |
-          node scripts/research/xstocks/research.mjs discover --monad-rpc https://rpc2.monad.xyz --span 10000 --blocks 3000000 | tee discover.txt
+          node scripts/research/xstocks/research.mjs discover --monad-rpc https://rpc2.monad.xyz --span 10000 --blocks 6000000 | tee discover.txt
+
+      - name: "R1/R3b: every log the router emitted, and the tokens moved in those transactions"
+        continue-on-error: true
+        run: |
+          node scripts/research/xstocks/research.mjs fills --monad-rpc https://rpc2.monad.xyz --span 10000 --blocks 8000000 --txs 300 | tee fills.txt
 
       - name: "R4/R15: the candidates' details"
         continue-on-error: true
         run: |
-          grep '^CANDIDATE' discover.txt | awk '{print $2}' | head -40 > candidates.txt || true
+          cat discover.txt fills.txt 2>/dev/null | grep '^CANDIDATE' | awk '{print $2}' | sort -u | head -40 > candidates.txt || true
           if [ -s candidates.txt ]; then
             node scripts/research/xstocks/research.mjs token $(cat candidates.txt)
           else
@@ -49,9 +54,13 @@ jobs:
       - name: "R3b: the candidates' newest router transactions, decoded as the app decodes them"
         continue-on-error: true
         run: |
-          grep '^CANDIDATE' discover.txt | grep -o 'newest tx 0x[0-9a-fA-F]\{64\}' | awk '{print $3}' | sort -u | head -20 > txs.txt || true
+          cat discover.txt fills.txt 2>/dev/null | grep '^CANDIDATE' | grep -o 'newest tx 0x[0-9a-fA-F]\{64\}' | awk '{print $3}' | sort -u | head -20 > txs.txt || true
           if [ -s txs.txt ]; then
             node scripts/research/xstocks/research.mjs tx $(cat txs.txt)
           else
             echo "no transactions"
           fi
+
+      - name: "R4/R15: does SPYx's Ethereum address hold the same token on Monad?"
+        continue-on-error: true
+        run: node scripts/research/xstocks/research.mjs token 0x90A2a4c76b5D8c0bc892A69EA28Aa775a8f2dD48
