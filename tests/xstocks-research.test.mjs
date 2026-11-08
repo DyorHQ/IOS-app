@@ -7,8 +7,8 @@ import { readFileSync } from "node:fs";
 import { FIXTURE, cases, fixture } from "../scripts/research/xstocks/make-parity-fixture.mjs";
 import { decodeFunctionData } from "viem";
 import {
-  ONEINCH, SWAP_ABI, addressFromSlot, amountField, checkFirmAnswer, codeHash, decodeSwap, minAfterSlippage, printable, redact, slippagePercent,
-  swapMatches, swapProblem,
+  ONEINCH, SWAP_ABI, addressFromSlot, amountField, checkFirmAnswer, codeHash, decodeSwap, maskAddress, minAfterSlippage, printable, redact,
+  slippagePercent, swapMatches, swapProblem,
 } from "../scripts/research/xstocks/lib.mjs";
 
 test("the slipped offset really is readable, so only the canonical re-encoding refuses it", () => {
@@ -126,6 +126,20 @@ test("the 1inch key never survives redaction, plain or URL-encoded", () => {
   assert.equal(out.includes(encodeURIComponent(key)), false);
   assert.equal(redact("short ab", ["ab"]), "short ab", "a secret too short to be a key is not a redaction target");
   assert.equal(redact("nothing", [undefined, ""]), "nothing");
+});
+
+test("masking an immutable address compares two deployments of the same code", () => {
+  const weth = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
+  const wmon = "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A";
+  const body = (address) => `0x6080604052${address.slice(2).toLowerCase()}5b${address.slice(2)}00`;
+  const eth = maskAddress(body(weth), weth);
+  const mon = maskAddress(body(wmon), wmon);
+  assert.equal(eth.count, 2);
+  assert.equal(mon.count, 2);
+  assert.equal(eth.code, mon.code);
+  // An occurrence that doesn't start on a byte boundary isn't the address.
+  assert.equal(maskAddress(`0x0${weth.slice(2)}0`, weth).count, 0);
+  assert.notEqual(maskAddress(body(weth), wmon).code, mon.code);
 });
 
 test("code hashes and EIP-1967 slots", () => {
