@@ -77,6 +77,9 @@ public struct PricePoint: Hashable, Sendable, Identifiable {
 /// off, is priced from the deepest pool found for it. Times come from the
 /// session's measured block pace (`BlockClock`): the day-ago block is the one mined 24 hours before the latest, and a
 /// chart's span and labels are true times.
+///
+/// A known xStock (tokenized stock, `XStocks`) is never priced from a pool, whatever pool anyone plants for it: a curated
+/// one only from its own reference feed (`XStockReference`), with no 24h change and no chart, and any other none.
 public actor PriceService {
     enum Source: Hashable, Sendable {
         case v4(poolId: Data)
@@ -157,6 +160,9 @@ public actor PriceService {
     /// up waits for that lookup rather than start its own, so two screens pricing the same tokens at once look them up
     /// once, and a discovery waits for no lookup of tokens it doesn't need.
     private var lookingUp: [Address: (id: UUID, task: Task<Void, Error>)] = [:]
+    /// The xStocks known to the price finder (`XStocks.shipped`, or a test's fixture), and their reference prices.
+    private var xStocks = XStocks.shipped
+    private var stockReference: XStockReference
 
     /// `registry` (DyorHQ's coins) reads the launchpads and cohorts it was made with; without one, `launchpads` and
     /// `cohorts`. `dyorVenues` prices DyorHQ coins on their own venues from the start, and is off unless asked for: on,
@@ -179,6 +185,14 @@ public actor PriceService {
         self.now = now
         self.cache = cache
         self.store = store
+        stockReference = XStockReference(multicall: Multicall(rpc: rpc))
+    }
+
+    /// `stocks` as the xStocks registry, its feeds read with `read` (else through this service's RPC): a test's fixtures.
+    func useXStocks(_ stocks: XStocks.Registry, read: XStockReference.Reader? = nil) {
+        let multicall = multicall
+        xStocks = stocks
+        stockReference = XStockReference(stocks: stocks, read: read ?? { try await multicall.read($0) })
     }
 
     /// Whether DyorHQ coins are priced on their own venues or like any other token, as before (the default, `init`'s
@@ -231,8 +245,34 @@ public actor PriceService {
         return map
     }
 
-    /// `prices(for:)` read now.
+    /// `prices(for:)` read now: the known xStocks apart (`stockPrices`), every other token from its pool or venue.
     private func readPrices(for tokens: [Token]) async throws -> [Address: PriceInfo] {
+        let stocks = tokens.filter { xStocks.isKnown($0.address) }
+        guard stocks.isEmpty else {
+            let others = tokens.filter { !xStocks.isKnown($0.address) }
+            var map = others.isEmpty ? [:] : try await readPoolPrices(for: others)
+            map.merge(await stockPrices(stocks)) { _, stock in stock }
+            return map
+        }
+        return try await readPoolPrices(for: tokens)
+    }
+
+    /// Each curated xStock among `stocks` priced from its own reference feed (`XStockReference`), as one read: no 24h
+    /// change, and the source `XStockReference.sourceLabel`. A stock whose feed gives no price (stale, unreadable, not
+    /// the reviewed one) has none, and so does every known xStock the app doesn't trade.
+    private func stockPrices(_ stocks: [Token]) async -> [Address: PriceInfo] {
+        let curated = stocks.filter { xStocks.curatedToken($0.address) != nil }.map(\.address)
+        guard !curated.isEmpty, let read = try? await stockReference.snapshots(for: curated) else { return [:] }
+        var map: [Address: PriceInfo] = [:]
+        for (stock, result) in read {
+            guard case .success(let snapshot) = result, snapshot.usd.isFinite, snapshot.usd > 0 else { continue }
+            map[stock] = PriceInfo(usd: snapshot.usd, change24h: nil, source: XStockReference.sourceLabel)
+        }
+        return map
+    }
+
+    /// `prices(for:)` read now from each token's pool or venue: never for a known xStock (`readPrices`).
+    private func readPoolPrices(for tokens: [Token]) async throws -> [Address: PriceInfo] {
         try await discover(tokens)
         let sources = await withConversions(resolve(tokens))
         let dayAgo = try await dayAgoBlock()
@@ -308,7 +348,8 @@ public actor PriceService {
     /// launch that graduated inside the span on its curve before then, a Moment from when it graduated. Samples the node
     /// cannot serve are dropped, so fewer than `points` may come back.
     public func history(for token: Token, points: Int = 48, span: TimeInterval = 86_400) async throws -> [PricePoint] {
-        guard points > 0 else { return [] }
+        // A known xStock has no pool price to sample (`readPrices`).
+        guard points > 0, !xStocks.isKnown(token.address) else { return [] }
         let head = try await clock.head.latest()
         let latest = head.number
         let secondsPerBlock = await clock.secondsPerBlock()

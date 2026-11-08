@@ -53,6 +53,141 @@ public enum MondayTrade {
     public static let feeTiers = [100, 300, 500, 3000, 10000]
 }
 
+/// 1inch on Monad: the one router the app could ever send a 1inch swap to, and the two other 1inch contracts it never
+/// talks to. Nothing in this build quotes or builds a 1inch swap: `compiledIn` is false, so `ThirdPartyCalldataGuard`
+/// refuses every call to the router on every signer, and the passkey policy refuses it too.
+public enum OneInch {
+    /// AggregationRouterV6. UNVERIFIED (research R3a): taken from Monad's protocol directory
+    /// (github.com/monad-crypto/protocols, mainnet/1inch.jsonc); its code hash on Monad has not been compared with the
+    /// router deployed on Ethereum yet.
+    public static let router = Address(literal: "0x111111125421cA6dc452d289314280a0f8842A65")
+    /// Aqua. UNVERIFIED (research R3a), same source. The app never calls it or approves it: refused outright.
+    public static let aqua = Address(literal: "0x1111113CCf1426A8E30e2bfF5E005d929bF6a90a")
+    /// SwapVMRouter. UNVERIFIED (research R3a), same source. The app never calls it or approves it: refused outright.
+    public static let swapVMRouter = Address(literal: "0x111111338c5091E8440b67B168bAe16a668AC0De")
+    /// The 1inch contracts no transaction of the app may call or name as a spender.
+    public static let refusedContracts: Set<Address> = [aqua, swapVMRouter]
+
+    /// Whether this build may send a 1inch swap at all. False in every public build until the venue is released; a
+    /// DEBUG build run with `-oneInchCompiledIn YES` turns it on for internal testing. It is read once, from the build
+    /// and its launch arguments only: no remote switch can change it.
+    public static let compiledIn: Bool = {
+        #if DEBUG
+        // not localized: a launch argument's name
+        return UserDefaults.standard.object(forKey: "oneInchCompiledIn") != nil && UserDefaults.standard.bool(forKey: "oneInchCompiledIn")
+        #else
+        return false
+        #endif
+    }()
+
+    /// How long a firm quote stays fillable, counted on the device from the moment its request is sent. UNVERIFIED
+    /// (research R5): xChange's RFQ window on Monad has not been measured; 20 s is a cautious guess.
+    public static let firmWindow: Duration = .seconds(20)
+    /// A plan whose quote has less than this left is not started at all. UNVERIFIED (research R5).
+    public static let startMargin: Duration = .seconds(5)
+    /// The swap is not signed with less than this left: it covers signing and the broadcast. UNVERIFIED (research R5, R9).
+    public static let signMargin: Duration = .seconds(3)
+    /// The most slippage a stock trade may take, in basis points (1%): the passkey policy refuses a lower minimum.
+    public static let stockSlippageCapBps = 100
+    /// How far a stock quote's price may be from the stock's own reference price (`XStockReference`), either way, in
+    /// basis points (3%): a quote further off, better or worse, is refused (`XStockPriceBand`).
+    public static let priceBandBps = 300
+    /// A firm price further than this from the reference, in basis points (1%), is still traded but shown as changed.
+    public static let priceWarningBps = 100
+    /// A firm quote that gives more than this less than the estimate shown before Review, in basis points (0.5%), is
+    /// shown as changed on the review sheet.
+    public static let priceChangedBps = 50
+    /// The most one stock trade may be worth, in USDC base units (6 decimals): $250. On what a buy pays and on what a
+    /// sell receives; the proxy holds the same cap.
+    public static let tradeCapUSDC = BigUInt(250_000_000)
+}
+
+/// Tokenized stocks (xStocks) on Monad. Every list is EMPTY in this build: no issuer address, decimals or reference feed
+/// has been verified yet (research R4, R6, R11), so no token is known as an xStock and nothing here changes what the app
+/// does. Detection is by these lists only: no implementation-hash check is built (research R15), so a copy deployed
+/// somewhere the lists don't name is an ordinary token to the app.
+///
+/// The app reads the one registry it ships (`shipped`). A registry can be made only inside DyorKit (`Registry.init` is
+/// internal), so tests build fixture registries with test-only addresses and hand them to `SwapEngine` and
+/// `PriceService`, and no fixture address ever ships.
+public enum XStocks {
+    /// A curated xStock's independent on-chain reference price: a Chainlink AggregatorV3 feed, read with
+    /// `latestRoundData()` (0xfeaf968c) and `decimals()` (0x313ce567) by `XStockReference`.
+    public struct Feed: Hashable, Sendable {
+        public let address: Address
+        /// The most seconds the feed may go without an update: an answer older than this, by the chain's own clock, is
+        /// stale and refused.
+        public let heartbeat: Int
+        /// The decimals of the feed's answer, as reviewed: a feed that reports others is refused.
+        public let decimals: Int
+
+        init(address: Address, heartbeat: Int, decimals: Int) {
+            self.address = address
+            self.heartbeat = heartbeat
+            self.decimals = decimals
+        }
+    }
+
+    /// What the app knows of xStocks: the ones it may trade, the ones it knows and never trades, each traded one's
+    /// reference feed, and the assets a stock may be traded against.
+    public struct Registry: Sendable {
+        /// The xStocks the app may trade, each native, issuer-canonical and with a reference feed (`feeds`).
+        public let curated: [Token]
+        /// xStocks the app knows of but never trades: bridged copies and the like, and any curated entry that came
+        /// without a feed.
+        public let knownUncurated: Set<Address>
+        /// Each curated xStock's reference feed, by the stock's address.
+        public let feeds: [Address: Feed]
+        /// What a curated xStock may be traded against: USDC only.
+        public let quoteAssets: [Address]
+
+        /// A ticker with no feed is never listed: such an entry is moved to `knownUncurated`, so it is still a known
+        /// xStock, refused everywhere, rather than an ordinary token.
+        init(curated: [Token], knownUncurated: Set<Address>, feeds: [Address: Feed], quoteAssets: [Address] = [Monad.usdc]) {
+            self.curated = curated.filter { feeds[$0.address] != nil }
+            self.knownUncurated = knownUncurated.union(curated.filter { feeds[$0.address] == nil }.map(\.address))
+            self.feeds = feeds.filter { address, _ in curated.contains { $0.address == address } }
+            self.quoteAssets = quoteAssets
+        }
+
+        /// The curated xStock at `address`, or nil.
+        public func curatedToken(_ address: Address) -> Token? { curated.first { $0.address == address } }
+
+        /// Whether `address` is a known xStock, curated or not.
+        public func isKnown(_ address: Address) -> Bool {
+            knownUncurated.contains(address) || curatedToken(address) != nil
+        }
+
+        /// The pair as a stock trade the app may offer: a curated xStock on one side and a quote asset (USDC) on the
+        /// other, `isBuy` when the stock is what is received. Nil for every other pair, two stocks included.
+        public func stockPair(_ tokenIn: Token, _ tokenOut: Token) -> (stock: Token, isBuy: Bool)? {
+            if let stock = curatedToken(tokenOut.address), quoteAssets.contains(tokenIn.address) { return (stock, true) }
+            if let stock = curatedToken(tokenIn.address), quoteAssets.contains(tokenOut.address) { return (stock, false) }
+            return nil
+        }
+
+        /// Whether a known xStock is on either side.
+        public func touches(_ tokenIn: Token, _ tokenOut: Token) -> Bool {
+            isKnown(tokenIn.address) || isKnown(tokenOut.address)
+        }
+    }
+
+    /// The registry this build ships. UNVERIFIED (research R4, R6, R11): every list is empty.
+    public static let shipped = Registry(curated: [], knownUncurated: [], feeds: [:])
+
+    /// The xStocks the app could trade (`shipped`). UNVERIFIED (research R4, R6): empty.
+    public static var curated: [Token] { shipped.curated }
+    /// xStocks the app knows of but never trades (`shipped`). UNVERIFIED (research R4, R6): empty.
+    public static var knownUncurated: Set<Address> { shipped.knownUncurated }
+    /// What a curated xStock may be traded against: USDC only.
+    public static var quoteAssets: [Address] { shipped.quoteAssets }
+    /// Each curated xStock's reference feed (`shipped`). UNVERIFIED (research R11): empty.
+    public static var feeds: [Address: Feed] { shipped.feeds }
+
+    /// Whether `address` is a known xStock, curated or not (`shipped`).
+    public static func isKnown(_ address: Address) -> Bool { shipped.isKnown(address) }
+}
+
 public enum Kuru {
     public static let api = URL(string: "https://ws.kuru.io")!
     /// Kuru's public, unauthenticated token/market data host (distinct from the Flow quote host `api`).
@@ -150,4 +285,13 @@ public struct Token: Hashable, Sendable, Identifiable, Codable {
     public static let hopTokens: [Address] = [Monad.wmon, Monad.usdc, Monad.usdt0, Monad.weth]
 
     public static func core(_ address: Address) -> Token? { core.first { $0.address == address } }
+
+    /// The tokens the app vouches for by address: the curated spot assets (`core`) and the curated xStocks
+    /// (`XStocks.curated`). A look-alike of any of them is flagged (`WalletHoldings.imitated(by:)`), none shows a warning
+    /// badge (`TokenBadge`), a create form refuses a name or symbol that reads as one (`SymbolSafety.createRefusal`), and
+    /// none can be a launchpad coin (`SwapEngine.mayBeLaunchCoin`). The xStocks are not in `core`: they are no spot asset
+    /// the wallet reads, prices from pools or offers in Swap's main list.
+    public static let curatedReference: [Token] = core + XStocks.curated
+
+    public static func curatedReference(_ address: Address) -> Token? { curatedReference.first { $0.address == address } }
 }

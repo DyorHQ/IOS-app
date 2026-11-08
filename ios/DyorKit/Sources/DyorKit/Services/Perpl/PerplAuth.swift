@@ -87,9 +87,12 @@ public actor PerplAuthClient {
         /// The server's typed data, echoed back unchanged to `/enroll` (its `mac` covers it). Validated, never signed as is.
         public let typedData: [String: Any]
         public let mac: String
+        /// What `PerplEnrollment.validate` accepted: the only thing a wallet signs for the enrollment
+        /// (`signPerplEnrollment`).
+        public let validated: PerplEnrollment.Validated
         /// The 32-byte EIP-712 digest the wallet must sign and the Ed25519 PoP must cover — recomputed on device from
         /// the validated typed data (`PerplEnrollment.validate`), never taken from the server.
-        public let digest: Data
+        public var digest: Data { validated.digest }
         /// The wallet and Ed25519 public key the typed data was validated against.
         public let address: String
         public let publicKeyHex: String
@@ -120,7 +123,7 @@ public actor PerplAuthClient {
         for field in ["digest", "hash"] where json[field] != nil {
             guard let claimed = json[field] as? String, Data(hex: claimed) == validated.digest else { throw PerplEnrollmentError.digestMismatch }
         }
-        return Payload(typedData: typedData, mac: mac, digest: validated.digest, address: address, publicKeyHex: publicKeyHex)
+        return Payload(typedData: typedData, mac: mac, validated: validated, address: address, publicKeyHex: publicKeyHex)
     }
 
     /// Step 2: submit both signatures and receive the API-key token.

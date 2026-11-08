@@ -49,6 +49,30 @@ public struct TransactionStep: Sendable, Equatable {
     public let kind: Kind
     public let request: TransactionRequest?
     public let label: String
+    /// The last moment this step may be signed, on the device's clock: a firm quote's deadline, counted from when its
+    /// request was sent (`OneInch.firmWindow`). `TransactionSender.run` checks it before the plan starts, before the step
+    /// is prepared and right before it is signed, and throws `TransactionError.quoteExpired` instead of going on. Once
+    /// signed, the step is always broadcast. Nil for every step without a deadline, which runs exactly as before.
+    public var notAfter: ContinuousClock.Instant? = nil
+    /// The swap this call step must be, read again from its calldata right before it is prepared: a step whose call
+    /// doesn't decode to exactly these terms is refused (`TransactionSender.run`). Nil for every other step.
+    public var expectedSwap: ExpectedSwap? = nil
+
+    /// The terms a 1inch swap step was reviewed with: the tokens, exactly the amount in, and the lowest minimum out the
+    /// review accepted.
+    public struct ExpectedSwap: Sendable, Equatable {
+        public let tokenIn: Address
+        public let tokenOut: Address
+        public let amountIn: BigUInt
+        public let minReturnFloor: BigUInt
+
+        public init(tokenIn: Address, tokenOut: Address, amountIn: BigUInt, minReturnFloor: BigUInt) {
+            self.tokenIn = tokenIn
+            self.tokenOut = tokenOut
+            self.amountIn = amountIn
+            self.minReturnFloor = minReturnFloor
+        }
+    }
 
     public static func approve(token: Address, spender: Address, amount: BigUInt, label: String) -> TransactionStep {
         TransactionStep(kind: .approve(token: token, spender: spender, amount: amount), request: nil, label: label)
@@ -72,8 +96,9 @@ public struct TransactionStep: Sendable, Equatable {
         }
     }
 
-    public static func call(_ request: TransactionRequest, label: String) -> TransactionStep {
-        TransactionStep(kind: .call, request: request, label: label)
+    public static func call(_ request: TransactionRequest, label: String, notAfter: ContinuousClock.Instant? = nil,
+                            expectedSwap: ExpectedSwap? = nil) -> TransactionStep {
+        TransactionStep(kind: .call, request: request, label: label, notAfter: notAfter, expectedSwap: expectedSwap)
     }
 }
 
@@ -116,6 +141,9 @@ public struct TransactionSender: Sendable {
         var receiptFastInterval: Duration = .milliseconds(150)
     }
 
+    /// The device's clock, for the deadlines of steps that carry one (`TransactionStep.notAfter`). Tests move it.
+    var now: @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+
     /// The receipt wait's fast first reads for this sender's chain: Monad's only (the Bridge's other chains keep 500 ms).
     var receiptFastPollCount: Int { chainId == Monad.chainId ? timing.receiptFastPolls : 0 }
 
@@ -126,6 +154,10 @@ public struct TransactionSender: Sendable {
     }
 
     public func prepare(_ request: TransactionRequest, from wallet: Wallet) async throws -> PreparedTransaction {
+        // Before anything is read or simulated: a request no signer may sign for a 1inch contract never gets further.
+        if let refusal = ThirdPartyCalldataGuard.refusal(request, account: wallet.address, chainId: chainId) {
+            throw TransactionError.rejected(refusal.message)
+        }
         let call = CallRequest(from: wallet.address, to: request.to, data: request.data, value: request.value)
         // Simulate first so a revert surfaces as a readable error before the wallet is asked to sign.
         do {
@@ -220,12 +252,13 @@ public struct TransactionSender: Sendable {
     /// The transaction `step` sends from `owner` now, or nil when it has nothing to send: an approval the allowance
     /// already covers (a Permit2 one for at least another minute), or a call step without a request. An exact approval
     /// is sent even when a standing, effectively unlimited allowance covers it — one an earlier build or another app
-    /// left — so that allowance is replaced by the exact amount instead of staying unseen.
+    /// left — so that allowance is replaced by the exact amount instead of staying unseen. The 1inch router is stricter
+    /// (`approvalIsCovered`): its approval is skipped only when the allowance is exactly the amount.
     func request(for step: TransactionStep, owner: Address) async throws -> TransactionRequest? {
         switch step.kind {
         case .approve(let token, let spender, let amount):
             let allowance = try await multicall.readAll([try ERC20.allowance(token, owner: owner, spender: spender)])[0][0].uint
-            if allowance >= amount, allowance < Self.unlimitedAllowance || amount >= Self.unlimitedAllowance { return nil }
+            if Self.approvalIsCovered(allowance: allowance, amount: amount, spender: spender) { return nil }
             return TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: spender, amount: amount))
         case .permit2Approve(let token, let spender, let amount, _):
             let allowance = try await multicall.readAll([try SwapCalldata.permit2Allowance(owner: owner, token: token, spender: spender)])[0]
@@ -240,17 +273,44 @@ public struct TransactionSender: Sendable {
     /// step replaces (`request(for:)`).
     public static let unlimitedAllowance = BigUInt(1) << 128
 
-    /// The spenders whose standing, effectively unlimited allowance `steps` replace with an exact one (`request(for:)`),
-    /// for the confirmation sheet to name. A read that fails names nothing.
-    public func unlimitedAllowancesReplaced(by steps: [TransactionStep], owner: Address) async -> [Address] {
-        var spenders: [Address] = []
+    /// Whether an approval step of `amount` for `spender` has nothing to send with `allowance` already standing. Any
+    /// spender: the allowance covers the amount and isn't an effectively unlimited one an exact approval replaces. The
+    /// 1inch router: only an allowance of exactly the amount; anything else, larger or smaller, is replaced by it, so no
+    /// standing router allowance ever outlives the swap it was approved for.
+    static func approvalIsCovered(allowance: BigUInt, amount: BigUInt, spender: Address) -> Bool {
+        if spender == OneInch.router { return allowance == amount }
+        return allowance >= amount && (allowance < unlimitedAllowance || amount >= unlimitedAllowance)
+    }
+
+    /// A standing allowance an exact approval step replaces (`request(for:)`), for the confirmation sheet to name.
+    public struct ReplacedAllowance: Sendable, Equatable {
+        public let spender: Address
+        /// The allowance standing now.
+        public let allowance: BigUInt
+        /// Whether it is effectively unlimited (`unlimitedAllowance`).
+        public var isUnlimited: Bool { allowance >= TransactionSender.unlimitedAllowance }
+    }
+
+    /// The standing allowances `steps` replace with an exact one, for the confirmation sheet to name: any spender's
+    /// effectively unlimited one, and any 1inch router allowance that isn't exactly the amount (zero excepted: there
+    /// is nothing to replace). A read that fails names nothing.
+    public func allowancesReplaced(by steps: [TransactionStep], owner: Address) async -> [ReplacedAllowance] {
+        var replaced: [ReplacedAllowance] = []
         for step in steps {
             guard case .approve(let token, let spender, let amount) = step.kind, amount < Self.unlimitedAllowance,
                   let read = try? await multicall.readAll([try ERC20.allowance(token, owner: owner, spender: spender)]),
-                  let allowance = read.first?.first?.uint, allowance >= Self.unlimitedAllowance else { continue }
-            spenders.append(spender)
+                  let allowance = read.first?.first?.uint else { continue }
+            let named = spender == OneInch.router ? allowance != amount && allowance > 0 : allowance >= Self.unlimitedAllowance
+            if named { replaced.append(ReplacedAllowance(spender: spender, allowance: allowance)) }
         }
-        return spenders
+        return replaced
+    }
+
+    /// The spenders whose standing, effectively unlimited allowance `steps` replace with an exact one (`request(for:)`),
+    /// for the confirmation sheet to name. A read that fails names nothing. `allowancesReplaced` also names a 1inch
+    /// router allowance that isn't exactly the amount.
+    public func unlimitedAllowancesReplaced(by steps: [TransactionStep], owner: Address) async -> [Address] {
+        await allowancesReplaced(by: steps, owner: owner).filter(\.isUnlimited).map(\.spender)
     }
 
     public func send(_ request: TransactionRequest, from wallet: Wallet) async throws -> Data {
@@ -379,7 +439,16 @@ public struct TransactionSender: Sendable {
     }
 
     /// Runs a plan step by step. Approvals are skipped when the allowance already covers the amount.
+    ///
+    /// A step with a deadline (`TransactionStep.notAfter`) is checked against the device's clock three times, and
+    /// `TransactionError.quoteExpired` is thrown instead of going on: before the plan starts (less than
+    /// `OneInch.startMargin` left on any step's), right before the step is prepared, and right before the wallet signs it
+    /// (less than `OneInch.signMargin` left, which covers signing and the broadcast). After the signature nothing is
+    /// checked: signed bytes are always broadcast, never held or dropped. A step with expected swap terms
+    /// (`TransactionStep.expectedSwap`) is read from its calldata before it is prepared, and refused unless it is
+    /// exactly that swap. Steps with neither run as they always have.
     public func run(_ steps: [TransactionStep], from wallet: Wallet, onEvent: @Sendable @escaping (TransactionEvent) -> Void) async throws -> Data {
+        if let first = steps.compactMap(\.notAfter).min() { try requireTime(before: first, margin: OneInch.startMargin) }
         var last: Data?
         // The block that confirmed this run's previous step, for Monad's reserve spacing.
         var previousBlock: UInt64?
@@ -387,9 +456,15 @@ public struct TransactionSender: Sendable {
             onEvent(.preparing(step.label))
             guard let request = try await self.request(for: step, owner: wallet.address) else { continue }
             try await waitForReserveSpacing(value: request.value, after: previousBlock, from: wallet.address)
+            if let notAfter = step.notAfter { try requireTime(before: notAfter, margin: OneInch.signMargin) }
+            if let expected = step.expectedSwap { try Self.requireSwap(request, matches: expected, account: wallet.address) }
             let hash: Data
             do {
-                hash = try await send(request, from: wallet)
+                let prepared = try await prepare(request, from: wallet)
+                if let notAfter = step.notAfter { try requireTime(before: notAfter, margin: OneInch.signMargin) }
+                let signed = try await wallet.sign(prepared)
+                // Signed: broadcast whatever the clock says now.
+                hash = try await broadcast(signed, prepared)
             } catch TransactionError.possiblySent(let possible) {
                 // No endpoint said it took the broadcast, but it may be live: follow it like any sent step.
                 hash = possible
@@ -404,6 +479,21 @@ public struct TransactionSender: Sendable {
         }
         guard let hash = last else { throw TransactionError.rejected(L10n.tr("Nothing to send.")) }
         return hash
+    }
+
+    /// Throws `quoteExpired` when less than `margin` is left before `deadline` on the device's clock. Before a step is
+    /// prepared the margin is already the signing one: a step that couldn't be signed in time isn't simulated either.
+    private func requireTime(before deadline: ContinuousClock.Instant, margin: Duration) throws {
+        if deadline - now() < margin { throw TransactionError.quoteExpired }
+    }
+
+    /// Refuses a step whose call isn't exactly the swap it was reviewed as: a 1inch generic swap to the router, read
+    /// strictly (`OneInchSwap`), of these tokens and amount, to `account`, with a minimum no lower than the floor.
+    static func requireSwap(_ request: TransactionRequest, matches expected: TransactionStep.ExpectedSwap, account: Address) throws {
+        guard request.to == OneInch.router, let swap = OneInchSwap(calldata: request.data),
+              swap.matches(expected, account: account, value: request.value) else {
+            throw TransactionError.rejected(L10n.tr("This swap no longer matches what you reviewed, so nothing was sent for it."))
+        }
     }
 }
 

@@ -177,6 +177,9 @@ final class MeraPolicyTests: XCTestCase {
             XCTAssertEqual(review([transfer], .alwaysAsks(what)), .ask(.alwaysAsks(what)), what.rawValue)
             XCTAssertFalse(what.summary.isEmpty)
         }
+        // Anything on 1inch or touching a known xStock is one of them (`MeraOneInchPolicyTests`).
+        XCTAssertTrue(Mera.AlwaysAsk.allCases.contains(.tokenizedStock))
+        XCTAssertEqual(Mera.AlwaysAsk.allCases.count, 13)
         // An untagged sheet fails closed, even for a call a swap would allow.
         XCTAssertEqual(review([call(Uniswap.universalRouter, universalRouterSwap)], .ask), .ask(.alwaysAsks(.unlisted)))
         // A combination with an always-ask part asks as a whole.

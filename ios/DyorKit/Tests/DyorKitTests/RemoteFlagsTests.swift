@@ -49,6 +49,39 @@ final class RemoteFlagsTests: XCTestCase {
         XCTAssertFalse(parse(#"[{"value":{"flags":{"serverHistory":false}}}]"#).serverHistory)
     }
 
+    /// The xStocks switch is the one opt-in: on only for JSON `true`; off in `on`, for a row without it, for any other
+    /// value, for a body that isn't the row's answer.
+    func testXStocksIsOnOnlyForJSONTrue() {
+        XCTAssertFalse(RemoteFlags.on.xStocks)
+        XCTAssertFalse(RemoteFlags().xStocks)
+        XCTAssertTrue(parse(#"[{"value":{"flags":{"xStocks":true}}}]"#).xStocks)
+        XCTAssertEqual(parse(#"[{"value":{"flags":{"xStocks":true}}}]"#), RemoteFlags(xStocks: true), "the kill switches beside it stay on")
+        XCTAssertFalse(parse(#"[{"value":{"min_build":16}}]"#).xStocks, "today's row")
+        XCTAssertFalse(parse(#"[{"value":{"flags":{}}}]"#).xStocks)
+        for value in ["false", #""true""#, "1", "0", "null", "{}", "[]", "[true]", #""on""#] {
+            XCTAssertFalse(parse(#"[{"value":{"flags":{"xStocks":\#(value)}}}]"#).xStocks, value)
+        }
+        for body in ["not json", "[]", #"[{"value":{"flags":"xStocks"}}]"#, #"[{"value":{"flags":{"xStocks":true}}},{"value":{}}]"#] {
+            XCTAssertFalse(parse(body).xStocks, body)
+        }
+        XCTAssertFalse(parse(#"[{"value":{"flags":{"xStocks":false,"dyorBadges":false}}}]"#).xStocks)
+    }
+
+    /// The last value read is kept on the device; nothing stored, or anything but a Bool, reads as off.
+    func testXStocksSwitchStore() throws {
+        let suite = "XStocksSwitchStoreTests"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(XStocksSwitchStore.read(from: defaults), "before the first read")
+        XStocksSwitchStore.save(RemoteFlags(xStocks: true), defaults: defaults)
+        XCTAssertTrue(XStocksSwitchStore.read(from: defaults))
+        XStocksSwitchStore.save(parse("not json"), defaults: defaults)
+        XCTAssertFalse(XStocksSwitchStore.read(from: defaults), "a row that couldn't be read is off")
+        defaults.set("true", forKey: XStocksSwitchStore.defaultsKey)
+        XCTAssertFalse(XStocksSwitchStore.read(from: defaults), "not a Bool")
+    }
+
     /// The history epoch: a whole number from 0 to 2^31 - 1 as given (JSON has no integers apart: 3.0 is 3); anything
     /// else — a fraction, a negative, a string, a boolean, null, too large, left out — 0.
     func testTheHistoryEpochIsAWholeNumberElseZero() {
