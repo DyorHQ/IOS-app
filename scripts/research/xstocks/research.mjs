@@ -12,6 +12,9 @@
 //       R1/R3b: every log the router emitted (a Limit Order Protocol RFQ fill emits OrderFilled there while its tokens
 //       move maker to taker, so `discover` can't see it), counted by event, and the tokens moved in the newest of those
 //       transactions.
+//   node scripts/research/xstocks/research.mjs fill HASH... [--monad-rpc URL]
+//       R1/R3b: a transaction taken apart: its transfers, the router's order events, the Limit Order Protocol fills in its
+//       calldata (maker, assets, amounts, traits), its internal calls when the RPC traces, and which parties are contracts.
 //   node scripts/research/xstocks/research.mjs token ADDRESS... [--monad-rpc URL]
 //       R4/R15: name, symbol, decimals, supply, EIP-1967 implementation and admin, and code hashes.
 //   node scripts/research/xstocks/research.mjs feed ADDRESS... [--monad-rpc URL]
@@ -28,8 +31,8 @@
 import { createPublicClient, formatUnits, getAddress, http, isAddress, parseAbi, parseAbiItem } from "viem";
 import { writeFileSync } from "node:fs";
 import {
-  EIP1967, MONAD_CHAIN_ID, MONAD_USDC, ONEINCH, STOCK_SLIPPAGE_CAP_BPS, SWAP_SELECTOR, WRAPPED_NATIVE, addressFromSlot, amountField, checkFirmAnswer,
-  codeHash, decodeSwap, maskAddress, printable, redact, slippagePercent, swapProblem, toJSON,
+  EIP1967, LOP_EVENTS, MONAD_CHAIN_ID, MONAD_USDC, ONEINCH, STOCK_SLIPPAGE_CAP_BPS, SWAP_SELECTOR, WRAPPED_NATIVE, addressFromSlot, amountField,
+  checkFirmAnswer, codeHash, decodeSwap, findOrderFills, maskAddress, printable, redact, slippagePercent, swapProblem, toJSON,
 } from "./lib.mjs";
 
 /** `--name value`; never takes another flag as the value. */
@@ -64,6 +67,7 @@ const FEED = parseAbi([
   "function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
 ]);
 const TRANSFER = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
 /** A read's answer, or why it couldn't be read, so one bad address doesn't stop the rest. */
 async function settle(promise) {
@@ -178,7 +182,8 @@ async function fills() {
 
 async function token() {
   const client = monad();
-  for (const raw of positional()) {
+  for (const [i, raw] of positional().entries()) {
+    if (i > 0) await new Promise((resolve) => setTimeout(resolve, 400));
     if (!isAddress(raw, { strict: false })) { say(`${raw}: not an address`); continue; }
     const address = getAddress(raw);
     const read = (functionName) => settle(client.readContract({ address, abi: ERC20, functionName }));
@@ -289,10 +294,77 @@ async function oneinch() {
   }
 }
 
-const commands = { router, discover, fills, token, feed, tx, oneinch };
+/** Each transaction taken apart: every log (transfers with token, sides and amount; the router's order events by name),
+    the Limit Order Protocol fills inside its calldata, its internal calls when the RPC can trace, and whether each
+    party is a contract. For the fills `fills` finds, to tell an intent (the user is the maker) from an RFQ (a market
+    maker is). */
+async function fill() {
+  const client = monad();
+  const symbols = new Map();
+  const tokenInfo = async (address) => {
+    if (!symbols.has(address)) {
+      const [symbol, decimals] = await Promise.all([settle(client.readContract({ address, abi: ERC20, functionName: "symbol" })),
+        settle(client.readContract({ address, abi: ERC20, functionName: "decimals" }))]);
+      symbols.set(address, { symbol: isText(symbol) ? "?" : symbol, decimals: typeof decimals === "number" ? decimals : null });
+    }
+    return symbols.get(address);
+  };
+  const kinds = new Map();
+  const kind = async (address) => {
+    if (!kinds.has(address)) {
+      const code = await settle(client.getCode({ address }));
+      kinds.set(address, isText(code) ? code : !code || code === "0x" ? "no code (EOA)" : `contract, ${(code.length - 2) / 2} bytes, ${codeHash(code).slice(0, 18)}…`);
+    }
+    return kinds.get(address);
+  };
+  for (const hash of positional()) {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) { say(`${hash}: not a transaction hash`); continue; }
+    const [transaction, receipt] = await Promise.all([settle(client.getTransaction({ hash })), settle(client.getTransactionReceipt({ hash }))]);
+    if (isText(transaction) || isText(receipt)) { say(`${hash}: ${isText(transaction) ? transaction : receipt}`); continue; }
+    say(`=== ${hash} block ${receipt.blockNumber} ${receipt.status}`);
+    say(`from ${getAddress(transaction.from)} to ${getAddress(transaction.to)} selector ${transaction.input.slice(0, 10)} input ${(transaction.input.length - 2) / 2} bytes value ${transaction.value}`);
+    const parties = new Set([getAddress(transaction.from), getAddress(transaction.to)]);
+    for (const log of receipt.logs) {
+      const emitter = getAddress(log.address);
+      const topic = log.topics[0];
+      if (topic === TRANSFER_TOPIC && log.topics.length === 3) {
+        const from = getAddress(`0x${log.topics[1].slice(26)}`);
+        const to = getAddress(`0x${log.topics[2].slice(26)}`);
+        const { symbol, decimals } = await tokenInfo(emitter);
+        const value = BigInt(log.data);
+        parties.add(from); parties.add(to);
+        say(`  Transfer ${symbol} ${decimals === null ? value : formatUnits(value, decimals)}  ${from} -> ${to}`);
+      } else if (emitter === getAddress(ONEINCH.router) && LOP_EVENTS[topic]) {
+        say(`  router ${LOP_EVENTS[topic]} topics ${log.topics.slice(1).join(" ")} data ${log.data}`);
+      } else {
+        say(`  log ${emitter} topic0 ${topic ?? "none"} (${log.topics.length} topics, ${(log.data.length - 2) / 2} data bytes)`);
+      }
+    }
+    const orders = findOrderFills(transaction.input);
+    say(orders.length ? `  ${orders.length} order fill(s) in the calldata:` : "  no Limit Order Protocol fill in the calldata");
+    for (const found of orders) {
+      say(toJSON(found));
+      parties.add(found.order.maker);
+    }
+    const trace = await settle(client.request({ method: "debug_traceTransaction", params: [hash, { tracer: "callTracer" }] }));
+    if (isText(trace)) {
+      say(`  trace: ${trace}`);
+    } else {
+      const walk = (call, depth) => {
+        say(`  ${"  ".repeat(depth)}${call.type} ${call.from} -> ${call.to} ${call.input?.slice(0, 10) ?? ""}${call.value && call.value !== "0x0" ? ` value ${BigInt(call.value)}` : ""}${call.error ? ` ERROR ${call.error}` : ""}`);
+        if (call.to && getAddress(call.to) === getAddress(ONEINCH.router)) for (const inner of findOrderFills(call.input)) say(toJSON(inner));
+        for (const child of call.calls ?? []) walk(child, depth + 1);
+      };
+      walk(trace, 0);
+    }
+    for (const party of parties) say(`  ${party}: ${await kind(party)}`);
+  }
+}
+
+const commands = { router, discover, fills, fill, token, feed, tx, oneinch };
 const command = commands[process.argv[2]];
 if (!command) {
-  console.error("usage: research.mjs router|discover|token|feed|tx|oneinch … (see the header of this file)");
+  console.error("usage: research.mjs router|discover|fills|fill|token|feed|tx|oneinch … (see the header of this file)");
   process.exit(2);
 }
 try {

@@ -2,7 +2,7 @@
 // app reads them, a strict decoder that accepts exactly what the app's own decoder accepts
 // (ios/DyorKit/Sources/DyorKit/Services/Swap/OneInchCalldata.swift), the checks the app applies to a decoded swap, and
 // the redaction every printed line goes through. No network here: the tests run offline.
-import { decodeFunctionData, encodeFunctionData, getAddress, isAddress, keccak256, parseAbi } from "viem";
+import { decodeFunctionData, encodeFunctionData, getAddress, isAddress, keccak256, parseAbi, toFunctionSelector } from "viem";
 
 /** AggregationRouterV6 and the two 1inch contracts the app refuses, as Monad's protocol directory lists them
     (github.com/monad-crypto/protocols, mainnet/1inch.jsonc). The same constants as `OneInch` in Chain/Monad.swift. */
@@ -209,4 +209,69 @@ export function redact(text, secrets) {
 /** JSON with bigints as decimal strings, for printing and fixtures. */
 export function toJSON(value) {
   return JSON.stringify(value, (_, v) => (typeof v === "bigint" ? v.toString() : v), 2);
+}
+
+/** The Limit Order Protocol v4 fill entry points built into AggregationRouterV6. An order's addresses are packed into
+    uint256 words (`Address` in the protocol's own types). */
+export const LOP_ABI = parseAbi([
+  "function fillOrder((uint256 salt, uint256 maker, uint256 receiver, uint256 makerAsset, uint256 takerAsset, uint256 makingAmount, uint256 takingAmount, uint256 makerTraits) order, bytes32 r, bytes32 vs, uint256 amount, uint256 takerTraits) payable returns (uint256, uint256, bytes32)",
+  "function fillOrderArgs((uint256 salt, uint256 maker, uint256 receiver, uint256 makerAsset, uint256 takerAsset, uint256 makingAmount, uint256 takingAmount, uint256 makerTraits) order, bytes32 r, bytes32 vs, uint256 amount, uint256 takerTraits, bytes args) payable returns (uint256, uint256, bytes32)",
+  "function fillContractOrder((uint256 salt, uint256 maker, uint256 receiver, uint256 makerAsset, uint256 takerAsset, uint256 makingAmount, uint256 takingAmount, uint256 makerTraits) order, bytes signature, uint256 amount, uint256 takerTraits) returns (uint256, uint256, bytes32)",
+  "function fillContractOrderArgs((uint256 salt, uint256 maker, uint256 receiver, uint256 makerAsset, uint256 takerAsset, uint256 makingAmount, uint256 takingAmount, uint256 makerTraits) order, bytes signature, uint256 amount, uint256 takerTraits, bytes args) returns (uint256, uint256, bytes32)",
+]);
+export const LOP_EVENTS = Object.freeze({
+  "0xfec331350fce78ba658e082a71da20ac9f8d798a99b3c79681c8440cbfe77e07": "OrderFilled(bytes32,uint256)",
+  "0x5152abf959f6564662358c2e52b702259b78bac5ee7842a0f01937e670efcc7d": "OrderCancelled(bytes32)",
+  "0xcda0f7e73d07bdb14b141f2cf4745926629a1b63e7c6a3dd8a80232cb459a850": "BitInvalidatorUpdated(address,uint256,uint256)",
+  "0x099133aefc2c2d1e56f8ef3622ec8e80979a0713fc9c4e1497740efcf8099396": "EpochIncreased(address,uint256,uint256)",
+});
+
+const bit = (traits, n) => ((traits >> BigInt(n)) & 1n) === 1n;
+const field = (traits, offset, width) => (traits >> BigInt(offset)) & ((1n << BigInt(width)) - 1n);
+
+/** An order's MakerTraits read as LOP v4's MakerTraitsLib lays them out: flags in the top bits, then the series, the
+    nonce or epoch and the expiry (unix seconds, 0 for none), each 40 bits, and the low 80 bits of an allowed taker. */
+export function makerTraits(traits) {
+  const value = BigInt(traits);
+  return {
+    noPartialFills: bit(value, 255), allowMultipleFills: bit(value, 254), preInteraction: bit(value, 252),
+    postInteraction: bit(value, 251), needEpochCheck: bit(value, 250), hasExtension: bit(value, 249), usePermit2: bit(value, 248),
+    unwrapWeth: bit(value, 247), series: field(value, 160, 40), nonceOrEpoch: field(value, 120, 40), expiration: field(value, 80, 40),
+    allowedSenderLow80: field(value, 0, 80) === 0n ? null : `0x${field(value, 0, 80).toString(16).padStart(20, "0")}`,
+  };
+}
+
+const wordAddress = (word) => getAddress(`0x${BigInt(word).toString(16).padStart(40, "0").slice(-40)}`);
+
+/**
+ * Every Limit Order Protocol fill found in `input` (0x-hex), at any byte offset: a resolver contract usually passes the
+ * router's calldata through inside its own, so the order it fills can be read without a trace. Each is the entry point,
+ * the byte offset, and the order with its addresses unpacked and its traits read.
+ */
+export function findOrderFills(input) {
+  if (typeof input !== "string" || !/^0x([0-9a-fA-F]{2})*$/.test(input)) return [];
+  const hex = input.slice(2).toLowerCase();
+  const selectors = new Map(LOP_ABI.map((item) => [toFunctionSelector(item).slice(2), item.name]));
+  const found = [];
+  for (let i = 0; i + 8 <= hex.length; i += 2) {
+    const name = selectors.get(hex.slice(i, i + 8));
+    if (!name) continue;
+    let decoded;
+    try {
+      decoded = decodeFunctionData({ abi: LOP_ABI, data: `0x${hex.slice(i)}` });
+    } catch {
+      continue;
+    }
+    const [order, ...rest] = decoded.args;
+    found.push({
+      entry: decoded.functionName, offset: i / 2,
+      order: {
+        salt: `0x${order.salt.toString(16)}`, maker: wordAddress(order.maker), receiver: order.receiver === 0n ? null : wordAddress(order.receiver),
+        makerAsset: wordAddress(order.makerAsset), takerAsset: wordAddress(order.takerAsset), makingAmount: order.makingAmount,
+        takingAmount: order.takingAmount, makerTraits: makerTraits(order.makerTraits),
+      },
+      amount: decoded.functionName.startsWith("fillContract") ? rest[1] : rest[2],
+    });
+  }
+  return found;
 }
