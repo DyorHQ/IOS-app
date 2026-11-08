@@ -8,6 +8,10 @@
 //   node scripts/research/xstocks/research.mjs discover [--blocks N] [--span N] [--monad-rpc URL]
 //       R4 candidates: tokens moved through the router in the last N blocks (read SPAN blocks a request) whose name or
 //       symbol looks like an xStock. Candidates only: an address is curated from the issuer's own list, never from this.
+//   node scripts/research/xstocks/research.mjs fills [--blocks N] [--span N] [--txs N] [--monad-rpc URL]
+//       R1/R3b: every log the router emitted (a Limit Order Protocol RFQ fill emits OrderFilled there while its tokens
+//       move maker to taker, so `discover` can't see it), counted by event, and the tokens moved in the newest of those
+//       transactions.
 //   node scripts/research/xstocks/research.mjs token ADDRESS... [--monad-rpc URL]
 //       R4/R15: name, symbol, decimals, supply, EIP-1967 implementation and admin, and code hashes.
 //   node scripts/research/xstocks/research.mjs feed ADDRESS... [--monad-rpc URL]
@@ -24,8 +28,8 @@
 import { createPublicClient, formatUnits, getAddress, http, isAddress, parseAbi, parseAbiItem } from "viem";
 import { writeFileSync } from "node:fs";
 import {
-  EIP1967, MONAD_CHAIN_ID, MONAD_USDC, ONEINCH, STOCK_SLIPPAGE_CAP_BPS, SWAP_SELECTOR, addressFromSlot, amountField, checkFirmAnswer, codeHash,
-  decodeSwap, printable, redact, slippagePercent, swapProblem, toJSON,
+  EIP1967, MONAD_CHAIN_ID, MONAD_USDC, ONEINCH, STOCK_SLIPPAGE_CAP_BPS, SWAP_SELECTOR, WRAPPED_NATIVE, addressFromSlot, amountField, checkFirmAnswer,
+  codeHash, decodeSwap, maskAddress, printable, redact, slippagePercent, swapProblem, toJSON,
 } from "./lib.mjs";
 
 /** `--name value`; never takes another flag as the value. */
@@ -71,12 +75,26 @@ async function router() {
   const [m, e] = [monad(), ethereum()];
   const chain = await m.getChainId();
   if (chain !== MONAD_CHAIN_ID) throw new Error(`the Monad RPC answers chain ${chain}, not ${MONAD_CHAIN_ID}`);
-  const ethRouter = codeHash(await e.getCode({ address: ONEINCH.router }));
-  say(`Ethereum AggregationRouterV6 ${ONEINCH.router} code hash: ${ethRouter ?? "no code"}`);
+  const ethCode = await e.getCode({ address: ONEINCH.router });
+  const ethRouter = codeHash(ethCode);
+  say(`Ethereum AggregationRouterV6 ${ONEINCH.router} code hash: ${ethRouter ?? "no code"}, ${ethCode ? (ethCode.length - 2) / 2 : 0} bytes`);
   for (const [name, address] of Object.entries(ONEINCH)) {
-    const hash = codeHash(await m.getCode({ address }));
+    const code = await m.getCode({ address });
+    const hash = codeHash(code);
     const note = name === "router" ? (hash && hash === ethRouter ? "SAME as Ethereum's router" : "DIFFERS from Ethereum's router") : "";
-    say(`Monad ${name.padEnd(12)} ${address} code hash: ${hash ?? "NO CODE"} ${note}`);
+    say(`Monad ${name.padEnd(12)} ${address} code hash: ${hash ?? "NO CODE"}, ${code ? (code.length - 2) / 2 : 0} bytes ${note}`);
+    if (name === "router" && code && ethCode) {
+      // The router keeps its chain's wrapped native coin as an immutable: compare with it blanked on both sides.
+      const eth = maskAddress(ethCode, WRAPPED_NATIVE.ethereum);
+      const mon = maskAddress(code, WRAPPED_NATIVE.monad);
+      const same = codeHash(eth.code) === codeHash(mon.code);
+      say(`  with the wrapped native coin masked (${eth.count} occurrence(s) on Ethereum, ${mon.count} on Monad): ${same ? "SAME code" : "STILL DIFFERS"}`);
+      if (!same && eth.code.length === mon.code.length) {
+        const words = [];
+        for (let i = 2; i < eth.code.length; i += 64) if (eth.code.slice(i, i + 64) !== mon.code.slice(i, i + 64)) words.push((i - 2) / 2);
+        say(`  differing 32-byte windows at byte offsets: ${words.slice(0, 40).join(", ")}${words.length > 40 ? ` … (${words.length} in all)` : ""}`);
+      }
+    }
   }
 }
 
@@ -107,6 +125,53 @@ async function discover() {
       settle(client.readContract({ address, abi: ERC20, functionName: "symbol" }))]);
     const looks = /xstock/i.test(String(name)) || /^[A-Z0-9.]{1,6}x$/.test(String(symbol));
     // The newest transaction that moved it through the router, for `tx` (research R3b).
+    say(`${looks ? "CANDIDATE " : "          "}${address}  ${symbol}  ${name}  (${transfers} transfers, newest tx ${sample})`);
+  }
+}
+
+/** Every log the router itself emitted in the window (a Limit Order Protocol fill emits `OrderFilled` there while the
+    tokens move maker to taker, never through the router), counted by event, then the tokens moved in the newest of
+    those transactions (`--txs`, default 300): xStocks traded as RFQ fills show up here and not in `discover`. */
+async function fills() {
+  const client = monad();
+  const blocks = BigInt(option("blocks", "20000"));
+  const span = BigInt(option("span", "1000"));
+  const limit = Number(option("txs", "300"));
+  if (blocks <= 0n || span <= 0n) throw new Error("--blocks and --span must be positive");
+  const head = await client.getBlockNumber();
+  const first = head + 1n > blocks ? head + 1n - blocks : 0n;
+  const topics = new Map();
+  const txs = new Map();
+  for (let to = head; to >= first; to -= span) {
+    const from = to + 1n - span > first ? to + 1n - span : first;
+    const logs = await settle(client.getLogs({ address: ONEINCH.router, fromBlock: from, toBlock: to }));
+    if (isText(logs)) { say(`blocks ${from}-${to}: ${logs}`); continue; }
+    for (const log of logs) {
+      const topic = log.topics[0] ?? "(anonymous)";
+      topics.set(topic, (topics.get(topic) ?? 0) + 1);
+      if (!txs.has(log.transactionHash)) txs.set(log.transactionHash, log.blockNumber);
+    }
+    if (from === 0n) break;
+  }
+  say(`router logs in blocks ${first}-${head}: ${[...topics.values()].reduce((a, b) => a + b, 0)} in ${txs.size} transactions`);
+  for (const [topic, count] of topics) say(`  event ${topic}: ${count}`);
+  const newest = [...txs.entries()].sort((a, b) => (a[1] > b[1] ? -1 : 1)).slice(0, limit).map(([hash]) => hash);
+  const tokens = new Map();
+  for (const hash of newest) {
+    const receipt = await settle(client.getTransactionReceipt({ hash }));
+    if (isText(receipt)) { say(`${hash}: ${receipt}`); continue; }
+    for (const log of receipt.logs) {
+      if (log.topics[0] !== "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef" || log.topics.length !== 3) continue;
+      const address = getAddress(log.address);
+      const seen = tokens.get(address) ?? { transfers: 0, tx: hash };
+      tokens.set(address, { transfers: seen.transfers + 1, tx: seen.tx });
+    }
+  }
+  say(`${tokens.size} tokens moved in the newest ${newest.length} of those transactions`);
+  for (const [address, { transfers, tx: sample }] of tokens) {
+    const [name, symbol] = await Promise.all([settle(client.readContract({ address, abi: ERC20, functionName: "name" })),
+      settle(client.readContract({ address, abi: ERC20, functionName: "symbol" }))]);
+    const looks = /xstock/i.test(String(name)) || /^[A-Z0-9.]{1,6}x$/.test(String(symbol));
     say(`${looks ? "CANDIDATE " : "          "}${address}  ${symbol}  ${name}  (${transfers} transfers, newest tx ${sample})`);
   }
 }
@@ -224,7 +289,7 @@ async function oneinch() {
   }
 }
 
-const commands = { router, discover, token, feed, tx, oneinch };
+const commands = { router, discover, fills, token, feed, tx, oneinch };
 const command = commands[process.argv[2]];
 if (!command) {
   console.error("usage: research.mjs router|discover|token|feed|tx|oneinch … (see the header of this file)");

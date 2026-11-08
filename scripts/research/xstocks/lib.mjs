@@ -160,6 +160,33 @@ export function codeHash(code) {
   return keccak256(code);
 }
 
+/** The wrapped native coin each chain's AggregationRouterV6 is constructed with: an immutable, so it sits in the
+    runtime code and makes the two chains' code hashes differ even when the contract is the same. */
+export const WRAPPED_NATIVE = Object.freeze({
+  ethereum: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  monad: "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A",
+});
+
+/** `code` (0x-hex runtime code) with every occurrence of `address`'s 20 bytes zeroed, for comparing deployments that
+    differ only in an immutable address. Occurrences are counted at byte boundaries only. */
+export function maskAddress(code, address) {
+  const hex = code.slice(2).toLowerCase();
+  const needle = address.slice(2).toLowerCase();
+  let out = "";
+  let count = 0;
+  for (let i = 0; i < hex.length;) {
+    if (i % 2 === 0 && hex.startsWith(needle, i)) {
+      out += "0".repeat(needle.length);
+      i += needle.length;
+      count += 1;
+    } else {
+      out += hex[i];
+      i += 1;
+    }
+  }
+  return { code: `0x${out}`, count };
+}
+
 /** The address in a 32-byte storage word (an EIP-1967 slot), or null when the word is zero. */
 export function addressFromSlot(word) {
   if (!word || /^0x0*$/.test(word)) return null;
