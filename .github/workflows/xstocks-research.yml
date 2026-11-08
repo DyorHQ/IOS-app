@@ -1,0 +1,57 @@
+# xStocks research (read-only): runs scripts/research/xstocks/research.mjs where Monad's RPCs and Ethereum are reachable,
+# to close the research gates the 1inch venue waits on (docs/swap-spec.md, "xStocks through 1inch"). It reads public
+# chain data only: no secret, no key, no transaction, nothing written anywhere but this job's log. It runs only on
+# pushes to research/xstocks-* branches, never on main or a pull request.
+name: xstocks-research
+
+on:
+  push:
+    branches: ["research/xstocks-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies (no install scripts)
+        run: node --version && npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Offline tests and the parity fixture
+        run: node --test tests/xstocks-research.test.mjs && node scripts/research/xstocks/make-parity-fixture.mjs --check
+
+      - name: "R3a: router, Aqua and SwapVM code hashes, Monad against Ethereum"
+        continue-on-error: true
+        run: node scripts/research/xstocks/research.mjs router
+
+      - name: "R4: tokens moved through the router in about the last two weeks"
+        continue-on-error: true
+        run: |
+          node scripts/research/xstocks/research.mjs discover --monad-rpc https://rpc2.monad.xyz --span 10000 --blocks 3000000 | tee discover.txt
+
+      - name: "R4/R15: the candidates' details"
+        continue-on-error: true
+        run: |
+          grep '^CANDIDATE' discover.txt | awk '{print $2}' | head -40 > candidates.txt || true
+          if [ -s candidates.txt ]; then
+            node scripts/research/xstocks/research.mjs token $(cat candidates.txt)
+          else
+            echo "no candidates"
+          fi
+
+      - name: "R3b: the candidates' newest router transactions, decoded as the app decodes them"
+        continue-on-error: true
+        run: |
+          grep '^CANDIDATE' discover.txt | grep -o 'newest tx 0x[0-9a-fA-F]\{64\}' | awk '{print $3}' | sort -u | head -20 > txs.txt || true
+          if [ -s txs.txt ]; then
+            node scripts/research/xstocks/research.mjs tx $(cat txs.txt)
+          else
+            echo "no transactions"
+          fi
