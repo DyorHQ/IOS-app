@@ -121,6 +121,18 @@ Switches, by name: `OneInch.compiledIn` (the build); `flags.xStocks` in `app_con
 `ONEINCH_MODE` (`off`, `sell-only`, `on`; unset is off), `ONEINCH_WALLETS` (beta list), `ONEINCH_DENY` (no buys of a
 ticker) and `ONEINCH_DENY_ALL` (no trades of a ticker). The proxy is described in `supabase/README.md`.
 
+Before a ticker is listed, the facts marked UNVERIFIED in the code are checked with `scripts/research/xstocks/research.mjs`
+(read-only; it never signs or sends):
+- `router`: the router's code hash on Monad against Ethereum's;
+- `token` and `feed`: an xStock and its reference feed;
+- `tx`: a real router transaction, decoded as the app decodes it;
+- `oneinch`: 1inch's answers on chain 143, with the key from `ONEINCH_API_KEY`, never printed;
+- `discover`: candidate tokens seen through the router. A candidate is curated only from the issuer's own list.
+
+Its decoder and the app's (`OneInchSwap`) read the same parity fixture
+(`ios/DyorKit/Tests/DyorKitTests/Fixtures/oneinch-swap-parity.json`), so what the tool calls signable is what the app
+signs. Tests: `npm run research:test`.
+
 ## Files
 
 `ios/DyorHQ/Swap/SwapView.swift` (the screen, the slippage sheet, the token picker and the history list),

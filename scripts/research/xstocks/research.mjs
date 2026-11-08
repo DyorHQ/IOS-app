@@ -1,0 +1,238 @@
+// Read-only research for xStocks through 1inch on Monad: the facts the venue waits on before anything is listed
+// (docs/swap-spec.md, "xStocks through 1inch"). Nothing here signs or sends a transaction. The 1inch key, when a command
+// needs it, is read from ONEINCH_API_KEY and never printed; RPC URLs (which can carry a provider's key) aren't either:
+// every line and file goes through `redact`, and on-chain or API text through `printable`.
+//
+//   node scripts/research/xstocks/research.mjs router [--monad-rpc URL] [--ethereum-rpc URL]
+//       R3a: the runtime code hash of the router, Aqua and SwapVM on Monad, compared with the router on Ethereum.
+//   node scripts/research/xstocks/research.mjs discover [--blocks N] [--span N] [--monad-rpc URL]
+//       R4 candidates: tokens moved through the router in the last N blocks (read SPAN blocks a request) whose name or
+//       symbol looks like an xStock. Candidates only: an address is curated from the issuer's own list, never from this.
+//   node scripts/research/xstocks/research.mjs token ADDRESS... [--monad-rpc URL]
+//       R4/R15: name, symbol, decimals, supply, EIP-1967 implementation and admin, and code hashes.
+//   node scripts/research/xstocks/research.mjs feed ADDRESS... [--monad-rpc URL]
+//       R11: a reference feed's description, decimals, latest answer and its age by the chain's clock.
+//   node scripts/research/xstocks/research.mjs tx HASH... [--monad-rpc URL]
+//       R3b: a real transaction to the router, decoded as the app decodes it, with its receipt.
+//   ONEINCH_API_KEY=… node scripts/research/xstocks/research.mjs oneinch --stock ADDRESS --from WALLET
+//         [--usdc 10,50,200] [--slippage-bps 100] [--out FILE]
+//       R1: 1inch's quote and swap answers on chain 143 for USDC -> stock and back, asked exactly as the oneinch-proxy
+//       asks, and checked as the app checks a firm quote. --out writes them as golden vectors (no key in them). Asks are
+//       spaced 1.1 s apart (1inch's free tier allows about one a second).
+//
+// Behind an HTTPS proxy, Node's fetch needs NODE_USE_ENV_PROXY=1 (Node 22.21 or later) to use it.
+import { createPublicClient, formatUnits, getAddress, http, isAddress, parseAbi, parseAbiItem } from "viem";
+import { writeFileSync } from "node:fs";
+import {
+  EIP1967, MONAD_CHAIN_ID, MONAD_USDC, ONEINCH, STOCK_SLIPPAGE_CAP_BPS, SWAP_SELECTOR, addressFromSlot, amountField, checkFirmAnswer, codeHash,
+  decodeSwap, printable, redact, slippagePercent, swapProblem, toJSON,
+} from "./lib.mjs";
+
+/** `--name value`; never takes another flag as the value. */
+function option(name, fallback) {
+  const i = process.argv.indexOf(`--${name}`);
+  const value = i > 0 ? process.argv[i + 1] : undefined;
+  return value !== undefined && !value.startsWith("--") ? value : fallback;
+}
+/** The arguments after the command that aren't flags or flag values. */
+function positional() {
+  const args = process.argv.slice(3);
+  return args.filter((a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1].startsWith("--")));
+}
+
+const MONAD_RPC = option("monad-rpc", "https://rpc.monad.xyz");
+const ETHEREUM_RPC = option("ethereum-rpc", "https://ethereum-rpc.publicnode.com");
+/** What is never printed: the 1inch key, and each RPC URL's path and query (where a provider puts its key). */
+const SECRETS = [process.env.ONEINCH_API_KEY, ...[MONAD_RPC, ETHEREUM_RPC].flatMap((url) => {
+  try { const u = new URL(url); return [`${u.pathname}${u.search}`.length > 1 ? `${u.pathname}${u.search}` : "", u.search]; } catch { return [url]; }
+})].filter(Boolean);
+const say = (line = "") => console.log(redact(printable(line), SECRETS));
+
+const monad = () => createPublicClient({ transport: http(MONAD_RPC, { timeout: 20_000, retryCount: 2 }) });
+const ethereum = () => createPublicClient({ transport: http(ETHEREUM_RPC, { timeout: 20_000, retryCount: 2 }) });
+
+const ERC20 = parseAbi([
+  "function name() view returns (string)", "function symbol() view returns (string)", "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+]);
+const FEED = parseAbi([
+  "function description() view returns (string)", "function decimals() view returns (uint8)", "function version() view returns (uint256)",
+  "function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+]);
+const TRANSFER = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
+
+/** A read's answer, or why it couldn't be read, so one bad address doesn't stop the rest. */
+async function settle(promise) {
+  try { return await promise; } catch (error) { return `unreadable (${String(error.shortMessage ?? "read failed").split("\n")[0]})`; }
+}
+const isText = (v) => typeof v === "string" && v.startsWith("unreadable");
+
+async function router() {
+  const [m, e] = [monad(), ethereum()];
+  const chain = await m.getChainId();
+  if (chain !== MONAD_CHAIN_ID) throw new Error(`the Monad RPC answers chain ${chain}, not ${MONAD_CHAIN_ID}`);
+  const ethRouter = codeHash(await e.getCode({ address: ONEINCH.router }));
+  say(`Ethereum AggregationRouterV6 ${ONEINCH.router} code hash: ${ethRouter ?? "no code"}`);
+  for (const [name, address] of Object.entries(ONEINCH)) {
+    const hash = codeHash(await m.getCode({ address }));
+    const note = name === "router" ? (hash && hash === ethRouter ? "SAME as Ethereum's router" : "DIFFERS from Ethereum's router") : "";
+    say(`Monad ${name.padEnd(12)} ${address} code hash: ${hash ?? "NO CODE"} ${note}`);
+  }
+}
+
+async function discover() {
+  const client = monad();
+  const blocks = BigInt(option("blocks", "20000"));
+  const span = BigInt(option("span", "1000"));
+  if (blocks <= 0n || span <= 0n) throw new Error("--blocks and --span must be positive");
+  const head = await client.getBlockNumber();
+  const first = head + 1n > blocks ? head + 1n - blocks : 0n;
+  const tokens = new Map();
+  for (let to = head; to >= first; to -= span) {
+    const from = to + 1n - span > first ? to + 1n - span : first;
+    for (const args of [{ from: ONEINCH.router }, { to: ONEINCH.router }]) {
+      const logs = await settle(client.getLogs({ event: TRANSFER, args, fromBlock: from, toBlock: to }));
+      if (isText(logs)) { say(`blocks ${from}-${to}: ${logs}`); continue; }
+      for (const log of logs) {
+        const address = getAddress(log.address);
+        const seen = tokens.get(address) ?? { transfers: 0, tx: log.transactionHash };
+        tokens.set(address, { transfers: seen.transfers + 1, tx: seen.tx });
+      }
+    }
+    if (from === 0n) break;
+  }
+  say(`${tokens.size} tokens moved through the router in blocks ${first}-${head}`);
+  for (const [address, { transfers, tx: sample }] of tokens) {
+    const [name, symbol] = await Promise.all([settle(client.readContract({ address, abi: ERC20, functionName: "name" })),
+      settle(client.readContract({ address, abi: ERC20, functionName: "symbol" }))]);
+    const looks = /xstock/i.test(String(name)) || /^[A-Z0-9.]{1,6}x$/.test(String(symbol));
+    // The newest transaction that moved it through the router, for `tx` (research R3b).
+    say(`${looks ? "CANDIDATE " : "          "}${address}  ${symbol}  ${name}  (${transfers} transfers, newest tx ${sample})`);
+  }
+}
+
+async function token() {
+  const client = monad();
+  for (const raw of positional()) {
+    if (!isAddress(raw, { strict: false })) { say(`${raw}: not an address`); continue; }
+    const address = getAddress(raw);
+    const read = (functionName) => settle(client.readContract({ address, abi: ERC20, functionName }));
+    const [name, symbol, decimals, supply, code, impl, admin] = await Promise.all([read("name"), read("symbol"), read("decimals"), read("totalSupply"),
+      settle(client.getCode({ address })), settle(client.getStorageAt({ address, slot: EIP1967.implementation })),
+      settle(client.getStorageAt({ address, slot: EIP1967.admin }))]);
+    const implementation = isText(impl) ? null : addressFromSlot(impl);
+    const implementationCode = implementation ? await settle(client.getCode({ address: implementation })) : null;
+    say(toJSON({
+      address, name, symbol, decimals,
+      totalSupply: typeof supply === "bigint" && typeof decimals === "number" ? formatUnits(supply, decimals) : supply,
+      codeHash: isText(code) ? code : codeHash(code), implementation,
+      implementationCodeHash: implementationCode && !isText(implementationCode) ? codeHash(implementationCode) : implementationCode,
+      admin: isText(admin) ? admin : addressFromSlot(admin),
+    }));
+  }
+}
+
+async function feed() {
+  const client = monad();
+  const block = await client.getBlock();
+  for (const raw of positional()) {
+    if (!isAddress(raw, { strict: false })) { say(`${raw}: not an address`); continue; }
+    const address = getAddress(raw);
+    const read = (functionName) => settle(client.readContract({ address, abi: FEED, functionName }));
+    const [description, decimals, version, round] = await Promise.all([read("description"), read("decimals"), read("version"), read("latestRoundData")]);
+    const answer = Array.isArray(round) && typeof decimals === "number" ? formatUnits(round[1], decimals) : round;
+    const age = Array.isArray(round) ? `${block.timestamp - round[3]} s` : "unknown";
+    say(toJSON({ address, description, decimals, version, answer, updatedAgo: age, roundId: Array.isArray(round) ? round[0] : null }));
+  }
+}
+
+async function tx() {
+  const client = monad();
+  for (const hash of positional()) {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) { say(`${hash}: not a transaction hash`); continue; }
+    const [transaction, receipt] = await Promise.all([settle(client.getTransaction({ hash })), settle(client.getTransactionReceipt({ hash }))]);
+    if (isText(transaction)) { say(`${hash}: ${transaction}`); continue; }
+    const toRouter = transaction.to && getAddress(transaction.to) === getAddress(ONEINCH.router);
+    const selector = transaction.input.slice(0, 10);
+    const swap = toRouter ? decodeSwap(transaction.input) : null;
+    say(toJSON({
+      hash, from: transaction.from, to: transaction.to, value: transaction.value,
+      status: isText(receipt) ? receipt : receipt.status, block: isText(receipt) ? null : receipt.blockNumber, gasUsed: isText(receipt) ? null : receipt.gasUsed,
+      selector, selectorIsGenericSwap: selector === SWAP_SELECTOR, readsAsAppSwap: swap !== null,
+      problem: swap ? swapProblem(swap, { account: transaction.from, value: transaction.value }) : null,
+      swap, logs: isText(receipt) ? null : receipt.logs.length,
+      logEmitters: isText(receipt) ? null : [...new Set(receipt.logs.map((l) => getAddress(l.address)))],
+    }));
+  }
+}
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function oneinch() {
+  const key = process.env.ONEINCH_API_KEY;
+  if (!key) throw new Error("set ONEINCH_API_KEY (it is never printed)");
+  if (key.length < 8) throw new Error("ONEINCH_API_KEY is too short to be a key (and too short to redact safely)");
+  const stockArg = option("stock", "");
+  const fromArg = option("from", "");
+  if (!isAddress(stockArg, { strict: false }) || !isAddress(fromArg, { strict: false })) throw new Error("--stock and --from must be addresses");
+  const stock = getAddress(stockArg);
+  const from = getAddress(fromArg);
+  const bps = Number(option("slippage-bps", String(STOCK_SLIPPAGE_CAP_BPS)));
+  const slippage = slippagePercent(bps);
+  const sizes = option("usdc", "10,50,200").split(",").map((s) => {
+    const n = Number(s);
+    if (!Number.isFinite(n) || n <= 0) throw new Error(`--usdc: ${s} is not a positive amount`);
+    return BigInt(Math.round(n * 1e6));
+  });
+  const base = `https://api.1inch.dev/swap/v6.0/${MONAD_CHAIN_ID}`;
+  let asked = 0;
+  // Asked exactly as the proxy asks (supabase/functions/oneinch-proxy/request.ts, `upstreamURL`).
+  const ask = async (path, params) => {
+    if (asked++ > 0) await pause(1_100);
+    const url = `${base}/${path}?${new URLSearchParams({ ...params, includeProtocols: "true" })}`;
+    try {
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(20_000) });
+      const text = await response.text();
+      let body;
+      try { body = JSON.parse(text); } catch { body = text.slice(0, 500); }
+      return { status: response.status, path, params, body };
+    } catch (error) {
+      return { status: 0, path, params, body: `request failed: ${String(error?.message ?? error).split("\n")[0]}` };
+    }
+  };
+  const swapParams = (src, dst, amount) => ({ src, dst, amount: amount.toString(), from, origin: from, receiver: from, slippage,
+    disableEstimate: "true", allowPartialFill: "false", usePermit2: "false" });
+  const vectors = [];
+  try {
+    for (const usdc of sizes) {
+      vectors.push({ kind: "quote", direction: "buy", ...(await ask("quote", { src: MONAD_USDC, dst: stock, amount: usdc.toString() })) });
+      const buy = await ask("swap", swapParams(MONAD_USDC, stock, usdc));
+      vectors.push({ kind: "swap", direction: "buy", ...buy, check: checkFirmAnswer(buy, { tokenIn: MONAD_USDC, tokenOut: stock, amountIn: usdc }, from, bps) });
+      const shares = amountField(buy.body?.dstAmount);
+      if (shares !== null) {
+        const sell = await ask("swap", swapParams(stock, MONAD_USDC, shares));
+        vectors.push({ kind: "swap", direction: "sell", ...sell, check: checkFirmAnswer(sell, { tokenIn: stock, tokenOut: MONAD_USDC, amountIn: shares }, from, bps) });
+      }
+    }
+  } finally {
+    for (const v of vectors) say(`${v.kind} ${v.direction} ${v.params.amount}: HTTP ${v.status} ${v.check ? toJSON(v.check) : toJSON(v.body).slice(0, 400)}`);
+    const out = option("out", "");
+    if (out) {
+      writeFileSync(out, `${redact(toJSON({ chainId: MONAD_CHAIN_ID, stock, from, slippageBps: bps, vectors }), SECRETS)}\n`);
+      say(`wrote ${vectors.length} vectors to ${out}`);
+    }
+  }
+}
+
+const commands = { router, discover, token, feed, tx, oneinch };
+const command = commands[process.argv[2]];
+if (!command) {
+  console.error("usage: research.mjs router|discover|token|feed|tx|oneinch … (see the header of this file)");
+  process.exit(2);
+}
+try {
+  await command();
+} catch (error) {
+  console.error(redact(printable(`error: ${error.shortMessage ?? error.message}`), SECRETS));
+  process.exit(1);
+}
