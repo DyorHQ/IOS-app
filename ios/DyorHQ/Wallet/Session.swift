@@ -593,6 +593,8 @@ final class Session {
     }
 
     func signOut() async {
+        // The wallet's acknowledgement of the xStocks notice goes with it: signing in again asks for it again.
+        if let address { XStocksDisclosureStore.forget(address) }
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
         mera.forget()
@@ -623,6 +625,7 @@ final class Session {
         // The DyorHQ coins this device read, file and memory, before anything below: the wipe and the sign-out run with
         // no suspension between them, so no load in flight resumes for the erased wallet and writes its keys back.
         await dyorCoins?.erase()
+        if let address { XStocksDisclosureStore.forget(address) }
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
         mera.forget()

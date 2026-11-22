@@ -14,6 +14,10 @@ import Foundation
 /// discarded and the device reads the chain as it always has. The history epoch (`historyEpoch`) is no switch but a
 /// number the owner raises to drop what the server's history added to every device (`HistoryStore.apply(epoch:)`): a
 /// whole number from 0 up, anything else 0.
+///
+/// One switch is the exception to the kill-switch rule: `xStocks` is opt-in. It is on only when the row says JSON `true`
+/// for it, and off everywhere else: in `on`, for a row without it or with any other value, when the row can't be read,
+/// and before the first read. A stock buy is never offered on a typo, an outage or a default.
 public struct RemoteFlags: Equatable, Sendable {
     /// DyorHQ coins priced on their own curve or pool (`PriceService.setUsesDyorVenues`). Off, they are priced like any
     /// other token, as build 16 priced them.
@@ -35,8 +39,11 @@ public struct RemoteFlags: Equatable, Sendable {
     /// Close / Add Margin / Cancel Order go over the trading connection when one-click is live. Off (JSON `false`): they
     /// go on-chain; the order sheet is unaffected. Requests already sent keep the mode of their tap.
     public let perpsApiActions: Bool
+    /// Buying xStocks (tokenized stocks), opt-in: true only for JSON `true` (`xStocksFlag`). Off, no stock buy is offered;
+    /// the other gates still apply when on. Sells never read it.
+    public let xStocks: Bool
 
-    /// Every switch on, and the epoch 0: what the app uses until the row is read (or the last values read are restored),
+    /// Every kill switch on, the opt-in `xStocks` off, and the epoch 0: what the app uses until the row is read (or the last values read are restored),
     /// and for a row that says nothing.
     public static let on = RemoteFlags()
 
@@ -44,28 +51,37 @@ public struct RemoteFlags: Equatable, Sendable {
     public static let largestEpoch = Int(Int32.max)
 
     public init(dyorVenuePrices: Bool = true, dyorBadges: Bool = true, serverHistory: Bool = true, historyEpoch: Int = 0,
-                perpsLiveOutcome: Bool = true, perpsApiActions: Bool = true) {
+                perpsLiveOutcome: Bool = true, perpsApiActions: Bool = true, xStocks: Bool = false) {
         self.dyorVenuePrices = dyorVenuePrices
         self.dyorBadges = dyorBadges
         self.serverHistory = serverHistory
         self.historyEpoch = historyEpoch
         self.perpsLiveOutcome = perpsLiveOutcome
         self.perpsApiActions = perpsApiActions
+        self.xStocks = xStocks
     }
 
     /// The switches in PostgREST's answer to `app_config?key=eq.ios&select=value` (`[{"value": {...}}]`). Anything that
-    /// isn't that answer, or a `flags` that isn't an object, is every switch on and the epoch 0.
+    /// isn't that answer, or a `flags` that isn't an object, is every kill switch on, `xStocks` off and the epoch 0.
     public static func parse(_ data: Data) -> RemoteFlags {
         guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], rows.count == 1,
               let value = rows[0]["value"] as? [String: Any], let flags = value["flags"] as? [String: Any] else { return .on }
         return RemoteFlags(dyorVenuePrices: flag(flags["dyorVenuePrices"]), dyorBadges: flag(flags["dyorBadges"]), serverHistory: flag(flags["serverHistory"]),
                            historyEpoch: epoch(flags["historyEpoch"]),
-                           perpsLiveOutcome: flag(flags["perpsLiveOutcome"]), perpsApiActions: flag(flags["perpsApiActions"]))
+                           perpsLiveOutcome: flag(flags["perpsLiveOutcome"]), perpsApiActions: flag(flags["perpsApiActions"]),
+                           xStocks: xStocksFlag(flags["xStocks"]))
     }
 
     /// A kill switch's value: false only for JSON `false`; on for everything else.
     private static func flag(_ value: Any?) -> Bool {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return true }
+        return number.boolValue
+    }
+
+    /// The opt-in switch's value: true only for JSON `true`; off for everything else (false, a string, a number such as
+    /// 1, null, an object, left out).
+    private static func xStocksFlag(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
         return number.boolValue
     }
 
@@ -76,5 +92,24 @@ public struct RemoteFlags: Equatable, Sendable {
         let double = number.doubleValue
         guard double.isFinite, double >= 0, double <= Double(largestEpoch), double.rounded(.towardZero) == double else { return 0 }
         return Int(double)
+    }
+}
+
+/// The owner's opt-in xStocks switch (`RemoteFlags.xStocks`) as the last check that read `app_config` 'ios' found it: one
+/// Bool in UserDefaults ("xstocks.switch.v1"), never a secret. Saved each time a check reads the row
+/// (`AppEnvironment.apply`), as `PerpsSwitchStore` keeps the Perps switches; a failed check saves nothing. Nothing stored,
+/// or a value that isn't a Bool, reads as off: unlike the kill switches, this one is off until a read says JSON `true`.
+public enum XStocksSwitchStore {
+    public static let defaultsKey = "xstocks.switch.v1" // not localized: a storage key
+
+    /// The last value read on this device; false before the first check that read the row.
+    public static var last: Bool { read(from: .standard) }
+
+    public static func read(from defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: defaultsKey) as? Bool ?? false
+    }
+
+    public static func save(_ flags: RemoteFlags, defaults: UserDefaults = .standard) {
+        defaults.set(flags.xStocks, forKey: defaultsKey)
     }
 }

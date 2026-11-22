@@ -730,6 +730,35 @@
         }
       }
     },
+    "%@ from the reference price" : {
+      "comment" : "A stock swap's review, after “Price changed”: the firm price is this percentage away from the stock's reference price.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ respecto al precio de referencia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ d'écart avec le prix de référence"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기준 가격과 %@ 차이"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与参考价格相差 %@"
+          }
+        }
+      }
+    },
     "%@ graduated" : {
       "localizations" : {
         "es" : {
@@ -969,6 +998,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "剩余 %@"
+          }
+        }
+      }
+    },
+    "%@ less than the estimate" : {
+      "comment" : "A stock swap's review, after “Price changed”: the firm quote gives this percentage less than the estimate shown before.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ menos que la estimación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ de moins que l'estimation"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예상보다 %@ 적음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "比估计少 %@"
           }
         }
       }
@@ -1255,6 +1313,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "需要 %@ 或你的锁屏密码才能显示你的私钥。"
+          }
+        }
+      }
+    },
+    "%@ per %@" : {
+      "comment" : "A stock's price: a dollar amount per one stock token. The second %@ is the token's symbol.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ per %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ por %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ par %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@당 %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个 %2$@ %1$@"
           }
         }
       }
@@ -4816,6 +4909,34 @@
         }
       }
     },
+    "A firm quote lasts a few seconds. If it runs out after your swap was sent, the swap fails and you still pay its network fee." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una cotización firme dura unos segundos. Si caduca después de enviar tu intercambio, el intercambio falla y aun así pagas su comisión de red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une cotation ferme ne dure que quelques secondes. Si elle expire après l'envoi de votre échange, l'échange échoue et vous payez quand même ses frais de réseau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "확정 견적은 몇 초 동안만 유효해요. 스왑을 보낸 뒤 만료되면 스왑은 실패하고 네트워크 수수료는 그대로 내야 해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确定报价只在几秒内有效。如果在你的兑换发出后过期，兑换会失败，你仍需支付其网络费用。"
+          }
+        }
+      }
+    },
     "A high tolerance can fill at a much worse price. Use it only for volatile or thin pairs." : {
       "localizations" : {
         "es" : {
@@ -6519,6 +6640,93 @@
         }
       }
     },
+    "Approve" : {
+      "comment" : "Button: sign the approval the sheet shows (a verb)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aprobar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approuver"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "승인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "授权"
+          }
+        }
+      }
+    },
+    "Approve %@ for 1inch" : {
+      "comment" : "A step of a transaction, named by what it does (a verb). %@ is a token's symbol. 1inch is a name, never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aprobar %@ para 1inch"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approuver %@ pour 1inch"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch에 %@ 승인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向 1inch 授权 %@"
+          }
+        }
+      }
+    },
+    "Approve for 1inch" : {
+      "comment" : "The title of the sheet that approves a token for 1inch before a stock swap. 1inch is a name, never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aprobar para 1inch"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approuver pour 1inch"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1inch 승인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "授权给 1inch"
+          }
+        }
+      }
+    },
     "Arrived" : {
       "comment" : "A bridge's status: the funds arrived [tight]",
       "localizations" : {
@@ -7181,6 +7389,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "成为第一人：发布一张照片或一段视频，让它永久留存。"
+          }
+        }
+      }
+    },
+    "Before your first buy of xStocks (tokenized stocks), read how they work in DyorHQ. No price is asked for until you do." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antes de tu primera compra de xStocks (acciones tokenizadas), lee cómo funcionan en DyorHQ. No se pide ningún precio hasta que lo hagas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avant votre premier achat de xStocks (actions tokenisées), lisez comment ils fonctionnent dans DyorHQ. Aucun prix n'est demandé avant."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks(토큰화 주식)를 처음 구매하기 전에 DyorHQ에서 어떻게 작동하는지 읽어 주세요. 읽기 전에는 가격을 요청하지 않아요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "首次购买 xStocks（代币化股票）前，请先阅读它们在 DyorHQ 中的运作方式。在你阅读之前不会请求任何报价。"
           }
         }
       }
@@ -15731,6 +15967,34 @@
         }
       }
     },
+    "Each trade is a firm quote from the issuer through 1inch, and the issuer may refuse any trade." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada operación es una cotización firme del emisor a través de 1inch, y el emisor puede rechazar cualquier operación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaque transaction est une cotation ferme de l'émetteur via 1inch, et l'émetteur peut refuser n'importe quelle transaction."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 거래는 1inch를 통한 발행사의 확정 견적이며, 발행사는 어떤 거래든 거절할 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每笔交易都是发行方通过 1inch 给出的确定报价，发行方可以拒绝任何交易。"
+          }
+        }
+      }
+    },
     "Earlier DyorHQ Moments contracts. Collecting is closed; claim your vested coins and, as a creator, withdraw your own proceeds." : {
       "localizations" : {
         "es" : {
@@ -18499,6 +18763,34 @@
         }
       }
     },
+    "Get a new quote" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtener una nueva cotización"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtenir une nouvelle cotation"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 견적 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获取新的报价"
+          }
+        }
+      }
+    },
     "Get a quote first." : {
       "localizations" : {
         "es" : {
@@ -19783,6 +20075,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在你的兑换结算前价格允许变动的幅度。超出此幅度时，兑换会取消，而不会以更差的价格成交。"
+          }
+        }
+      }
+    },
+    "I Understand" : {
+      "comment" : "Acknowledges the xStocks notice.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entendido"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "J'ai compris"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이해했어요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我已了解"
           }
         }
       }
@@ -27273,6 +27594,35 @@
         }
       }
     },
+    "Not Now" : {
+      "comment" : "Closes the xStocks notice without acknowledging it.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ahora no"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plus tard"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "나중에"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以后再说"
+          }
+        }
+      }
+    },
     "Not a DyorHQ launch" : {
       "localizations" : {
         "es" : {
@@ -28689,6 +29039,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "只能将它们输入你信任的钱包（MetaMask、Rabby、OKX…）。硬件钱包最安全。"
+          }
+        }
+      }
+    },
+    "Only the approval above was sent. Get a new quote to finish the swap." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo se envió la aprobación de arriba. Obtén una nueva cotización para terminar el intercambio."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seule l'approbation ci-dessus a été envoyée. Obtenez une nouvelle cotation pour terminer l'échange."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "위의 승인만 전송되었습니다. 스왑을 마치려면 새 견적을 받으십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只发送了上面的授权。获取新的报价以完成兑换。"
           }
         }
       }
@@ -33345,6 +33723,35 @@
         }
       }
     },
+    "Price changed" : {
+      "comment" : "A stock swap's review: the firm price differs from the estimate or from the reference price (a label).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El precio cambió"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le prix a changé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가격 변동"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格已变动"
+          }
+        }
+      }
+    },
     "Price check" : {
       "localizations" : {
         "es" : {
@@ -34101,6 +34508,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "时间范围"
+          }
+        }
+      }
+    },
+    "Read Before Buying" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leer antes de comprar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lire avant d'acheter"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "구매 전에 읽기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "购买前阅读"
           }
         }
       }
@@ -34894,6 +35329,35 @@
         }
       }
     },
+    "Reference price" : {
+      "comment" : "A stock swap's review: the stock's independent on-chain reference price (a label).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Precio de referencia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prix de référence"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "기준 가격"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "参考价格"
+          }
+        }
+      }
+    },
     "Refreshing…" : {
       "localizations" : {
         "es" : {
@@ -35227,6 +35691,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "替换钱包"
+          }
+        }
+      }
+    },
+    "Replaces your earlier approval to %@" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reemplaza tu aprobación anterior a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remplace votre approbation précédente pour %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@에 대한 기존 승인을 대체"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换你之前对 %@ 的授权"
           }
         }
       }
@@ -36655,6 +37147,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在曲线上卖出"
+          }
+        }
+      }
+    },
+    "Selling xStocks in DyorHQ can be paused at any time. They stay in your wallet: you can always send them to another wallet or export your wallet." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La venta de xStocks en DyorHQ puede pausarse en cualquier momento. Siguen en tu billetera: siempre puedes enviarlos a otra billetera o exportar tu billetera."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La vente de xStocks dans DyorHQ peut être suspendue à tout moment. Ils restent dans votre portefeuille : vous pouvez toujours les envoyer vers un autre portefeuille ou exporter votre portefeuille."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ에서 xStocks 판매는 언제든 일시 중지될 수 있어요. 토큰은 지갑에 그대로 있으니 언제든 다른 지갑으로 보내거나 지갑을 내보낼 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 DyorHQ 中出售 xStocks 可能随时暂停。它们仍在你的钱包中：你随时可以把它们发送到另一个钱包，或导出你的钱包。"
           }
         }
       }
@@ -39257,6 +39777,35 @@
         }
       }
     },
+    "Spender" : {
+      "comment" : "The approval sheet: who the approval lets spend the token (a venue's name follows).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autorizado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bénéficiaire"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사용 권한 대상"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "被授权方"
+          }
+        }
+      }
+    },
     "Spends" : {
       "comment" : "Review row: what the buyback spends its budget on",
       "localizations" : {
@@ -39508,6 +40057,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "状态"
+          }
+        }
+      }
+    },
+    "Step 1 of 2. This approves exactly this amount for 1inch. Once it confirms, DyorHQ gets a firm quote from the issuer for you to review." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paso 1 de 2. Esto aprueba exactamente esta cantidad para 1inch. Cuando se confirme, DyorHQ obtendrá una cotización firme del emisor para que la revises."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Étape 1 sur 2. Ceci approuve exactement ce montant pour 1inch. Une fois confirmé, DyorHQ obtient une cotation ferme de l'émetteur que vous pourrez vérifier."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1/2단계. 1inch에 정확히 이 금액만 승인해요. 승인이 확인되면 DyorHQ가 발행사에서 확정 견적을 받아 검토할 수 있게 보여 드려요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 1 步，共 2 步。此操作只向 1inch 授权这一确切数量。确认后，DyorHQ 会从发行方获取确定报价供你确认。"
           }
         }
       }
@@ -44161,6 +44738,34 @@
         }
       }
     },
+    "They aren't offered to US persons or to people in other restricted jurisdictions. Don't buy them if that includes you." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ofrecen a personas estadounidenses ni a personas de otras jurisdicciones restringidas. No los compres si eso te incluye."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ils ne sont pas proposés aux personnes américaines (US persons) ni aux personnes d'autres juridictions soumises à restrictions. Ne les achetez pas si c'est votre cas."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미국인(US person)이나 기타 제한된 관할권에 있는 사람에게는 제공되지 않아요. 여기에 해당한다면 구매하지 마세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它们不向美国人士或其他受限司法管辖区的人士提供。如果你属于其中之一，请勿购买。"
+          }
+        }
+      }
+    },
     "This Moment was published on an earlier DyorHQ Moments contract whose fee wallets have been retired. You can claim your vested coins and, as its creator, withdraw your own proceeds and pool fees; collecting, trading and every other action are closed in the app." : {
       "localizations" : {
         "es" : {
@@ -44641,6 +45246,34 @@
         }
       }
     },
+    "This is a firm quote from the issuer, and it lasts a few seconds. If it runs out before you confirm, get a new quote. If it runs out after the swap was sent, the swap fails and you pay only its network fee." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta es una cotización firme del emisor y dura unos segundos. Si caduca antes de que confirmes, obtén una nueva cotización. Si caduca después de enviar el intercambio, el intercambio falla y solo pagas su comisión de red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ceci est une cotation ferme de l'émetteur, valable quelques secondes. Si elle expire avant votre confirmation, obtenez une nouvelle cotation. Si elle expire après l'envoi de l'échange, l'échange échoue et vous ne payez que ses frais de réseau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "발행사의 확정 견적이며 몇 초 동안만 유효해요. 확인하기 전에 만료되면 새 견적을 받으세요. 스왑을 보낸 뒤 만료되면 스왑은 실패하고 네트워크 수수료만 내요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这是发行方的确定报价，只在几秒内有效。如果在你确认前过期，请获取新的报价。如果在兑换发出后过期，兑换会失败，你只需支付其网络费用。"
+          }
+        }
+      }
+    },
     "This is the key for %@. Treat it like the keys to a safe." : {
       "localizations" : {
         "es" : {
@@ -45013,6 +45646,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此密码包含标准键盘以外的字符，例如弯引号、长破折号或重音符号。只有以完全相同的方式输入，它才能打开你的钱包，因此要确保你能在每台将使用的设备上输入它。"
+          }
+        }
+      }
+    },
+    "This plan approves exactly what this swap needs instead." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En su lugar, este plan aprueba exactamente lo que necesita este intercambio."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce plan approuve à la place exactement le montant dont cet échange a besoin."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이번 계획은 대신 이 스왑에 필요한 만큼만 정확히 승인해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本计划改为只授权这笔兑换恰好所需的数量。"
           }
         }
       }
@@ -55002,6 +55663,63 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全部"
+          }
+        }
+      }
+    },
+    "xStocks (tokenized stocks)" : {
+      "comment" : "The title of the notice shown before a first stock buy. xStocks is a product name, never translated; the words in parentheses are.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks (acciones tokenizadas)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks (actions tokenisées)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks(토큰화 주식)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks（代币化股票）"
+          }
+        }
+      }
+    },
+    "xStocks (tokenized stocks) are tokens that follow the price of a stock. A third party issues them, not DyorHQ, and they aren't the stock itself." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los xStocks (acciones tokenizadas) son tokens que siguen el precio de una acción. Los emite un tercero, no DyorHQ, y no son la acción en sí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les xStocks (actions tokenisées) sont des jetons qui suivent le cours d'une action. Ils sont émis par un tiers, pas par DyorHQ, et ne sont pas l'action elle-même."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks(토큰화 주식)는 주식 가격을 따라가는 토큰이에요. DyorHQ가 아닌 제3자가 발행하며, 주식 그 자체가 아니에요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "xStocks（代币化股票）是跟踪某只股票价格的代币。它们由第三方发行，而不是 DyorHQ，并且不是股票本身。"
           }
         }
       }

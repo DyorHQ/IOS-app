@@ -978,6 +978,9 @@ public enum TransactionError: Error, LocalizedError {
     /// Signed and handed to the network, but no endpoint's answer arrived to say it was taken: it may be live. Follow
     /// this hash; never sign a replacement for it.
     case possiblySent(Data)
+    /// A step with a deadline (a firm quote's, `TransactionStep.notAfter`) ran out of time before it was signed, so it
+    /// was neither signed nor sent. Steps before it may have been.
+    case quoteExpired
 
     /// Sent — or possibly sent — with no confirmation seen, in the app's language.
     public static var unconfirmed: String { L10n.tr("Sent — confirmation not seen yet. Check it before trying again.") }
@@ -987,6 +990,7 @@ public enum TransactionError: Error, LocalizedError {
         case .timedOut, .possiblySent: return Self.unconfirmed
         case .reverted: return L10n.tr("The transaction was mined but reverted.")
         case .rejected(let reason): return reason
+        case .quoteExpired: return L10n.tr("The quote expired before the swap was signed, so the swap wasn't sent. Get a new quote and try again.")
         }
     }
 
@@ -994,7 +998,7 @@ public enum TransactionError: Error, LocalizedError {
     public var hash: Data? {
         switch self {
         case .timedOut(let hash), .reverted(let hash), .possiblySent(let hash): return hash
-        case .rejected: return nil
+        case .rejected, .quoteExpired: return nil
         }
     }
 }

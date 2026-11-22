@@ -18,6 +18,15 @@ struct SwapView: View {
     @State private var historyWindow: SwapHistoryService.Window = .day
     @State private var swapHistory: [SwapHistoryItem] = []
     @State private var loadingHistory = false
+    /// A stock trade's own sheets (`StockSheet`): the xStocks notice, the approval before a firm quote, and the firm
+    /// quote's review. Every other pair is reviewed through `reviewing`, as before.
+    @State private var stockSheet: StockSheet?
+    /// The stock trade whose approval confirmed in its sheet: its firm quote is fetched once that sheet has closed.
+    @State private var approvedStock: StockTrade?
+    /// The router's allowance or a firm quote is being read: Review is off meanwhile, so one tap sends one request.
+    @State private var fetchingFirm = false
+    /// Why the last stock Review stopped before its sheet opened; cleared when anything on screen changes.
+    @State private var stockError: String?
 
     var body: some View {
         NavigationStack {
@@ -26,6 +35,7 @@ struct SwapView: View {
                 flipRow
                 receiveSection
                 actionSection
+                stockSection
                 curveSection
                 quotesSection
                 activitySection
@@ -54,6 +64,7 @@ struct SwapView: View {
                 }
             }
             .sheet(item: $reviewing) { review in confirmation(review) }
+            .sheet(item: $stockSheet, onDismiss: fetchFirmAfterApproval) { sheet in stockSheetView(sheet) }
             .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
             .task(id: session.address) {
                 model.account = session.address
@@ -63,6 +74,7 @@ struct SwapView: View {
                 await prepared
             }
             .task(id: model.quoteKey) { await model.quote(env: env, account: model.account) }
+            .onChange(of: model.quoteKey) { _, _ in stockError = nil }
             .onChange(of: router.pendingSwap?.tokenOut) { _, _ in applyPending() }
             .onAppear { applyPending() }
         }
@@ -194,9 +206,19 @@ struct SwapView: View {
         Section {
             // Disabled while the balance can't cover the input: the title says why. A watched address can't sign, so
             // it can't review one either: its quotes still show, and the footer says why, as on the Launch page.
-            PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient || !session.canSign) { reviewing = model.review }
+            if env.swap.stockPair(model.tokenIn, model.tokenOut) == nil {
+                PrimaryButton(title: model.actionTitle, isBusy: false, isDisabled: model.selectedQuote == nil || model.insufficient || !session.canSign) { reviewing = model.review }
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            } else {
+                // A stock trade: the quote shown is an estimate, so Review gets a firm one first (`reviewStock`) and is
+                // off while it does.
+                PrimaryButton(title: model.actionTitle, isBusy: fetchingFirm, isDisabled: fetchingFirm || model.selectedQuote == nil || model.insufficient || !session.canSign) {
+                    reviewStock()
+                }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+            }
         } footer: {
             if !session.canSign { Text("Sign in to trade.").frame(maxWidth: .infinity) }
         }
@@ -245,6 +267,22 @@ struct SwapView: View {
         }
     }
 
+    /// A stock buy waits for this wallet to read the xStocks notice (`SwapModel.disclosureWallet`): no price is asked for
+    /// until it is acknowledged. A stock Review that stopped before its sheet opened says why here.
+    @ViewBuilder private var stockSection: some View {
+        if let wallet = model.disclosureWallet {
+            Section {
+                Paragraph("Before your first buy of xStocks (tokenized stocks), read how they work in DyorHQ. No price is asked for until you do.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button("Read Before Buying", systemImage: "doc.text") { stockSheet = StockSheet(.disclosure(wallet)) }
+            }
+        }
+        if let stockError {
+            Section { InlineError(message: stockError) }.listRowBackground(Color.clear)
+        }
+    }
+
     /// Swap's "no venue" state when a side is still on a launchpad's bonding curve (the live launchpad's or a retired
     /// one's): no venue routes a curve, so rather than a dead end it says where the coin trades and opens its Launch page
     /// (by reference when its launch couldn't be read), or, when the check failed, offers to check again or the Launch
@@ -275,7 +313,10 @@ struct SwapView: View {
                                     Text(quote.venue.displayName).font(.headline)
                                     // Best of every venue only once they all answered: until then it is the best so far.
                                     if result.isFinal, quote.venue == result.quotes.first?.venue {
-                                        Text("Best", comment: "Badge on the venue with the best quote [tight]").font(.caption.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.positive.opacity(0.15), in: Capsule()).foregroundStyle(Color.positive)
+                                        // A stock pair has one venue, 1inch: there is nothing for it to be the best of.
+                                        if quote.venue != .oneInch {
+                                            Text("Best", comment: "Badge on the venue with the best quote [tight]").font(.caption.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.positive.opacity(0.15), in: Capsule()).foregroundStyle(Color.positive)
+                                        }
                                     }
                                 }
                                 Text(quote.route).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
@@ -346,7 +387,7 @@ struct SwapView: View {
         .accessibilityHint("Choose a different token")
     }
 
-    private func confirmation(_ review: SwapReview) -> some View {
+    private func confirmation(_ review: SwapReview, mayStart: (() async -> StartRefusal?)? = nil) -> some View {
         SwapConfirmation(review: review, onDone: {
             model.amountText = ""
             Task { await model.refreshBalances(env: env, address: session.address) }
@@ -366,7 +407,107 @@ struct SwapView: View {
             if settings.notificationsEnabled, settings.notifyFills {
                 Notifications.swapped(review.amountIn, review.tokenIn, review.quote.amountOut, review.tokenOut)
             }
-        })
+        }, mayStart: mayStart)
+    }
+
+    // MARK: Stock trades
+
+    /// Review for a stock trade (`SwapEngine.stockPair`). The quote on screen is only an estimate
+    /// (`VenueQuote.firmness`), so nothing is reviewed or signed from it. When the 1inch router's allowance isn't exactly
+    /// the amount, an approval of exactly it is signed first, in a sheet of its own, and the firm quote is fetched once
+    /// that has confirmed and closed (`fetchFirmAfterApproval`), so the firm quote's few seconds aren't spent on the
+    /// approval; otherwise the firm quote is fetched now (`openFirmQuote`). Review is off from the tap until a sheet opens
+    /// or the reason it can't is shown.
+    private func reviewStock() {
+        guard !fetchingFirm, let estimate = model.selectedQuote, let account = session.address,
+              let trade = model.stockTrade(estimate: estimate, account: account, env: env) else { return }
+        fetchingFirm = true
+        stockError = nil
+        Task {
+            defer { fetchingFirm = false }
+            do {
+                let exact = try await env.swap.routerAllowanceIsExact(token: trade.request.tokenIn.address, amount: trade.request.amountIn, owner: account)
+                if exact {
+                    try await openFirmQuote(trade)
+                } else {
+                    stockSheet = StockSheet(.approval(trade))
+                }
+            } catch {
+                stockError = describe(error)
+            }
+        }
+    }
+
+    /// Once a stock sheet has closed: the firm quote of the trade whose approval confirmed in it, while the form still
+    /// shows that trade. Any other sheet closing does nothing.
+    private func fetchFirmAfterApproval() {
+        guard let trade = approvedStock else { return }
+        approvedStock = nil
+        guard trade.quoteKey == model.quoteKey, !fetchingFirm else { return }
+        fetchingFirm = true
+        Task {
+            defer { fetchingFirm = false }
+            do {
+                try await openFirmQuote(trade)
+            } catch {
+                stockError = describe(error)
+            }
+        }
+    }
+
+    /// Fetches `trade`'s firm quote and opens its review, built from that quote alone (`StockTrade.review`). The server's
+    /// status is read again first, and the stock's reference price, which the review shows beside the price: neither
+    /// counts against the quote's few seconds, which start when its request is sent.
+    private func openFirmQuote(_ trade: StockTrade) async throws {
+        try? await env.swap.refreshXStocksStatus(for: trade.request.account, maxAge: .zero)
+        let reference = try? await env.swap.referencePrice(for: trade.stock.address)
+        guard let firm = try await env.swap.firmQuote(for: trade.request) else { throw OneInchError.unavailable }
+        stockSheet = StockSheet(.review(trade.review(firm: firm, reference: reference, receivePrice: model.prices[trade.request.tokenOut.address]?.usd)))
+    }
+
+    @ViewBuilder private func stockSheetView(_ sheet: StockSheet) -> some View {
+        switch sheet.kind {
+        case .disclosure(let wallet): XStocksDisclosureSheet(wallet: wallet)
+        case .approval(let trade): approvalSheet(trade)
+        case .review(let review): confirmation(review, mayStart: stockMayStart(review))
+        }
+    }
+
+    /// The first of a stock trade's two sheets, when the router's allowance isn't exactly the amount: an approval of
+    /// exactly the amount to the 1inch router, and nothing else. Its passkey intent is the stock swap it is for (venue
+    /// 1inch), which always asks for Face ID. Once it has confirmed, closing it fetches the firm quote
+    /// (`fetchFirmAfterApproval`).
+    private func approvalSheet(_ trade: StockTrade) -> some View {
+        let request = trade.request
+        let token = request.tokenIn
+        return ConfirmationSheet(title: "Approve for 1inch", confirmTitle: LocalizedStringResource("Approve", comment: "Button: sign the approval the sheet shows (a verb)"), build: {
+            [.approve(token: token.address, spender: OneInch.router, amount: request.amountIn, label: tr("Approve \(token.symbol) for 1inch"))]
+        }, onDone: {}, onCompleted: { _ in approvedStock = trade },
+           intent: .swap(venue: .oneInch, pay: .init(token: token.address, amount: request.amountIn),
+                         receive: .init(token: request.tokenOut.address, amount: trade.estimate.amountOut), usd: trade.payUSD)) {
+            DetailRow("Amount", verbatim: "\(NumberStyle.units(request.amountIn, decimals: token.decimals)) \(token.symbol)")
+            DetailRow("Spender", Venue.oneInch.displayName)
+            Paragraph("Step 1 of 2. This approves exactly this amount for 1inch. Once it confirms, DyorHQ gets a firm quote from the issuer for you to review.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The stock review's last check before its plan starts (`ConfirmationSheet.mayStart`): the trade must still be open
+    /// to the wallet as the app knows it now (`XStocksAvailability`: for a buy the owner's switch, the server's mode and the
+    /// notice; for a sell the mode), and the firm quote must have more than `OneInch.startMargin` left, else the sheet
+    /// offers a new quote.
+    private func stockMayStart(_ review: SwapReview) -> () async -> StartRefusal? {
+        { [swap = env.swap] in
+            guard let terms = review.stock else { return nil }
+            let availability = await swap.xStocksAvailability(for: terms.account)
+            if terms.isBuy, !availability.canBuy { return StartRefusal(XStockRefusal.buyingClosed.message) }
+            if !terms.isBuy, !availability.canSell { return StartRefusal(XStockRefusal.sellingClosed.message) }
+            if let deadline = review.quote.deadline, deadline - ContinuousClock.now < OneInch.startMargin {
+                return StartRefusal(TransactionError.quoteExpired.localizedDescription, hint: .newQuote)
+            }
+            return nil
+        }
     }
 
     private func applyPending() {
@@ -392,6 +533,105 @@ struct SwapReview: Identifiable {
     let slippageBps: Int
     let payUSD: Double?
     let receiveUSD: Double?
+    /// A stock trade's own terms, from its firm quote (`StockTrade.review`); nil for every other pair.
+    var stock: StockTerms? = nil
+}
+
+/// What a stock trade's review shows beyond any swap's (`SwapReview.stock`), worked out from its firm quote.
+struct StockTerms {
+    /// The wallet the firm quote was made for.
+    let account: Address
+    let stock: Token
+    /// The stock is what is received.
+    let isBuy: Bool
+    /// The firm price, in dollars per stock (USDC counted as one dollar); nil when the stock side is zero.
+    let price: Double?
+    /// The stock's reference price (`XStockReference`), nil when it couldn't be read for showing.
+    let referencePrice: Double?
+    /// How much less the firm quote gives than the estimate shown before Review, in basis points; nil when not less.
+    let belowEstimateBps: Int?
+    /// How far the firm price is from the reference price, in basis points either way (`XStockPriceBand.deviationBps`).
+    let referenceDeviationBps: Int?
+}
+
+/// A stock trade as Review was tapped for it (`SwapEngine.stockPair`): the request, frozen with the estimate then on
+/// screen, for the approval sheet and the firm quote.
+struct StockTrade {
+    let request: SwapRequest
+    let stock: Token
+    let isBuy: Bool
+    /// The indicative quote shown when Review was tapped: only compared with the firm one ("Price changed").
+    let estimate: VenueQuote
+    let payUSD: Double?
+    /// The form's `SwapModel.quoteKey` when Review was tapped.
+    let quoteKey: String
+
+    /// The review of `firm`, built from it alone: what is received, the minimum, the route and the deadline are the firm
+    /// quote's; the estimate only says whether the price changed, and `reference` (the stock's reference price) is shown
+    /// beside the firm price. The slippage shown is the one the firm quote was made with (`OneInch.stockSlippageCapBps`).
+    func review(firm: VenueQuote, reference: XStockReference.Snapshot?, receivePrice: Double?) -> SwapReview {
+        let usdc = isBuy ? request.amountIn : firm.amountOut
+        let shares = isBuy ? firm.amountOut : request.amountIn
+        let units = Amount.units(shares, decimals: stock.decimals)
+        let price = units > 0 ? Amount.units(usdc, decimals: Token.usdc.decimals) / units : nil
+        let below = estimate.amountOut > firm.amountOut ? Int((estimate.amountOut - firm.amountOut) * 10_000 / estimate.amountOut) : nil
+        let deviation = reference.flatMap { XStockPriceBand.deviationBps(stock: shares, usdc: usdc, reference: $0) }
+        let terms = StockTerms(account: request.account, stock: stock, isBuy: isBuy, price: price, referencePrice: reference?.usd,
+                               belowEstimateBps: below, referenceDeviationBps: deviation)
+        return SwapReview(quote: firm, tokenIn: request.tokenIn, tokenOut: request.tokenOut, amountIn: request.amountIn,
+                          slippageBps: min(max(0, request.slippageBps), OneInch.stockSlippageCapBps), payUSD: payUSD,
+                          receiveUSD: receivePrice.map { Amount.units(firm.amountOut, decimals: request.tokenOut.decimals) * $0 }, stock: terms)
+    }
+}
+
+/// A stock trade's sheet (`SwapView.stockSheet`).
+struct StockSheet: Identifiable {
+    enum Kind {
+        /// The xStocks notice, for this wallet.
+        case disclosure(Address)
+        /// The exact approval of the 1inch router, before the firm quote.
+        case approval(StockTrade)
+        /// The firm quote's review.
+        case review(SwapReview)
+    }
+
+    let id = UUID()
+    let kind: Kind
+
+    init(_ kind: Kind) { self.kind = kind }
+}
+
+/// The xStocks notice, shown before a wallet's first stock buy (`SwapModel.disclosureWallet`) and acknowledged once per
+/// wallet and version (`XStocksDisclosureStore`); signing out forgets it. Selling never needs it.
+private struct XStocksDisclosureSheet: View {
+    let wallet: Address
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Paragraph("xStocks (tokenized stocks) are tokens that follow the price of a stock. A third party issues them, not DyorHQ, and they aren't the stock itself.")
+                    Paragraph("They aren't offered to US persons or to people in other restricted jurisdictions. Don't buy them if that includes you.")
+                    Paragraph("Each trade is a firm quote from the issuer through 1inch, and the issuer may refuse any trade.")
+                    Paragraph("A firm quote lasts a few seconds. If it runs out after your swap was sent, the swap fails and you still pay its network fee.")
+                    Paragraph("Selling xStocks in DyorHQ can be paused at any time. They stay in your wallet: you can always send them to another wallet or export your wallet.")
+                }
+                .font(.subheadline)
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle(tr("xStocks (tokenized stocks)"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Not Now") { dismiss() } } }
+            .safeAreaInset(edge: .bottom) {
+                PrimaryButton(title: "I Understand", systemImage: "checkmark") {
+                    XStocksDisclosureStore.acknowledge(wallet)
+                    dismiss()
+                }
+                .padding()
+            }
+        }
+    }
 }
 
 /// Builds the plan for the reviewed quote, then hands it to the shared confirmation sheet.
@@ -399,6 +639,8 @@ private struct SwapConfirmation: View {
     let review: SwapReview
     let onDone: () -> Void
     var onCompleted: ((Data) -> Void)? = nil
+    /// A stock trade's last check before its plan starts (`ConfirmationSheet.mayStart`); nil for every other pair.
+    var mayStart: (() async -> StartRefusal?)? = nil
     @Environment(Session.self) private var session
 
     var body: some View {
@@ -406,13 +648,37 @@ private struct SwapConfirmation: View {
         ConfirmationSheet(title: "Review Swap", confirmTitle: LocalizedStringResource("Swap", comment: "Button: make the swap the review shows (a verb)"), build: {
             guard let address = session.address else { throw SessionError.readOnly }
             return try await quote.build(address)
-        }, onDone: onDone, onCompleted: onCompleted, intent: intent) {
+        }, onDone: onDone, onCompleted: onCompleted, intent: intent, mayStart: mayStart) {
             DetailRow("You pay", verbatim: "\(NumberStyle.units(review.amountIn, decimals: review.tokenIn.decimals)) \(review.tokenIn.symbol)")
             DetailRow("You receive", verbatim: "\(NumberStyle.units(quote.amountOut, decimals: review.tokenOut.decimals)) \(review.tokenOut.symbol)")
             DetailRow("Minimum received", verbatim: "\(NumberStyle.units(quote.minOut, decimals: review.tokenOut.decimals)) \(review.tokenOut.symbol)")
+            if let stock = review.stock { stockRows(stock) }
             DetailRow("Venue", quote.venue.displayName)
-            DetailRow("Route", quote.route)
+            // A stock trade's route is DyorHQ's own constant line, never text from 1inch or the proxy.
+            DetailRow("Route", quote.venue == .oneInch ? SwapEngine.oneInchRoute : quote.route)
             DetailRow("Slippage", NumberStyle.basisPoints(review.slippageBps))
+            if review.stock != nil {
+                Paragraph("This is a firm quote from the issuer, and it lasts a few seconds. If it runs out before you confirm, get a new quote. If it runs out after the swap was sent, the swap fails and you pay only its network fee.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// A stock trade's price rows: "Price changed" when the firm quote gives more than `OneInch.priceChangedBps` less
+    /// than the estimate shown before Review, or is more than `OneInch.priceWarningBps` from the reference price (it is
+    /// never more than `OneInch.priceBandBps` from it: such a quote is refused); then the firm price and the reference.
+    @ViewBuilder private func stockRows(_ stock: StockTerms) -> some View {
+        if let below = stock.belowEstimateBps, below > OneInch.priceChangedBps {
+            DetailRow(Text("Price changed"), Text("\(NumberStyle.basisPoints(below)) less than the estimate"), tint: .attention)
+        } else if let off = stock.referenceDeviationBps, abs(off) > OneInch.priceWarningBps {
+            DetailRow(Text("Price changed"), Text("\(NumberStyle.basisPoints(abs(off))) from the reference price"), tint: .attention)
+        }
+        if let price = stock.price {
+            DetailRow(Text("Price"), Text("\(PriceFormat.usdPrice(price)) per \(stock.stock.symbol)"))
+        }
+        if let reference = stock.referencePrice {
+            DetailRow(Text("Reference price"), Text("\(PriceFormat.usdPrice(reference)) per \(stock.stock.symbol)"))
         }
     }
 
@@ -458,6 +724,9 @@ final class SwapModel {
     /// back the "no venue" answer, so for a moment `curve` may still answer an earlier key (kept out of sight).
     private(set) var curveKey: String?
     private(set) var checkingCurve = false
+    /// A stock buy waiting for its wallet to acknowledge the xStocks notice, with the `quoteKey` it waits on
+    /// (`prepareStock`).
+    private var disclosure: (round: String, wallet: Address)?
 
     var amountIn: BigUInt { Amount.parse(amountText, decimals: tokenIn.decimals) ?? 0 }
     var quoteKey: String { "\(tokenIn.address.hex)-\(tokenOut.address.hex)-\(amountIn)-\(slippageBps)-\(account?.hex ?? "")" }
@@ -501,6 +770,8 @@ final class SwapModel {
         guard let shown = shownQuote, let best = currentResult?.quotes.first else { return false }
         return shown.venue == best.venue
     }
+    /// The wallet whose stock buy on screen waits for it to read the xStocks notice; nil otherwise.
+    var disclosureWallet: Address? { disclosure?.round == quoteKey ? disclosure?.wallet : nil }
     /// What the review sheet shows and signs, frozen when Review is tapped (nil without a final quote).
     var review: SwapReview? {
         guard let quote = selectedQuote else { return nil }
@@ -519,6 +790,14 @@ final class SwapModel {
         if insufficient { return tr("Insufficient \(tokenIn.symbol)") }
         if SwapEngine.isWrap(tokenIn, tokenOut) { return tokenIn.isNative ? tr("Wrap MON") : tr("Unwrap WMON") }
         return tr("Review Swap")
+    }
+
+    /// The stock trade on screen, for Review (`SwapView.reviewStock`), with `estimate`, the quote it shows; nil for any
+    /// other pair, and for a wallet other than the one the quotes were asked for.
+    func stockTrade(estimate: VenueQuote, account: Address, env: AppEnvironment) -> StockTrade? {
+        guard account == self.account, let pair = env.swap.stockPair(tokenIn, tokenOut) else { return nil }
+        let request = SwapRequest(tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amountIn, slippageBps: slippageBps, account: account, exactApprovals: true)
+        return StockTrade(request: request, stock: pair.stock, isBuy: pair.isBuy, estimate: estimate, payUSD: payUSD, quoteKey: quoteKey)
     }
 
     /// The person picked `venue` (a venue row tapped): it stays selected until a final answer doesn't quote it.
@@ -628,6 +907,10 @@ final class SwapModel {
         try? await Task.sleep(for: .milliseconds(400))
         if Task.isCancelled { return }
         while !Task.isCancelled {
+            // A stock pair's own checks come before anything is asked for it (`prepareStock`).
+            if let pair = env.swap.stockPair(tokenIn, tokenOut) {
+                guard await prepareStock(isBuy: pair.isBuy, env: env, account: account) else { return }
+            }
             quoting = true
             let key = quoteKey
             let request = SwapRequest(tokenIn: tokenIn, tokenOut: tokenOut, amountIn: amountIn, slippageBps: slippageBps, account: Self.quoteAccount(account),
@@ -667,6 +950,54 @@ final class SwapModel {
         }
     }
 
+    /// What a stock pair (`SwapEngine.stockPair`) needs before each round asks anything for it. Signed out, nothing is
+    /// asked: the screen says to sign in, and the round ends (signing in starts a new one). Signed in, the server's status
+    /// is read (at most once a minute, `SwapEngine.refreshXStocksStatus`) and the wallet's acknowledgement of the xStocks
+    /// notice is handed to the engine. A buy otherwise open to the wallet then waits here, asking nothing, until the
+    /// wallet has read and acknowledged the notice (`disclosureWallet`, `XStocksDisclosureStore`), which this checks a few
+    /// times a second. A buy closed for another reason, and every sell, go on to the engine, which says why or quotes.
+    /// False when the round must not go on.
+    private func prepareStock(isBuy: Bool, env: AppEnvironment, account: Address?) async -> Bool {
+        let round = quoteKey
+        guard let account else {
+            showNoQuote(OneInchError.signedOut.localizedDescription, for: round)
+            return false
+        }
+        do {
+            try await env.swap.refreshXStocksStatus(for: account)
+        } catch OneInchError.signedOut {
+            if !Task.isCancelled { showNoQuote(OneInchError.signedOut.localizedDescription, for: round) }
+            return false
+        } catch {
+            // The status as last read stands: the proxy checks the mode again on every quote.
+        }
+        var acknowledged = XStocksDisclosureStore.isAcknowledged(account)
+        await env.swap.setXStocksDisclosure(acknowledged: acknowledged, for: account)
+        guard isBuy, !acknowledged, !Task.isCancelled else { return !Task.isCancelled }
+        var once = await env.swap.xStocksAvailability(for: account)
+        once.disclosureAcknowledged = true
+        guard once.canBuy, !Task.isCancelled else { return !Task.isCancelled }
+        showNoQuote(nil, for: round)
+        disclosure = (round, account)
+        while !Task.isCancelled, !acknowledged {
+            try? await Task.sleep(for: .milliseconds(300))
+            acknowledged = XStocksDisclosureStore.isAcknowledged(account)
+        }
+        if disclosure?.round == round { disclosure = nil }
+        guard acknowledged, !Task.isCancelled else { return false }
+        await env.swap.setXStocksDisclosure(acknowledged: true, for: account)
+        return !Task.isCancelled
+    }
+
+    /// No quote for the inputs `round` names, with `message` (or none) in place of the venues' answer.
+    private func showNoQuote(_ message: String?, for round: String) {
+        result = nil
+        resultKey = round
+        error = message
+        curve = nil
+        curveKey = round
+        quoting = false
+    }
 }
 
 /// Explains slippage in plain language, then lets the person pick a tolerance — presets with a one-line hint each,

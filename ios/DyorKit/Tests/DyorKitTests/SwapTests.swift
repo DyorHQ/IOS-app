@@ -209,6 +209,7 @@ final class SwapTests: XCTestCase {
         XCTAssertEqual(Venue.uniswap.displayName, "Uniswap")
         XCTAssertEqual(Venue.monday.displayName, "Monday Trade")
         XCTAssertEqual(Venue.wrap.displayName, "Wrap")
+        XCTAssertEqual(Venue.oneInch.displayName, "1inch")
     }
 
     // MARK: Live smoke test (skips when the network is unreachable)

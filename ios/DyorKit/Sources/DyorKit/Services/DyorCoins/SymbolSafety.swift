@@ -126,10 +126,10 @@ public enum SymbolSafety {
         /// What the form says under the field, in the app's language.
         public var message: String {
             switch self {
-            case .symbolImitates(let token) where Token.core(token.address) == nil:
+            case .symbolImitates(let token) where Token.curatedReference(token.address) == nil:
                 return L10n.tr("This symbol looks like \(token.symbol), a widely traded token this coin isn't. Choose another symbol.")
             case .symbolImitates(let token): return L10n.tr("This symbol looks like \(token.symbol), a token DyorHQ already lists. Choose another symbol.")
-            case .nameImitates(let token) where Token.core(token.address) == nil:
+            case .nameImitates(let token) where Token.curatedReference(token.address) == nil:
                 return L10n.tr("This name looks like \(token.symbol), a widely traded token this coin isn't. Choose another name.")
             case .nameImitates(let token): return L10n.tr("This name looks like \(token.symbol), a token DyorHQ already lists. Choose another name.")
             case .symbolNotDisplaySafe:

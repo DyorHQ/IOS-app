@@ -237,6 +237,53 @@ final class TransactionLifecycleTests: XCTestCase {
         XCTAssertNil(unlimited)
     }
 
+    /// The 1inch router's approval is sent unless the allowance is exactly the amount: a larger standing one (10× here)
+    /// is replaced by the exact amount, and the sheet names it (`allowancesReplaced`) though it isn't unlimited; the fee
+    /// preview counts that approval. Another spender's larger, bounded allowance still covers its step, as before.
+    func testRouterApprovalIsExact() async throws {
+        let owner = CountingWallet().address
+        let token = Address(literal: "0x3333333333333333333333333333333333333333")
+        let step = TransactionStep.approve(token: token, spender: OneInch.router, amount: 50, label: "Approve")
+        let exact = TransactionRequest(to: token, data: try ERC20.approveCalldata(spender: OneInch.router, amount: 50))
+
+        chain.allowance = 500
+        let replaced = try await sender().request(for: step, owner: owner)
+        XCTAssertEqual(replaced, exact)
+        let named = await sender().allowancesReplaced(by: [step, .call(request, label: "Swap")], owner: owner)
+        XCTAssertEqual(named, [TransactionSender.ReplacedAllowance(spender: OneInch.router, allowance: 500)])
+        let unlimitedOnly = await sender().unlimitedAllowancesReplaced(by: [step], owner: owner)
+        XCTAssertEqual(unlimitedOnly, [], "the older API still names unlimited ones only")
+        let preview = await sender().feePreview([step], from: owner)
+        XCTAssertEqual(preview?.unestimated, 0)
+        XCTAssertGreaterThan(preview?.maxFee ?? 0, 0, "the approval is counted")
+
+        chain.allowance = 49
+        let short = try await sender().request(for: step, owner: owner)
+        XCTAssertEqual(short, exact)
+
+        chain.allowance = 50
+        let covered = try await sender().request(for: step, owner: owner)
+        XCTAssertNil(covered)
+        let none = await sender().allowancesReplaced(by: [step], owner: owner)
+        XCTAssertEqual(none, [])
+
+        chain.allowance = 0
+        let fresh = await sender().allowancesReplaced(by: [step], owner: owner)
+        XCTAssertEqual(fresh, [], "nothing standing, nothing to name")
+
+        chain.allowance = SwapCalldata.maxUint160
+        let unlimited = await sender().allowancesReplaced(by: [step], owner: owner)
+        XCTAssertEqual(unlimited.map(\.spender), [OneInch.router])
+        XCTAssertEqual(unlimited.map(\.isUnlimited), [true])
+
+        // Another spender: a larger, bounded allowance covers the step, as today.
+        chain.allowance = 500
+        let kuru = try await sender().request(for: .approve(token: token, spender: Kuru.entrypoint, amount: 50, label: "Approve"), owner: owner)
+        XCTAssertNil(kuru)
+        let kuruNamed = await sender().allowancesReplaced(by: [.approve(token: token, spender: Kuru.entrypoint, amount: 50, label: "Approve")], owner: owner)
+        XCTAssertEqual(kuruNamed, [])
+    }
+
     // MARK: Receipt wait
 
     private func broadcastOne() async throws -> Data {

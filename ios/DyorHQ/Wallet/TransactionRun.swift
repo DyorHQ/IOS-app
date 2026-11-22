@@ -9,8 +9,16 @@ import SwiftUI
 @MainActor
 final class TransactionRun {
     enum Phase: Equatable { case idle, running, done(Data), failed(String) }
+    /// What a failed run can offer besides its message.
+    enum RetryHint: Equatable {
+        /// A firm quote ran out of time before its swap was signed (`TransactionError.quoteExpired`): nothing but
+        /// confirmed earlier steps (an approval) went out. The sheet offers a new quote, which closes it.
+        case newQuote
+    }
 
     private(set) var phase: Phase = .idle
+    /// Set with a failure that has a way forward (`RetryHint`); nil otherwise.
+    private(set) var hint: RetryHint?
     private(set) var events: [TransactionEvent] = []
     /// The step this run last saw confirmed: superseded once the next one is sent (`record`).
     @ObservationIgnored private var lastConfirmed: Data?
@@ -40,6 +48,7 @@ final class TransactionRun {
         let owner = session.address
         let mera = session.mera
         phase = .running
+        hint = nil
         events = []
         lastConfirmed = nil
         // An approved plan keeps a passkey account's session until its last step, even if the app leaves the
@@ -60,6 +69,7 @@ final class TransactionRun {
                 phase = .failed(sentSomething ? tr("Stopped at \(BiometricGate.promptName). Only the steps above were sent.") : Self.notSent)
             } catch {
                 if let failure = error as? TransactionError, case .reverted(let hash) = failure { PendingActivity.reverted(hash, owner: owner) }
+                if let failure = error as? TransactionError, case .quoteExpired = failure { hint = .newQuote }
                 // A step sent but not seen confirmed keeps its hash (the View link above, and a pending row in Recent
                 // Activity that the next foreground re-checks): "Sent — confirmation not seen yet".
                 phase = .failed(describe(error))
@@ -93,13 +103,15 @@ final class TransactionRun {
     }
 
     /// Shows a failure that happened before the plan started (a cancelled step-up).
-    func fail(_ message: String) {
+    func fail(_ message: String, hint: RetryHint? = nil) {
         guard !isRunning else { return }
         phase = .failed(message)
+        self.hint = hint
     }
 
     func reset() {
         phase = .idle
+        hint = nil
         events = []
         lastConfirmed = nil
     }
@@ -147,6 +159,18 @@ struct SettledLine: Equatable {
     let link: URL?
 }
 
+/// A sheet's caller's reason not to start its plan now (`ConfirmationSheet.mayStart`): the sentence the sheet fails with,
+/// in the app's language, and what it then offers (`TransactionRun.RetryHint`; nil offers to confirm again).
+struct StartRefusal: Equatable {
+    let message: String
+    var hint: TransactionRun.RetryHint? = nil
+
+    init(_ message: String, hint: TransactionRun.RetryHint? = nil) {
+        self.message = message
+        self.hint = hint
+    }
+}
+
 /// The standard confirm → progress → done sheet used by every write in the app. The step plan is built by an
 /// async closure (some builders read the chain or an actor-isolated service), so the sheet shows a brief
 /// "Preparing" state, then the confirm button, then live progress.
@@ -177,11 +201,16 @@ struct ConfirmationSheet<Details: View>: View {
     /// the confirmed step reads as a plain confirmation on Monad (the result carries the tone), and the haptic follows the
     /// result's tone instead of a plain success. It runs in a task of its own that outlives the sheet.
     var settle: ((Data) async -> SettledLine?)? = nil
+    /// Asked once more right before the plan starts, after App Lock and any passkey approval and before `onStarted`: a
+    /// reason not to start (a quote that ran out, a switch the owner turned off meanwhile) fails the sheet with it, and
+    /// nothing is signed. Nil, or an answer of nil, starts the plan as before.
+    var mayStart: (() async -> StartRefusal?)? = nil
     @ViewBuilder var details: Details
 
     init(title: LocalizedStringResource, confirmTitle: LocalizedStringResource, build: @escaping () async throws -> [TransactionStep],
          onDone: @escaping () -> Void, onCompleted: ((Data) -> Void)? = nil, onView: ((Data) -> Void)? = nil, intent: Mera.Intent = .ask,
-         onStarted: (() -> Void)? = nil, settle: ((Data) async -> SettledLine?)? = nil, @ViewBuilder details: () -> Details) {
+         onStarted: (() -> Void)? = nil, settle: ((Data) async -> SettledLine?)? = nil,
+         mayStart: (() async -> StartRefusal?)? = nil, @ViewBuilder details: () -> Details) {
         self.title = title
         self.confirmTitle = confirmTitle
         self.build = build
@@ -191,6 +220,7 @@ struct ConfirmationSheet<Details: View>: View {
         self.intent = intent
         self.onStarted = onStarted
         self.settle = settle
+        self.mayStart = mayStart
         self.details = details()
     }
 
@@ -213,6 +243,9 @@ struct ConfirmationSheet<Details: View>: View {
     @State private var fee: TransactionSender.FeePreview?
     /// Who the plan's exact approvals take a standing unlimited allowance away from, read once the plan is built.
     @State private var replacedUnlimited: [String] = []
+    /// Who the plan's exact approvals take another standing allowance away from (one to the 1inch router that isn't
+    /// exactly the amount, `TransactionSender.allowancesReplaced`), read once the plan is built.
+    @State private var replacedOther: [String] = []
     /// What the settled transaction did (`settle`), once read; nil while it is read, or without `settle`.
     @State private var settled: SettledLine?
     /// The receipt is being read now, and Done is held for the first moments of it (`ReceiptResultBar.doneHold`): the
@@ -238,6 +271,13 @@ struct ConfirmationSheet<Details: View>: View {
                         ForEach(replacedUnlimited, id: \.self) { DetailRow("Approval", "Replaces your unlimited approval to \($0)") }
                     } footer: {
                         Paragraph("An earlier approval lets it spend any amount. This plan approves exactly what it needs instead.")
+                    }
+                }
+                if !replacedOther.isEmpty, !run.isDone {
+                    Section {
+                        ForEach(replacedOther, id: \.self) { DetailRow("Approval", "Replaces your earlier approval to \($0)") }
+                    } footer: {
+                        Paragraph("This plan approves exactly what this swap needs instead.")
                     }
                 }
                 if let fee, !run.isDone {
@@ -284,6 +324,16 @@ struct ConfirmationSheet<Details: View>: View {
                         ReceiptResultBar(settled: settled?.text, reading: reading, holdingDone: holdingDone) { finish() }
                     } else if run.isDone {
                         PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
+                    } else if case .failed = run.phase, run.hint == .newQuote {
+                        // The quote ran out before the swap was signed: only confirmed approvals went out, if anything.
+                        // A new quote is fetched from the form, never inside this sheet, so this one closes.
+                        if run.sentSomething {
+                            Text("Only the approval above was sent. Get a new quote to finish the swap.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        PrimaryButton(title: "Get a new quote", systemImage: "arrow.clockwise") { finish() }
                     } else if case .failed = run.phase, run.sentSomething {
                         // Something already reached the network: no re-confirm from this sheet (it would replay the
                         // plan from its first step). Check the sent step with View, then start again from the form.
@@ -352,7 +402,9 @@ struct ConfirmationSheet<Details: View>: View {
             preparing = false
             if buildError == nil, let address = session.address {
                 fee = await env.sender.feePreview(steps, from: address)
-                replacedUnlimited = await env.sender.unlimitedAllowancesReplaced(by: steps, owner: address).map(Self.spenderName)
+                let replaced = await env.sender.allowancesReplaced(by: steps, owner: address)
+                replacedUnlimited = replaced.filter(\.isUnlimited).map { Self.spenderName($0.spender) }
+                replacedOther = replaced.filter { !$0.isUnlimited }.map { Self.spenderName($0.spender) }
             }
         }
         .task(id: scopeKey) { await reassess() }
@@ -381,6 +433,7 @@ struct ConfirmationSheet<Details: View>: View {
         case Uniswap.swapRouter02: return "Uniswap SwapRouter02" // not localized: a contract's name
         case MondayTrade.swapRouter: return "Monday Trade" // not localized: a venue's name
         case Kuru.entrypoint: return "Kuru Flow" // not localized: a venue's name
+        case OneInch.router: return "1inch" // not localized: a venue's name
         case Perpl.exchange:
             return tr(LocalizedStringResource("the Perpl Exchange", comment: "Completes “Unlimited approval to %@” and “Replaces your unlimited approval to %@”."))
         default: return spender.short
@@ -407,6 +460,7 @@ struct ConfirmationSheet<Details: View>: View {
             guard await BiometricGate.authenticate(reason: "Confirm \(tr(confirmTitle))") else { return }
         }
         guard session.isPasskeyAccount else {
+            if let refusal = await mayStart?() { run.fail(refusal.message, hint: refusal.hint); return }
             onStarted?()
             run.start(steps, session: session, sender: env.sender)
             return
@@ -425,6 +479,7 @@ struct ConfirmationSheet<Details: View>: View {
                 return
             }
         }
+        if let refusal = await mayStart?() { run.fail(refusal.message, hint: refusal.hint); return }
         onStarted?()
         run.start(steps, session: session, sender: env.sender, action: action)
     }

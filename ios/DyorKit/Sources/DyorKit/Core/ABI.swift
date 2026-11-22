@@ -278,6 +278,16 @@ public enum ABI {
         try decode(data, try ABIType.parseList(signature), strings: strings)
     }
 
+    /// `data` decoded as `types`, only when encoding the values again gives the same bytes: the one canonical encoding,
+    /// with no stray offset, no dirty high bytes in a word and nothing after the last value. Nil for anything else. For
+    /// calldata the app checks before signing (`Mera.SigningPolicy`'s decoders, `OneInchSwap`), where a payload that
+    /// decodes but isn't exactly what was read must never pass.
+    static func strictDecode(_ data: Data, _ types: String) -> [ABIValue]? {
+        let data = Data(data)
+        guard let values = try? decode(data, types), let again = try? encode(values, types), again == data else { return nil }
+        return values
+    }
+
     private static func decodeTuple(_ data: Data, _ types: [ABIType], base: Int, strings: StringDecoding) throws -> [ABIValue] {
         var values: [ABIValue] = []
         var cursor = base

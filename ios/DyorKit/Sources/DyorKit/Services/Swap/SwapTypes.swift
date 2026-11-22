@@ -4,6 +4,10 @@ import Foundation
 /// Where a spot quote comes from. `wrap` is the 1:1 MON ↔ WMON conversion, which never needs a venue.
 public enum Venue: String, Sendable, CaseIterable, Codable {
     case kuru, uniswap, monday, wrap
+    /// 1inch, for xStocks only: the one venue asked for a curated xStock against USDC (`SwapEngine.venues(for:)`), and
+    /// never for any other pair. It quotes only in a build that has it (`OneInch.compiledIn`) and through DyorHQ's proxy
+    /// (`OneInchVenue`); otherwise asking it gives no quote.
+    case oneInch
 
     public var displayName: String {
         switch self {
@@ -11,6 +15,7 @@ public enum Venue: String, Sendable, CaseIterable, Codable {
         case .kuru: return "Kuru Flow"
         case .uniswap: return "Uniswap"
         case .monday: return "Monday Trade"
+        case .oneInch: return "1inch" // not localized: a venue's name
         case .wrap: return L10n.string(LocalizedStringResource("Wrap", bundle: L10n.kit, comment: "The 1:1 conversion between MON and WMON, named where a venue's name goes."))
         }
     }
@@ -27,6 +32,10 @@ public struct SwapRequest: Sendable {
     /// (`SwapCalldata.exactPermit2Lifetime`), instead of the standing max approval and 30-day allowance. A passkey
     /// (Mera) account's session signs only approvals like these (MERA-PLAN §3).
     public var exactApprovals: Bool
+
+    /// The account a quote is asked for while no wallet is connected: nothing can be signed for it, and a venue that
+    /// would tell a third party the wallet (1inch) is never asked for it.
+    public static let placeholderAccount = Address(literal: "0x000000000000000000000000000000000000dEaD")
 
     public init(tokenIn: Token, tokenOut: Token, amountIn: BigUInt, slippageBps: Int, account: Address, exactApprovals: Bool = false) {
         self.tokenIn = tokenIn
@@ -51,10 +60,22 @@ public struct VenueQuote: Sendable, Identifiable {
     public let priceImpactBps: Int?
     /// When the quote was produced.
     public let at: Date
+    /// Whether the quote can be traded as it is (`firm`, every venue's but 1inch's on the Swap screen) or only shows a
+    /// price (`indicative`): its `build` throws `SwapError.reviewForFirmQuote`, and Review asks for a firm quote first.
+    public let firmness: Firmness
+    /// The last moment the quote may be signed, on the device's clock (`TransactionStep.notAfter`): a firm 1inch quote's
+    /// window, counted from before its request was sent. Nil for a quote with no deadline.
+    public let deadline: ContinuousClock.Instant?
     /// Builds the transaction plan for the connected account (approvals first, then the swap).
     public let build: @Sendable (Address) async throws -> [TransactionStep]
 
-    public init(venue: Venue, amountOut: BigUInt, minOut: BigUInt, route: String, gasEstimate: BigUInt?, priceImpactBps: Int?, at: Date = Date(), build: @escaping @Sendable (Address) async throws -> [TransactionStep]) {
+    /// Whether a quote can be built into transactions (`VenueQuote.firmness`).
+    public enum Firmness: Sendable, Equatable {
+        case firm, indicative
+    }
+
+    public init(venue: Venue, amountOut: BigUInt, minOut: BigUInt, route: String, gasEstimate: BigUInt?, priceImpactBps: Int?, at: Date = Date(),
+                firmness: Firmness = .firm, deadline: ContinuousClock.Instant? = nil, build: @escaping @Sendable (Address) async throws -> [TransactionStep]) {
         self.venue = venue
         self.amountOut = amountOut
         self.minOut = minOut
@@ -62,6 +83,8 @@ public struct VenueQuote: Sendable, Identifiable {
         self.gasEstimate = gasEstimate
         self.priceImpactBps = priceImpactBps
         self.at = at
+        self.firmness = firmness
+        self.deadline = deadline
         self.build = build
     }
 
@@ -139,6 +162,10 @@ public enum SwapError: Error, LocalizedError, Equatable {
     case retiredLaunchpad(Address)
     /// Whether the coin bought is on a retired launchpad's curve couldn't be read, so no venue was asked.
     case launchpadUnchecked
+    /// A known xStock (tokenized stock) is on the trade and it may not be quoted (`SwapEngine.xStockRefusal`): why.
+    case xStocksUnavailable(XStockRefusal)
+    /// An indicative quote was asked to build: only a firm one, fetched at Review (`SwapEngine.firmQuote(for:)`), can be.
+    case reviewForFirmQuote
     /// A venue's own message, already readable.
     case venue(String)
 
@@ -154,7 +181,41 @@ public enum SwapError: Error, LocalizedError, Equatable {
                 : L10n.tr("Past cohort · trading closed. \(address.short) is a retired Moment pool, so DyorHQ never trades it.")
         case .retiredLaunchpad: return RetiredLaunchpad.notice
         case .launchpadUnchecked: return L10n.tr("DyorHQ couldn't check this coin's launchpad just now, so buying it isn't offered. Try again in a moment.")
+        case .xStocksUnavailable(let reason): return reason.message
+        case .reviewForFirmQuote: return L10n.tr("This price is an estimate. Review the swap to get a firm quote.")
         case .venue(let message): return message
+        }
+    }
+}
+
+/// Why a trade touching a known xStock gets no quote (`SwapEngine.xStockRefusal`, `SwapError.xStocksUnavailable`).
+public enum XStockRefusal: Equatable, Sendable {
+    /// A known xStock the app never trades (`XStocks.knownUncurated`): a bridged copy and the like.
+    case notSupported
+    /// A curated xStock in a pair other than against USDC, two stocks included.
+    case pairNotOffered
+    /// Buying xStocks isn't open to this wallet now: the build, the owner's switch, the server's mode or the disclosure
+    /// not yet acknowledged.
+    case buyingClosed
+    /// Selling xStocks in the app is closed now (the server's mode is off, or the build has no stock venue). Sending
+    /// them stays possible.
+    case sellingClosed
+    /// A venue other than 1inch was asked for a stock pair: 1inch is the only venue that quotes one.
+    case venueNotOffered(Venue)
+
+    /// One sentence, in the app's language.
+    public var message: String {
+        switch self {
+        case .notSupported:
+            return L10n.tr("This tokenized stock isn't supported in DyorHQ, so it can't be swapped here. You can still send it.")
+        case .pairNotOffered:
+            return L10n.tr("xStocks (tokenized stocks) can be swapped only against USDC in DyorHQ.")
+        case .buyingClosed:
+            return L10n.tr("Buying xStocks (tokenized stocks) isn't available right now.")
+        case .sellingClosed:
+            return L10n.tr("Selling xStocks (tokenized stocks) in DyorHQ isn't available right now. You can still send them.")
+        case .venueNotOffered(let venue):
+            return L10n.tr("\(venue.displayName) doesn't quote xStocks (tokenized stocks) in DyorHQ.")
         }
     }
 }

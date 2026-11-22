@@ -12,8 +12,9 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 const MIGRATIONS = new URL("../migrations/", import.meta.url);
 const DEFERRED = new URL("../migrations-deferred/", import.meta.url);
 const STUB = new URL("./supabase_stub.sql", import.meta.url);
-// The migrations written for the 2026-09-26 audit, and the wallet-history cache, which must be safe to re-run.
-const REAPPLY = ["24_", "25_", "26_", "27_", "28_", "29_", "32_"];
+// The migrations written for the 2026-09-26 audit, the wallet-history cache and oneinch-proxy's rate scopes, which
+// must be safe to re-run (34 always after 27: re-running 27 alone narrows the gate back to its own scopes).
+const REAPPLY = ["24_", "25_", "26_", "27_", "28_", "29_", "32_", "34_"];
 // Migrations that need the platform (pg_cron, pg_net, Vault): moved into migrations/ once applied to the live project,
 // they must refuse on PGlite rather than half-apply (33 is still in migrations-deferred/ until the owner applies it).
 const PLATFORM_ONLY = ["33_"];
@@ -130,9 +131,10 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
   await db.exec(await Deno.readTextFile(STUB));
   const files = await migrationFiles();
 
-  await t.step("01–32 apply in order on a fresh database", async () => {
+  await t.step("01–34 apply in order on a fresh database", async () => {
     assert(files.includes("29_waitlist.sql"), "expected migrations through 29");
     assert(files.includes("32_wallet_history.sql"), "expected migration 32");
+    assert(files.includes("34_oneinch_rate_scopes.sql"), "expected migration 34");
     for (const name of files) {
       if (PLATFORM_ONLY.some((p) => name.startsWith(p))) {
         await assertRejects(() => db.exec(Deno.readTextFileSync(new URL(name, MIGRATIONS))), Error, "requires pg_cron and pg_net", name);
@@ -143,7 +145,7 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
     }
   });
 
-  await t.step("24–29 and 32 re-apply without error or change", async () => {
+  await t.step("24–29, 32 and 34 re-apply without error or change", async () => {
     const count = async () => ({
       policies: (await one<{ n: number }>(db, "select count(*)::int as n from pg_policies")).n,
       triggers: (await one<{ n: number }>(db, "select count(*)::int as n from pg_trigger where tgrelid = 'storage.objects'::regclass and not tgisinternal")).n,
@@ -451,7 +453,9 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
          or net !~ '^[0-9a-f]{64}$'`);
     assertEquals(leaked.n, 0);
     await assertRejects(() => gate("anything", A, null), Error, "unknown rate-limit scope");
+    await assertRejects(() => gate("oneinch-quote", A, null), Error, "unknown rate-limit scope");
     await assertRejects(() => db.exec(`insert into public.edge_rate_events (scope) values ('anything')`), Error, "edge_rate_events_scope_check");
+    await assertRejects(() => db.exec(`insert into public.edge_rate_events (scope) values ('1inch')`), Error, "edge_rate_events_scope_check");
     for (const role of ["anon", "authenticated"] as const) {
       await assertRejects(() => as(db, role, A, "select public.edge_rate_gate('aurora', null, null)"), Error, "permission denied");
     }
@@ -478,6 +482,132 @@ Deno.test("migrations: apply, re-apply, and behave per role", async (t) => {
     }
     await db.exec(`update public.app_config set value = '{"min_build": 16, "message": "Update DyorHQ", "url": "https://testflight.apple.com/join/x"}' where key = 'ios'`);
     await db.exec(`update public.app_config set value = '{"min_build": 0, "message": "", "url": "https://testflight.apple.com"}' where key = 'ios'`);
+  });
+
+  await t.step("34: oneinch-proxy's scopes — oneinch per wallet, network and overall; oneinch-firm 10 per wallet per day", async () => {
+    const gate = (scope: string, subject: string | null, ip: string | null) =>
+      as<{ r: { ok?: boolean; retryAfter?: number; limit?: string } }>(db, "service_role", null,
+        "select public.edge_rate_gate($1, $2, $3) as r", [scope, subject, ip]).then((rows) => rows[0].r);
+    const net = (ip: string) =>
+      `(select encode(extensions.hmac(convert_to('dyorhq/edge-rate/v1/net:${ip}', 'UTF8'), s.salt, 'sha256'), 'hex') from public.edge_rate_salt s)`;
+    // Earlier calls, outside the 10-second overall window, so each per-subject and per-network limit is reached alone.
+    const backfill = (scope: string, n: number, subject: string | null, ip: string | null, age: string) =>
+      db.exec(`insert into public.edge_rate_events (scope, subject, net, created_at)
+        select '${scope}', ${subject ? `'${subject}'` : "null"}, ${ip ? net(ip) : "null"}, now() - interval '${age}'
+          from generate_series(1, ${n})`);
+    const C = wallet(0xc0ffee), D = wallet(0xd00d);
+
+    // oneinch: 120 per wallet and 360 per network per 15 minutes.
+    await backfill("oneinch", 120, C, null, "1 minute");
+    const quotes = await gate("oneinch", C, "203.0.113.40");
+    assertEquals(quotes.limit, "subject");
+    assert(quotes.retryAfter! > 800 && quotes.retryAfter! <= 900, `retryAfter ${quotes.retryAfter}`);
+    await backfill("oneinch", 360, null, "2001:db8:40::/48", "1 minute");
+    assertEquals((await gate("oneinch", D, "2001:db8:40::/48")).limit, "network");
+    assertEquals((await gate("oneinch", D, "2001:db8:41::/48")).ok, true);
+    // …and 20 per 10 seconds overall, whoever and wherever.
+    for (let i = 1; i < 20; i++) assertEquals((await gate("oneinch", wallet(0x4000 + i), null)).ok, true);
+    const busy = await gate("oneinch", wallet(0x4999), null);
+    assertEquals(busy.limit, "global");
+    assert(busy.retryAfter! >= 1 && busy.retryAfter! <= 10, `retryAfter ${busy.retryAfter}`);
+    await db.exec(`update public.edge_rate_events set created_at = created_at - interval '11 seconds'
+                    where scope = 'oneinch' and created_at > now() - interval '10 seconds'`);
+    assertEquals((await gate("oneinch", wallet(0x4999), null)).ok, true);
+
+    // oneinch-firm: 10 firm swaps per wallet per day, a separate budget from the quotes.
+    await backfill("oneinch-firm", 10, C, null, "2 hours");
+    const firm = await gate("oneinch-firm", C, null);
+    assertEquals(firm.limit, "subject");
+    assert(firm.retryAfter! > 79_000 && firm.retryAfter! <= 79_200, `retryAfter ${firm.retryAfter}`);
+    assertEquals((await gate("oneinch-firm", D, null)).ok, true);
+    // 60 per network per day.
+    await backfill("oneinch-firm", 60, null, "198.51.100.40", "3 hours");
+    assertEquals((await gate("oneinch-firm", wallet(0x5000), "198.51.100.40")).limit, "network");
+    // 5 per 10 seconds overall.
+    for (let i = 1; i < 5; i++) assertEquals((await gate("oneinch-firm", wallet(0x5000 + i), null)).ok, true);
+    assertEquals((await gate("oneinch-firm", wallet(0x5999), null)).limit, "global");
+    // No raw address is stored for these scopes either.
+    assertEquals((await one<{ n: number }>(db, `select count(*)::int as n from public.edge_rate_events
+      where scope like 'oneinch%' and net is not null and net !~ '^[0-9a-f]{64}$'`)).n, 0);
+  });
+
+  await t.step("34: edge_rate_gate is 27's function with only the new scopes added; every existing limit unchanged", async () => {
+    const m27 = await Deno.readTextFile(new URL("27_edge_rate_limits.sql", MIGRATIONS));
+    const m34 = await Deno.readTextFile(new URL("34_oneinch_rate_scopes.sql", MIGRATIONS));
+    const between = (text: string, from: string, to: string) => {
+      const start = text.indexOf(from);
+      assert(start >= 0, from);
+      return text.slice(start, text.indexOf(to, start) + to.length);
+    };
+    const fn = (text: string) => between(text, "create or replace function public.edge_rate_gate", "$function$;");
+    const check = (text: string) => between(text, "alter table public.edge_rate_events drop constraint", "));");
+    const scopes27 = "('pin-media', 'aurora', 'aurora-status', 'waitlist', 'wallet-auth')";
+    const scopes34 = "('pin-media', 'aurora', 'aurora-status', 'waitlist', 'wallet-auth', 'oneinch', 'oneinch-firm')";
+    const expected = fn(m27)
+      .replace(scopes27, scopes34)
+      .replace("  if p_scope = 'pin-media' then\n", "  if p_scope in ('pin-media', 'oneinch', 'oneinch-firm') then\n")
+      .replace("      ('wallet-auth',   'network', interval '1 day',       200)\n", [
+        "      ('wallet-auth',   'network', interval '1 day',       200),",
+        "      ('oneinch',       'subject', interval '15 minutes',  120),",
+        "      ('oneinch',       'network', interval '15 minutes',  360),",
+        "      ('oneinch',       'global',  interval '10 seconds',   20),",
+        "      ('oneinch-firm',  'subject', interval '1 day',        10),",
+        "      ('oneinch-firm',  'network', interval '1 day',        60),",
+        "      ('oneinch-firm',  'global',  interval '10 seconds',    5)",
+        "",
+      ].join("\n"));
+    assert(expected !== fn(m27));
+    assertEquals(fn(m34), expected);
+    assertEquals(check(m34), check(m27).replace(scopes27, scopes34));
+    // The privilege block is 27's, word for word, and so is the function's comment but for the scope list.
+    const tail = (text: string) => text.slice(text.indexOf("revoke all on function public.edge_rate_gate"));
+    assertEquals(tail(m34), tail(m27).replace("(pin-media, aurora, aurora-status, waitlist, wallet-auth)",
+      "(pin-media, aurora, aurora-status, waitlist, wallet-auth, oneinch, oneinch-firm)"));
+    // What the database holds is what 34 says.
+    const live = await one<{ d: string }>(db, "select pg_get_functiondef('public.edge_rate_gate(text,text,text)'::regprocedure) as d");
+    for (const row of expected.split("\n").filter((l) => /^\s+\('[a-z-]+',\s+'(subject|network|global)'/.test(l))) {
+      assert(live.d.includes(row.trim().replace(/\),?$/, ")")), row);
+    }
+  });
+
+  await t.step("34 after 27: 27 refuses to run while oneinch rows exist; once they are gone it narrows the gate until 34 runs", async () => {
+    const m27 = await Deno.readTextFile(new URL("27_edge_rate_limits.sql", MIGRATIONS));
+    const m34 = await Deno.readTextFile(new URL("34_oneinch_rate_scopes.sql", MIGRATIONS));
+    const knowsOneinch = async () => (await one<{ ok: boolean }>(db,
+      "select pg_get_functiondef('public.edge_rate_gate(text,text,text)'::regprocedure) like '%oneinch-firm%' as ok")).ok;
+    const rows = (await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_events where scope like 'oneinch%'")).n;
+    assert(rows > 0);
+    await assertRejects(() => db.exec(m27), Error, "edge_rate_events_scope_check");
+    assertEquals(await knowsOneinch(), true, "the failed run of 27 changed nothing");
+    assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_events where scope like 'oneinch%'")).n, rows);
+    // Once the oneinch rows have aged out, 27 runs, and oneinch-proxy's scopes are unknown until 34 runs again.
+    const others = (await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_events")).n - rows;
+    await db.exec("delete from public.edge_rate_events where scope like 'oneinch%'");
+    await db.exec(m27);
+    assertEquals(await knowsOneinch(), false);
+    await assertRejects(() => as(db, "service_role", null, "select public.edge_rate_gate('oneinch', null, null)"), Error, "unknown rate-limit scope");
+    await db.exec(m34);
+    await db.exec(m34);
+    assertEquals(await knowsOneinch(), true);
+    assertEquals((await one<{ n: number }>(db, "select count(*)::int as n from public.edge_rate_events")).n, others, "other scopes' rows kept");
+    const r = await as<{ r: { ok?: boolean } }>(db, "service_role", null, "select public.edge_rate_gate('oneinch-firm', $1, null) as r", [A]);
+    assertEquals(r[0].r.ok, true);
+    for (const role of ["anon", "authenticated"] as const) {
+      await assertRejects(() => as(db, role, A, "select public.edge_rate_gate('oneinch', null, null)"), Error, "permission denied");
+    }
+  });
+
+  await t.step("oneinch-proxy's buy switch: flags.xStocks can be set on the ios row, with or without a flags object", async () => {
+    const original = (await one<{ v: unknown }>(db, "select value as v from public.app_config where key = 'ios'")).v;
+    const set = (on: boolean) => one<{ x: unknown }>(db, `update public.app_config
+      set value = jsonb_set(value, '{flags}', coalesce(value->'flags', '{}'::jsonb) || '{"xStocks": ${on}}')
+      where key = 'ios' returning value->'flags'->'xStocks' as x`);
+    assertEquals((await set(false)).x, false, "a row with no flags object");
+    assertEquals((await set(true)).x, true);
+    assertEquals((await set(false)).x, false);
+    const value = (await one<{ v: Record<string, unknown> }>(db, "select value as v from public.app_config where key = 'ios'")).v;
+    assertEquals(value, { ...(original as Record<string, unknown>), flags: { xStocks: false } }, "the rest of the row unchanged");
+    await db.query("update public.app_config set value = $1 where key = 'ios'", [original]);
   });
 
   await t.step("LR-4: the waitlist is service-role only, and one row per address whatever its case", async () => {

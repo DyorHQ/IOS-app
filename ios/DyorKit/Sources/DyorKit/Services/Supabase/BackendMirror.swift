@@ -63,7 +63,7 @@ public enum BackendMirror {
         if error is URLError || error is CancellationError { return .unavailable }
         guard let error = error as? SupabaseError else { return .unavailable }
         switch error {
-        case .notSignedIn, .rateLimited: return .unavailable
+        case .notSignedIn, .rateLimited, .walletMismatch: return .unavailable
         case .http(let code, let body):
             if [401, 404, 408, 429].contains(code) || code >= 500 { return .unavailable }
             if code == 400, body.contains("42P10") { return .unavailable }

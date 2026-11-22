@@ -433,7 +433,8 @@ final class SwapQuoteStreamTests: XCTestCase {
         XCTAssertTrue(swap.contains("async let prepared: Void = env.swap.prepare(for: SwapModel.quoteAccount(session.address))"))
 
         let environment = AppSource.squeezed(try AppSource.app("App/AppEnvironment.swift"))
-        XCTAssertTrue(environment.contains("swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments, cache: chainCache)"))
+        // The one engine also carries DyorHQ's 1inch proxy for xStocks, authenticated as the wallet each request is for.
+        XCTAssertTrue(environment.contains(#"swap = SwapEngine(rpc: rpc, launchpadFactories: LaunchpadAddresses.swapRouteFactories(live: config.launchpad), moments: config.moments, cache: chainCache, oneInchProxy: backend.functionURL("oneinch-proxy"), oneInchCredentials: { wallet in try await backend.sessionHeaders(for: wallet) })"#))
         XCTAssertEqual(ChainCache.TTL.swapRoutes, 60)
     }
 }

@@ -453,6 +453,8 @@ final class SimulatedChain: @unchecked Sendable {
     var allowance: BigUInt?
     private(set) var blockNumberReads = 0
     private(set) var balanceReads = 0
+    /// `eth_call`s answered: a step's simulation in `prepare`, and every multicall read.
+    private(set) var simulations = 0
     private(set) var sent: [(raw: String, head: UInt64)] = []
     private(set) var receiptBlocks: [UInt64] = []
     /// Hashes of the broadcasts the chain took: the only transactions it knows and has receipts for.
@@ -476,6 +478,7 @@ final class SimulatedChain: @unchecked Sendable {
             balanceReads += 1
             return result(quantity(balance))
         case "eth_call":
+            simulations += 1
             guard let allowance else { return result(.string("0x")) }
             return result(.string(try! ABI.encode([.array([.tuple([.bool(true), .bytes(allowance.word)])])], [.array(.tuple([.bool, .bytes]))]).hexString))
         case "eth_getTransactionCount": return result(.string("0x0"))

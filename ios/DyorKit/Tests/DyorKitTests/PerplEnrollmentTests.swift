@@ -93,6 +93,22 @@ final class PerplEnrollmentTests: XCTestCase {
         assertRejected(tampered("domain", "extra", "1"), .wrongDomain("fields"))
     }
 
+    /// The one raw-digest signature the app's wallets give is this enrollment's (`signPerplEnrollment`), so its
+    /// validation is what stands between a third party's typed data and a key: a 1inch router, Limit Order Protocol or
+    /// Permit2 domain, or an `Order`, is refused before any digest exists.
+    func testRejectsOneInchDomainsAndOrders() {
+        assertRejected(tampered("domain", "verifyingContract", OneInch.router.checksummed), .wrongDomain("contract"))
+        assertRejected(tampered("domain", "verifyingContract", OneInch.aqua.checksummed), .wrongDomain("contract"))
+        assertRejected(tampered("domain", "verifyingContract", OneInch.swapVMRouter.checksummed), .wrongDomain("contract"))
+        assertRejected(tampered("domain", "name", "1inch Aggregation Router"), .wrongDomain("name"))
+        assertRejected(tampered("domain", "name", "1inch Limit Order Protocol"), .wrongDomain("name"))
+        for primary in ["Order", "OrderRFQ", "RfqOrder"] {
+            var json = genuine()
+            json["primaryType"] = primary
+            assertRejected(json, .disallowedType)
+        }
+    }
+
     // MARK: Types
 
     func testRejectsPrimaryTypesOutsideTheAllowlist() {
